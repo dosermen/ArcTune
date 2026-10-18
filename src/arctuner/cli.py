@@ -572,8 +572,39 @@ def cmd_reset(args: argparse.Namespace) -> int:
     return 0
 
 
+def _version() -> str:
+    """Версия пакета; для frozen-exe без metadata — из pyproject-фолбэка."""
+    try:
+        from importlib.metadata import PackageNotFoundError, version
+
+        return version("arctune")
+    except PackageNotFoundError:
+        return "0.1.0"
+
+
+def _configure_console() -> None:
+    """Принудительно включает UTF-8 в консоли Windows (иначе кракозябры).
+
+    Работает и для python-запуска, и для frozen-exe (PyInstaller).
+    Все ошибки глотаем — не должны ломать работу из-за особенностей терминала.
+    """
+    if sys.platform != "win32":
+        return
+    import contextlib
+    import ctypes
+
+    with contextlib.suppress(Exception):
+        # CP_UTF8 = 65001 — перекодируем консольные буферы ввода/вывода.
+        ctypes.windll.kernel32.SetConsoleOutputCP(65001)
+        ctypes.windll.kernel32.SetConsoleCP(65001)
+    for stream in (sys.stdout, sys.stderr, sys.stdin):
+        with contextlib.suppress(Exception):
+            stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="arctune", description="ArcTune — IGCL для Intel Arc")
+    p.add_argument("--version", action="version", version=f"arctune {_version()}")
     sub = p.add_subparsers(dest="command", required=True)
 
     sub.add_parser("doctor", help="проверка окружения").set_defaults(func=cmd_doctor)
@@ -648,6 +679,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    _configure_console()
     parser = build_parser()
     args = parser.parse_args(argv)
     return int(args.func(args))

@@ -81,6 +81,16 @@ python -m arctuner telemetry
 
 Подробнее — в [docs/development.md](docs/development.md).
 
+### Сборка exe
+
+```powershell
+pip install -e ".[build]"
+pyinstaller --clean --noconfirm packaging/arctune.spec   # -> dist/arctune.exe
+```
+
+Переносимый `arctune.exe` (~9 МБ) без Python на целевой машине — см.
+[docs/building.md](docs/building.md).
+
 ---
 
 ## Структура проекта
@@ -98,6 +108,7 @@ python -m arctuner telemetry
 │   ├── autofind.py      # автоматический поиск стабильной точки (TODO)
 │   └── cli.py           # командная строка
 ├── tests/               # тесты (unit + hardware)
+├── packaging/           # PyInstaller-спецификация сборки exe
 ├── docs/                # документация
 └── examples/            # примеры использования
 ```
@@ -138,6 +149,7 @@ python -m arctuner reset --oc --fans        # сброс OC + вентилято
 | [docs/igcl-api.md](docs/igcl-api.md) | Разобранный IGCL API: функции, структуры, поля |
 | [docs/overclocking.md](docs/overclocking.md) | Методика разгона Arc B580 и тонкости |
 | [docs/development.md](docs/development.md) | Настройка окружения, запуск, тесты |
+| [docs/building.md](docs/building.md) | Сборка переносимого `arctune.exe` (PyInstaller) |
 | [docs/roadmap.md](docs/roadmap.md) | Планы и что уже сделано |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Правила участия и стиль кода |
 
