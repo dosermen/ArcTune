@@ -50,7 +50,9 @@ src = ["src", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "SIM", "RUF"]
-ignore = ["E501"]
+# RUF001/2/3 — «ambiguous unicode»: проект русскоязычный, кириллица намеренная.
+# N812 — алиас `types as T` выбран осознанно (C-подобная читаемость низкого слоя).
+ignore = ["E501", "RUF001", "RUF002", "RUF003", "N812"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["arctuner"]

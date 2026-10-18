@@ -6,19 +6,23 @@
 - [x] Определены реальные точки входа разгона B580 (`ctlOverclock*`)
 - [x] Зафиксированы границы возможного (нет страпов, нет обхода лимита питания)
 - [x] Каркас проекта, документация, правила, git-репозиторий
+- [x] Точные раскладки `_ctl_*_t` сверены с публичным `igcl_api.h` (v1-r1)
+- [x] **Работающий read-only MVP, проверен на живой B580:**
+      `ctlInit` -> `ctlEnumerateDevices` -> `ctlGetDeviceProperties` ->
+      `ctlPowerTelemetryGet` -> `ctlOverclockGetProperties` -> `ctlClose`
+- [x] Команды `doctor` / `telemetry` / `status` работают на реальной карте
+- [x] Тесты layout структур проходят на точных раскладках
 
-## В работе (MVP)
+### Подтверждено живым API (Intel-данные с B580)
 
-- [ ] `igcl/loader.py` — загрузка IGCL.dll, резолв функций, честный отчёт об отсутствующих
-- [ ] `igcl/types.py` — `_ctl_*_t` структуры и enum'ы
-- [ ] `igcl/api.py` — обёртки `ctlEnumerateDevices`, `ctlGetDeviceProperties`
-- [ ] `telemetry.py` — снимок датчиков + причины ограничения
-- [ ] `cli.py` — команды `doctor`, `telemetry`, `status`
-- [ ] Тесты layout структур
+- `powerLimit`: **50...120 %** (потолок 120 % ~= 226 Вт — шунт, аппаратно)
+- `vramMemSpeedLimit`: **19...22 Гбит/с** (номинал 19, софтверный запас до 22)
+- `gpuFrequencyOffset`: **-300...+1000 МГц**, `temperatureLimit`: **60...100 °C**
+- Датчики читаются: ядро ~1.0 В, память 1.35 В / ~19.75 ГТ/с (Samsung)
 
-## Далее
+## Далее (запись)
 
-- [ ] `tuner.py` — запись настроек с проверками min/max/step/IsSupported
+- [ ] `tuner.py` — запись настроек с проверками min/max/step/IsSupported из `ctlOverclockGetProperties`
 - [ ] Кривая вентиляторов (`ctlFanSetSpeedTableMode`)
 - [ ] Кастомная кривая V/F (`ctlOverclockReadVFCurve` / `WriteCustomVFCurve`)
 - [ ] Логирование настроек + возможность отката к дефолту
@@ -26,7 +30,7 @@
 ## Перспективное
 
 - [ ] `autofind.py` — автоматический поиск стабильной точки
-      (шаг напряжением → стресс → откат при нестабильности)
+      (шаг напряжением -> стресс -> откат при нестабильности)
 - [ ] GUI (отдельное приложение поверх того же `igcl/` слоя)
 - [ ] Экспорт телеметрии в CSV/Parquet для анализа
 

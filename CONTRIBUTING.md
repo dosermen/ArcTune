@@ -106,8 +106,7 @@ def read_power_telemetry(adapter: AdapterHandle) -> PowerTelemetry:
   железа:
   ```python
   @pytest.mark.hardware
-  def test_enumerate_b580():
-      ...
+  def test_enumerate_b580(): ...
   ```
 
 ---

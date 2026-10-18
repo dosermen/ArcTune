@@ -4,7 +4,20 @@
 Любая специфика B580 живёт выше — в telemetry/tuner.
 """
 
-from arctuner.igcl.api import IgclError, IgclHandle
+from arctuner.igcl.api import (
+    DeviceInfo,
+    IgclApi,
+    IgclError,
+    OcControlInfo,
+    TelemetrySnapshot,
+)
 from arctuner.igcl.loader import IgclLoader
 
-__all__ = ["IgclError", "IgclHandle", "IgclLoader"]
+__all__ = [
+    "DeviceInfo",
+    "IgclApi",
+    "IgclError",
+    "IgclLoader",
+    "OcControlInfo",
+    "TelemetrySnapshot",
+]
