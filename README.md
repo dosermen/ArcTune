@@ -32,8 +32,10 @@ Intel Graphics Software, но из кода: лимит питания, напр
 - ✅ **Кривая V/F** — экспорт в CSV и валидированная запись
 - ✅ **Автопоиск стабильной точки** (`autofind`) — undervolt/частота с гарантией отката
 - ✅ **Журнал + откат**, экспорт телеметрии в CSV
+- ✅ **GUI (PySide6)** — те же 5 вкладок (мониторинг, разгон, вентиляторы, V/F,
+  журнал) с графиками и подтверждениями записи; отдельный `arctune-gui.exe`
 
-Дальше — GUI и Parquet-экспорт (см. [ROADMAP](docs/roadmap.md)).
+Дальше — Parquet-экспорт и внутренний стресс-нагрузчик (см. [ROADMAP](docs/roadmap.md)).
 
 ---
 
@@ -42,7 +44,7 @@ Intel Graphics Software, но из кода: лимит питания, напр
 Intel Graphics Software управляет разгоном Arc через нативную библиотеку `IGCL.dll`
 (публичный API Intel, header `igcl_api.h`). Слой выше — .NET-обёртка
 `IntelGraphicsSoftware.Wrapper.IGCL.dll`. Мы обращаемся к `IGCL.dll` напрямую через
-`ctypes`, минуя GUI.
+`ctypes`, минуя GUI Intel (наш собственный GUI — тонкий клиент поверх тех же модулей).
 
 ```
 ┌─────────────────────────────┐
@@ -81,15 +83,27 @@ python -m arctuner telemetry
 
 Подробнее — в [docs/development.md](docs/development.md).
 
+### GUI (необязательный extra)
+
+```powershell
+pip install -e ".[gui]"        # ставит PySide6
+python -m arctuner.gui.main    # или команда arctune-gui
+```
+
+GUI — read-only по умолчанию: любая запись требует диалога подтверждения, а сами
+значения проверяются тем же кодом `tuner.py`, что и в CLI. Запись выше жёстких
+потолков (питание >120%, память >20 Гбит/с) доступна только из CLI с `--force`.
+
 ### Сборка exe
 
 ```powershell
 pip install -e ".[build]"
-pyinstaller --clean --noconfirm packaging/arctune.spec   # -> dist/arctune.exe
+pyinstaller --clean --noconfirm packaging/arctune.spec     # -> dist/arctune.exe (CLI)
+pyinstaller --clean --noconfirm packaging/arctune-gui.spec # -> dist/arctune-gui.exe (GUI)
 ```
 
-Переносимый `arctune.exe` (~9 МБ) без Python на целевой машине — см.
-[docs/building.md](docs/building.md).
+Переносимые `arctune.exe` (~9 МБ) и `arctune-gui.exe` (~48 МБ) без Python на
+целевой машине — см. [docs/building.md](docs/building.md).
 
 ---
 
@@ -106,9 +120,17 @@ pyinstaller --clean --noconfirm packaging/arctune.spec   # -> dist/arctune.exe
 │   ├── tuner.py         # установка настроек (write, двухуровневые проверки)
 │   ├── logbook.py       # журнал изменений + расчёт отката (JSONL)
 │   ├── autofind.py      # автоматический поиск стабильной точки (TODO)
+│   ├── gui/             # GUI на PySide6 (extra `gui`, необязателен)
+│   │   ├── window.py    #   главное окно: вкладки, таймер опроса, разводка сигналов
+│   │   ├── worker.py    #   GpuWorker: все вызовы IGCL в отдельном QThread
+│   │   ├── context.py   #   жизненный цикл сессии + запись через tuner.py
+│   │   ├── charts.py    #   живой график и кривая V/F (QtCharts)
+│   │   ├── widgets.py   #   карточки метрик и диалог подтверждения записи
+│   │   ├── tabs/        #   вкладки: мониторинг/разгон/вентиляторы/V/F/журнал
+│   │   └── main.py      #   точка входа `arctune-gui`
 │   └── cli.py           # командная строка
-├── tests/               # тесты (unit + hardware)
-├── packaging/           # PyInstaller-спецификация сборки exe
+├── tests/               # тесты (unit + hardware + GUI offscreen)
+├── packaging/           # PyInstaller-спецификации сборки exe (CLI и GUI)
 ├── docs/                # документация
 └── examples/            # примеры использования
 ```
