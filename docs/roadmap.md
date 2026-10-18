@@ -23,6 +23,21 @@
   supported (единицы = Дж); средняя мощность = ΔE/Δt. На живой карте:
   GPU ~68 Вт, вся карта ~120 Вт при 65 % от лимита питания
 
+### Обёрнуто IGCL API (22 функции)
+
+- **Инициализация и устройство** (4): `ctlInit`, `ctlClose`,
+  `ctlEnumerateDevices`, `ctlGetDeviceProperties`
+- **Разгон V2** (10): `ctlOverclockGetProperties`,
+  `ctlOverclockWaiverSet`, `ctlOverclockResetToDefault`,
+  `ctlOverclockReadVFCurve`, `ctlOverclockWriteCustomVFCurve`,
+  `ctlOverclockGpuFrequencyOffsetSetV2`, `ctlOverclockGpuMaxVoltageOffsetSetV2`,
+  `ctlOverclockPowerLimitSetV2`, `ctlOverclockTemperatureLimitSetV2`,
+  `ctlOverclockVramMemSpeedLimitSetV2`
+- **Телеметрия** (1): `ctlPowerTelemetryGet`
+- **Вентиляторы** (6): `ctlEnumFans`, `ctlFanGetProperties`, `ctlFanGetState`,
+  `ctlFanSetFixedSpeedMode`, `ctlFanSetSpeedTableMode`, `ctlFanSetDefaultMode`
+- **Не обёрнуто (38)**: см. раздел «Перспективное / Новые данные из IGCL»
+
 ### Жёстко отказано драйвером (проверено записью, п. «Эксперименты»)
 
 - **Память выше 21 Гбит/с недостижима**: 21 — работает и откатывается;
@@ -82,6 +97,12 @@
 Приоритеты: 1 — автоматизация разгона, 2 — наблюдаемость, 3 — новые данные IGCL,
 4 — удобство CLI/GUI.
 
+**Аудит IGCL API (128 функций): 22 обёрнуто, 38 не обёрнуто.**
+Обёрнуты: инициализация (4), разгон V2 (10), телеметрия (1), вентиляторы (6).
+Необёрнуто: Get-версии (1), память (4), vram-поля телеметрии (8), ECC (3),
+PCIe/firmware (4), домены (3), GpuLock (2), дисплей (~80, вне scope).
+Список разобран по сложности в разделе ниже.
+
 ### 1. Автоматизация разгона
 
 - [ ] **Стресс-нагрузчик внутри проекта** — чтобы autofind не требовал внешний
@@ -102,30 +123,46 @@
       написан, в CLI не выведен
 - [ ] Diff снапшотов («до/после разгона», сравнение конфигов)
 
-### 3. Новые данные из IGCL (не обёрнуто)
+### 3. Новые данные из IGCL (раскрыв по сложности)
 
-- [ ] **Память: `ctlEnumMemoryModules` / `ctlMemoryGetState` / `GetBandwidth`** —
-      измеримая проверка разгона памяти (сама overclocking.md ссылается на
+#### 3.1 Быстрая реализация (уже читаются, нужно только извлечь)
+
+- [ ] **Поля `vram*Limited` (power/temp/current/voltage/utilization)** — 5 флагов
+      из `CtlPowerTelemetry`, которые драйвер уже заполняет; показывают «в чём
+      упёрлась память» — диагностический ключ (извлекать в `TelemetrySnapshot`)
+- [ ] **`vramEnergyCounter`** — Вт памяти (считается аналогично gpu/totalCard)
+- [ ] **`vramRead/WriteBandwidthCounter`** — пропускная способность чтения/записи
+- [ ] **`renderComputeActivityCounter` / `mediaActivityCounter`** — детализация
+      активности CPU/GPU (тоже уже читаются `globalActivityCounter`)
+- [ ] **Границы VF-кривой** — `gpuVFCurveVoltageLimit` / `gpuVFCurveFrequencyLimit`
+      уже читаются `read_oc_properties()`, но скрыты в CLI/GUI
+
+#### 3.2 Средняя сложность (нужна обёртка 1 функции)
+
+- [ ] **`ctlFanGetConfig`** — текущий режим вентилятора (auto/fixed/table)
+- [ ] **`ctlPciGetState` / `ctlGetFirmwareProperties`** — проверка ReBAR/x16
+      (частая причина «разгон не помогает»), версии firmware/vBIOS
+- [ ] **`ctlEccGetState` / `ctlEccSetState`** — статус ECC, важен при разгоне
+      памяти (ошибки, которые маскируются тестами); также `ctlEccGetProperties`
+- [ ] **`ctlOverclockGpuLockGet/Set`** — фиксация частоты для стабильных бенчей
+      (предотращает дрожание буста)
+- [ ] **`ctlEnumFrequencyDomains` / `FrequencyGetState` / `FrequencyGetThrottleTime`**
+      — троттлинг-время как метрика «успевает ли карта»
+
+#### 3.3 Средняя сложность (нужна обёртка 3–4 функции)
+
+- [ ] **`ctlEnumPowerDomains` / `ctlTemperatureGetState` / `ctlPowerGetEnergyCounter`**
+      — доп. датчики (потенциально hotspot памяти)
+- [ ] **Память: `ctlEnumMemoryModules` / `ctlMemoryGetProperties` / `ctlMemoryGetState`**
+      — измеримая проверка разгона памяти (сама overclocking.md ссылается на
       `ctlMemoryGetState` как на эталон; сейчас прирост 19→20 Гбит/с принимается
-      на веру). Примечание: >21 Гбит/с недостижим (см. «Жёстко отказано»)
-- [ ] **Поля телеметрии, которые структура уже читает, но api не извлекает**:
-      `vramEnergyCounter` (Вт памяти), `vramRead/WriteBandwidthCounter`,
-      флаги `vram*Limited` («в чём упёрлась память»), `renderCompute`/
-      `mediaActivityCounter`
-- [ ] `ctlFanGetConfig` — текущий режим вентилятора (auto/fixed/table);
-      `ctlFanSetSpeedTableMode` уже обёрнут, но на B580 table бесполезен
-- [ ] Частотные домены: `ctlEnumFrequencyDomains` / `FrequencyGetState` /
-      `FrequencyGetThrottleTime` — троттлинг-время как метрика «успевает ли карта»
-- [ ] Датчики: `ctlEnumPowerDomains` / `ctlTemperatureGetState` /
-      `ctlPowerGetEnergyCounter` — доп. температуры (потенциально hotspot памяти)
-- [ ] **ECC: `ctlEccGetState`** — статус ECC важен при разгоне памяти
-      (ошибки, которые маскируются обычным тестом)
-- [ ] **PCIe / firmware: `ctlPciGetState` / `ctlGetFirmwareProperties`** — проверка
-      ReBAR/x16 (частая причина «разгон не помогает»), версии firmware/vBIOS
-- [ ] `ctlOverclockGpuLockGet/Set` — фиксация частоты для стабильных бенчей
-- [ ] Границы VF-кривой в `status`/GUI: `gpuVFCurveVoltageLimit` /
-      `gpuVFCurveFrequencyLimit` уже читаются `read_oc_properties`, но скрыты
-- [ ] Оценить `ctlPowerTelemetryGetV2` — даёт ли больше полей на B580
+      на веру). Примечание: >21 Гбит/с недостижим (см. «Жёстко отказано»).
+      `ctlMemoryGetBandwidth` — пропускная способность (4-я функция)
+
+#### 3.4 Оценить на железе
+
+- [ ] **`ctlPowerTelemetryGetV2`** — новая версия телеметрии; оценить, даёт ли
+      больше полей на B580 (текущая V1 отдаёт gpuPowerPercent, counters, limited-флаги)
 
 ### 4. Удобство CLI / GUI
 
