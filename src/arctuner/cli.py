@@ -330,6 +330,75 @@ def cmd_vf(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_autofind(args: argparse.Namespace) -> int:
+    """⚠️ Автопоиск стабильной точки (меняет настройки, требует нагрузки)."""
+    from arctuner import autofind as af
+    from arctuner.igcl.api import IgclApi, IgclError
+    from arctuner.logbook import Logbook, default_logbook_path
+    from arctuner.telemetry import find_arc_adapter
+    from arctuner.tuner import SafetyLimitError
+
+    mode = af.MODE_FREQUENCY if args.mode == "frequency" else af.MODE_UNDERVOLT
+    cfg = af.AutofindConfig(
+        mode=mode,
+        step=args.step,
+        max_steps=args.max_steps,
+        settle_seconds=args.settle,
+        temp_ceiling_c=args.temp_ceiling,
+        require_load=not args.no_load_check,
+    )
+
+    print("⚠️  АВТОПОИСК стабильной точки — это ИЗМЕНИТ настройки карты.")
+    print(f"  режим:      {mode}")
+    print(f"  шаг:        {cfg.step}  (до {cfg.max_steps} шагов)")
+    print(f"  потолок t°: {cfg.temp_ceiling_c} °C")
+    print(
+        f"  нагрузка:   {'требуется (запустите стресс/бенчмарк!)' if cfg.require_load else 'не проверяется (--no-load-check)'}"
+    )
+    if cfg.require_load:
+        print("\n  ВАЖНО: запустите стресс-тест/игру в ДРУГОМ окне и держите его")
+        print("  активным. Без нагрузки autofind остановится с 'нет нагрузки'.")
+        print("  Телеметрия не видит крэши (TDR) — при сбое просто перезагрузите")
+        print("  систему, настройки вернутся к дефолту при старте драйвера.")
+    if not args.yes:
+        ans = input("\nПродолжить? [y/N]: ").strip().lower()
+        if ans not in ("y", "yes", "д", "да"):
+            print("Отменено — ничего не записано.")
+            return 1
+
+    def on_step(i: int, value: float, snap) -> None:
+        print(
+            f"  шаг {i:>3}: {value:>8.2f}  t={snap.gpu_temp_c}°C  "
+            f"пит={snap.gpu_power_percent}%  [{snap.limit_summary()}]"
+        )
+
+    try:
+        with IgclApi() as api:
+            found = find_arc_adapter(api)
+            if not found:
+                print("[FAIL] Дискретная Intel Arc не найдена.")
+                return 1
+            handle, _ = found
+            result = af.autofind(api, handle, cfg, on_step=on_step)
+
+            print("\n=== Итог ===")
+            print(f"  база:        {result.baseline:.2f}")
+            print(f"  стабильно:   {result.best_stable:.2f}  (сдвиг {result.improvement:+.2f})")
+            print(f"  шагов:       {result.steps_taken}")
+            print(f"  причина:     {result.stopped_reason}")
+            Logbook(default_logbook_path()).record(
+                result.mode, result.baseline, result.best_stable, note=result.stopped_reason
+            )
+            print(f"  журнал:      {default_logbook_path()}")
+    except af.AutofindAbortError as e:
+        print(f"\n[ABORT] {e}")
+        return 1
+    except (IgclError, SafetyLimitError) as e:
+        print(f"\n[FAIL] {e} (выполнен откат)")
+        return 1
+    return 0
+
+
 def cmd_log(args: argparse.Namespace) -> int:
     """Журнал изменений: просмотр истории и откат к исходным значениям."""
     from arctuner.igcl.api import IgclApi, IgclError
@@ -526,6 +595,25 @@ def build_parser() -> argparse.ArgumentParser:
     pvf.add_argument("--apply", metavar="FILE", help="⚠️ записать кривую из CSV (с валидацией)")
     pvf.add_argument("--yes", "-y", action="store_true", help="без подтверждения")
     pvf.set_defaults(func=cmd_vf)
+
+    paf = sub.add_parser("autofind", help="⚠️ автопоиск стабильной точки (меняет карту)")
+    paf.add_argument(
+        "--mode",
+        choices=["undervolt", "frequency"],
+        default="undervolt",
+        help="что двигать (по умолчанию undervolt — безопасное направление)",
+    )
+    paf.add_argument("--step", type=float, default=1.0, help="шаг (%% undervolt / МГц частоты)")
+    paf.add_argument("--max-steps", type=int, default=20, help="максимум шагов")
+    paf.add_argument("--settle", type=float, default=1.0, help="пауза после шага, сек")
+    paf.add_argument("--temp-ceiling", type=float, default=80.0, help="откат при температуре >")
+    paf.add_argument(
+        "--no-load-check",
+        action="store_true",
+        help="не требовать нагрузку GPU (не рекомендуется)",
+    )
+    paf.add_argument("--yes", "-y", action="store_true", help="без подтверждения")
+    paf.set_defaults(func=cmd_autofind)
 
     pf = sub.add_parser("fans", help="вентиляторы: чтение / --set RPM (⚠️ запись)")
     pf.add_argument("--set", type=int, help="зафиксировать скорость, RPM (⚠️)")

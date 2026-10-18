@@ -84,6 +84,9 @@ class TelemetrySnapshot:
     current_limited: bool
     voltage_limited: bool
     utilization_limited: bool
+    # Монотонный счётчик активности GPU — растёт только под нагрузкой.
+    # Нужен autofind, чтобы отличить «стабильно под стрессом» от «тихо в покое».
+    activity_counter: int | None = None
 
     def limit_summary(self) -> str:
         """Человекочитаемая строка причин ограничения."""
@@ -298,7 +301,26 @@ class IgclApi:
             current_limited=tel.gpuCurrentLimited,
             voltage_limited=tel.gpuVoltageLimited,
             utilization_limited=tel.gpuUtilizationLimited,
+            activity_counter=self._read_counter(tel.globalActivityCounter),
         )
+
+    @staticmethod
+    def _read_counter(item: T.CtlOcTelemetryItem) -> int | None:
+        """Читает ctl_oc_telemetry_item_t как целое (счётчик) либо None."""
+        if not item.bSupported:
+            return None
+        v = item.value
+        if item.type == T.CtlDataType.INT64:
+            return int(v.data64)
+        if item.type == T.CtlDataType.UINT64:
+            return int(v.datau64)
+        if item.type == T.CtlDataType.INT32:
+            return int(v.data32)
+        if item.type == T.CtlDataType.UINT32:
+            return int(v.datau32)
+        # Для float/double-счётчиков отдаём округлённое.
+        f = T.read_item_value(item)
+        return int(f) if f is not None else None
 
     def read_oc_properties(self, handle: CtlDeviceHandle) -> dict[str, OcControlInfo]:
         """ctlOverclockGetProperties — диапазоны пунктов разгона (read-only)."""
