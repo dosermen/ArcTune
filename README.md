@@ -24,7 +24,14 @@ Intel Graphics Software, но из кода: лимит питания, напр
 | Драйвер | Intel Arc Graphics 32.0.101.9xxx+ |
 | Лицензия | MIT |
 
-Текущий фокус — read-only телеметрия. Запись настроек — следующий шаг (см. [ROADMAP](docs/roadmap.md)).
+Сейчас реализовано и проверено на живой B580:
+
+- ✅ **Read-only телеметрия** — датчики, причины ограничения, вентиляторы, кривая V/F
+- ✅ **Запись настроек** — лимит питания / частота / напряжение / температура / память,
+  с двухуровневой проверкой и откатом
+- ✅ **Журнал + откат**, экспорт телеметрии в CSV
+
+Дальше — автопоиск стабильной точки и GUI (см. [ROADMAP](docs/roadmap.md)).
 
 ---
 
@@ -79,17 +86,39 @@ python -m arctuner telemetry
 ```
 .
 ├── src/arctuner/
-│   ├── igcl/            # низкоуровневая обёртка над IGCL.dll (ctypes)
-│   │   ├── loader.py    #   загрузка библиотеки, поиск функций
-│   │   ├── types.py     #   C-структуры (_ctl_*_t) и enum'ы
+│   ├── igcl/            # низкоуровневая обёртка над IGCL (ctypes)
+│   │   ├── loader.py    #   загрузка IntelControlLib.dll/ControlLib.dll, поиск функций
+│   │   ├── types.py     #   C-структуры (_ctl_*_t) и enum'ы (по igcl_api.h)
 │   │   └── api.py       #   Python-функции ctl* + преобразование ошибок
-│   ├── telemetry.py     # чтение датчиков (ватты, °C, частоты, причины троттлинга)
-│   ├── tuner.py         # установка настроек разгона (write, с проверками)
+│   ├── telemetry.py     # чтение датчиков (В, МГц, °C, %, причины троттлинга)
+│   ├── tuner.py         # установка настроек (write, двухуровневые проверки)
+│   ├── logbook.py       # журнал изменений + расчёт отката (JSONL)
 │   ├── autofind.py      # автоматический поиск стабильной точки (TODO)
 │   └── cli.py           # командная строка
-├── tests/               # тесты
+├── tests/               # тесты (unit + hardware)
 ├── docs/                # документация
 └── examples/            # примеры использования
+```
+
+---
+
+## Команды
+
+```powershell
+python -m arctuner doctor              # проверка драйвера/IGCL (read-only)
+python -m arctuner telemetry           # снимок датчиков + причины ограничения
+python -m arctuner telemetry --csv out.csv   # + сохранить снимок в CSV
+python -m arctuner telemetry -w 1      # наблюдать каждую секунду
+python -m arctuner status              # диапазоны пунктов разгона (min/max/step)
+python -m arctuner fans                # скорость/свойства вентиляторов
+python -m arctuner log                 # история изменений настроек
+
+# ⚠️ ниже — запись (меняет карту, требует подтверждения):
+python -m arctuner set --power-limit 110    # лимит питания, %
+python -m arctuner set --vram-speed 20      # память, Гбит/с (≤20 без --force)
+python -m arctuner fans --set 1500          # зафиксировать вентиляторы, RPM
+python -m arctuner log --rollback           # откат к исходным значениям
+python -m arctuner reset --oc --fans        # сброс OC + вентиляторы в авто
 ```
 
 ---
