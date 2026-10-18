@@ -127,6 +127,8 @@ def cmd_telemetry(args: argparse.Namespace) -> int:
                     f"питание {_fmt(t.gpu_power_percent, '%'):>6}"
                     f" ({_fmt(t.gpu_power_w, ' Вт')})"
                 )
+                if t.gpu_power_w is None:
+                    print("  Вт: считаются из счётчика энергии — появятся со 2-го тика (--watch).")
                 print(
                     f"  Память: {_fmt(t.vram_eff_freq_mbps, ' Гбит/с'):>12}  "
                     f"{_fmt(t.vram_voltage_v, ' В'):>8}  {_fmt(t.vram_temp_c, ' °C'):>7}"
