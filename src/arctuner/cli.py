@@ -42,10 +42,61 @@ def _fmt(v: float | None, unit: str = "") -> str:
     return f"{v:.2f}{unit}" if abs(v) < 1000 else f"{v:.0f}{unit}"
 
 
-def cmd_telemetry(_: argparse.Namespace) -> int:
-    """Снимок телеметрии (read-only)."""
+def cmd_telemetry(args: argparse.Namespace) -> int:
+    """Снимок телеметрии (read-only). --csv для сохранения, --watch для опроса."""
+    import csv
+    import time
+    from pathlib import Path
+
     from arctuner.igcl.api import IgclApi, IgclError
     from arctuner.telemetry import find_arc_adapter
+
+    # Колонки CSV (стабильный порядок для анализа).
+    csv_fields = [
+        "timestamp",
+        "gpu_freq_mhz",
+        "gpu_voltage_v",
+        "gpu_temp_c",
+        "gpu_power_percent",
+        "vram_eff_freq_mbps",
+        "vram_voltage_v",
+        "vram_temp_c",
+        "power_limited",
+        "temperature_limited",
+        "current_limited",
+        "voltage_limited",
+        "utilization_limited",
+    ]
+
+    def snapshot_row(t) -> dict[str, object]:
+        return {
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "gpu_freq_mhz": t.gpu_freq_mhz,
+            "gpu_voltage_v": t.gpu_voltage_v,
+            "gpu_temp_c": t.gpu_temp_c,
+            "gpu_power_percent": t.gpu_power_percent,
+            "vram_eff_freq_mbps": t.vram_eff_freq_mbps,
+            "vram_voltage_v": t.vram_voltage_v,
+            "vram_temp_c": t.vram_temp_c,
+            "power_limited": t.power_limited,
+            "temperature_limited": t.temperature_limited,
+            "current_limited": t.current_limited,
+            "voltage_limited": t.voltage_limited,
+            "utilization_limited": t.utilization_limited,
+        }
+
+    def emit_csv(path: str, row: dict[str, object]) -> None:
+        p = Path(path)
+        write_header = not p.exists() or p.stat().st_size == 0
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("a", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=csv_fields)
+            if write_header:
+                w.writeheader()
+            w.writerow(row)
+
+    watch_sec = getattr(args, "watch", None)
+    csv_path = getattr(args, "csv", None)
 
     try:
         with IgclApi() as api:
@@ -59,18 +110,33 @@ def cmd_telemetry(_: argparse.Namespace) -> int:
                 f"{info.num_xe_cores} Xe-cores)\n"
             )
 
-            t = api.read_power_telemetry(handle)
-            print("=== Телеметрия (read-only) ===")
-            print(
-                f"  Ядро:   {_fmt(t.gpu_freq_mhz, ' МГц'):>12}  "
-                f"{_fmt(t.gpu_voltage_v, ' В'):>8}  {_fmt(t.gpu_temp_c, ' °C'):>7}  "
-                f"питание {_fmt(t.gpu_power_percent, '%'):>6}"
-            )
-            print(
-                f"  Память: {_fmt(t.vram_eff_freq_mbps, ' МТ/с'):>12}  "
-                f"{_fmt(t.vram_voltage_v, ' В'):>8}  {_fmt(t.vram_temp_c, ' °C'):>7}"
-            )
-            print(f"\n  Ограничение: {t.limit_summary()}")
+            if watch_sec:
+                print(f"Наблюдение каждые {watch_sec} сек (Ctrl+C для выхода)...")
+            while True:
+                t = api.read_power_telemetry(handle)
+                row = snapshot_row(t)
+                print("=== Телеметрия (read-only) ===")
+                print(
+                    f"  Ядро:   {_fmt(t.gpu_freq_mhz, ' МГц'):>12}  "
+                    f"{_fmt(t.gpu_voltage_v, ' В'):>8}  {_fmt(t.gpu_temp_c, ' °C'):>7}  "
+                    f"питание {_fmt(t.gpu_power_percent, '%'):>6}"
+                )
+                print(
+                    f"  Память: {_fmt(t.vram_eff_freq_mbps, ' Гбит/с'):>12}  "
+                    f"{_fmt(t.vram_voltage_v, ' В'):>8}  {_fmt(t.vram_temp_c, ' °C'):>7}"
+                )
+                print(f"\n  Ограничение: {t.limit_summary()}")
+
+                if csv_path:
+                    emit_csv(csv_path, row)
+                    print(f"  -> CSV: {csv_path}")
+
+                if not watch_sec:
+                    break
+                time.sleep(watch_sec)
+                print()
+    except KeyboardInterrupt:
+        print("\nОстановлено.")
     except IgclError as e:
         print(f"[FAIL] {e}")
         return 1
@@ -109,6 +175,7 @@ def cmd_set(args: argparse.Namespace) -> int:
     """⚠️ Запись настроек. Требует явного подтверждения (меняет состояние карты)."""
     from arctuner import tuner
     from arctuner.igcl.api import IgclApi, IgclError
+    from arctuner.logbook import Logbook, default_logbook_path
     from arctuner.telemetry import find_arc_adapter
     from arctuner.tuner import SafetyLimitError
 
@@ -145,9 +212,11 @@ def cmd_set(args: argparse.Namespace) -> int:
             if not found:
                 print("[FAIL] Дискретная Intel Arc не найдена.")
                 return 1
-            handle, _ = found
+            handle, dev = found
+            device_name = dev.name
             before = tuner.current_values(api, handle)
             print(f"\nБыло: {before}")
+            log = Logbook(default_logbook_path())
             for _, value, fn in changes:
                 if fn is tuner.set_vram_speed:
                     report = fn(api, handle, value, allow_beyond_nominal=args.force)
@@ -157,7 +226,15 @@ def cmd_set(args: argparse.Namespace) -> int:
                 if report.note:
                     line += f"  ({report.note})"
                 print(line)
+                log.record(
+                    report.field,
+                    report.old,
+                    report.new,
+                    device=device_name,
+                    note=report.note,
+                )
             print("Готово. Проверьте: python -m arctuner telemetry")
+            print(f"Журнал: {default_logbook_path()}")
     except SafetyLimitError as e:
         print(f"[BLOCK] {e}")
         return 1
@@ -165,6 +242,82 @@ def cmd_set(args: argparse.Namespace) -> int:
         print(f"[FAIL] {e}")
         return 1
     return 0
+
+
+def cmd_log(args: argparse.Namespace) -> int:
+    """Журнал изменений: просмотр истории и откат к исходным значениям."""
+    from arctuner.igcl.api import IgclApi, IgclError
+    from arctuner.logbook import Logbook, default_logbook_path
+    from arctuner.telemetry import find_arc_adapter
+
+    log = Logbook(default_logbook_path())
+
+    if args.rollback:
+        targets = log.rollback_targets()
+        if not targets:
+            print("Нечего откатывать — журнал пуст или нет исходных значений.")
+            return 0
+        if not args.yes:
+            print("⚠️  Откат к исходным значениям журнала:")
+            for k, v in targets.items():
+                print(f"    {k} <- {v}")
+            ans = input("Подтвердить? [y/N]: ").strip().lower()
+            if ans not in ("y", "yes", "д", "да"):
+                print("Отменено.")
+                return 1
+        try:
+            with IgclApi() as api:
+                found = find_arc_adapter(api)
+                if not found:
+                    print("[FAIL] Дискретная Intel Arc не найдена.")
+                    return 1
+                handle, _ = found
+                _build_rollback_map()
+                for name, value in targets.items():
+                    fn = _ROLLBACK_MAP.get(name)
+                    if fn is None or value is None:
+                        print(f"  {name}: нет функции отката, пропущено")
+                        continue
+                    fn(api, handle, value)
+                    print(f"  {name} <- {value}  (восстановлено)")
+                    log.mark_restored(name)
+        except IgclError as e:
+            print(f"[FAIL] {e}")
+            return 1
+        print("Откат завершён.")
+        return 0
+
+    # Обычный просмотр
+    entries = log.tail(args.n)
+    if not entries:
+        print(f"Журнал пуст: {default_logbook_path()}")
+        return 0
+    print(f"Последние {len(entries)} записей ({default_logbook_path()}):")
+    for e in entries:
+        flag = " [restored]" if e.restored else ""
+        print(f"  {e.timestamp}  {e.field}: {e.old} -> {e.new}{flag}")
+        if e.note:
+            print(f"      {e.note}")
+    print("\nОткат: python -m arctuner log --rollback")
+
+
+# Карта полей → функции восстановления (для rollback).
+_ROLLBACK_MAP: dict[str, object] = {}
+
+
+def _build_rollback_map() -> None:
+    if not _ROLLBACK_MAP:
+        from arctuner import tuner
+
+        _ROLLBACK_MAP.update(
+            {
+                "powerLimit": tuner.set_power_limit,
+                "gpuFrequencyOffset": tuner.set_gpu_freq_offset,
+                "gpuVoltageOffset": tuner.set_gpu_voltage_offset,
+                "temperatureLimit": tuner.set_temperature_limit,
+                "vramMemSpeedLimit": tuner.set_vram_speed,
+            }
+        )
 
 
 def cmd_fans(args: argparse.Namespace) -> int:
@@ -269,8 +422,18 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="command", required=True)
 
     sub.add_parser("doctor", help="проверка окружения").set_defaults(func=cmd_doctor)
-    sub.add_parser("telemetry", help="телеметрия (read-only)").set_defaults(func=cmd_telemetry)
+    ptelem = sub.add_parser("telemetry", help="телеметрия (read-only)")
+    ptelem.add_argument("--csv", metavar="FILE", help="дополнительно сохранить снимок в CSV")
+    ptelem.add_argument("--once", action="store_true", help="один снимок (без -w)")
+    ptelem.add_argument("-w", "--watch", type=int, metavar="SEC", help="повторять каждые N сек")
+    ptelem.set_defaults(func=cmd_telemetry)
     sub.add_parser("status", help="диапазоны разгона (read-only)").set_defaults(func=cmd_status)
+
+    plog = sub.add_parser("log", help="журнал изменений / откат")
+    plog.add_argument("-n", type=int, default=10, help="показать последние N записей")
+    plog.add_argument("--rollback", action="store_true", help="откатить к исходным значениям")
+    plog.add_argument("--yes", "-y", action="store_true", help="без подтверждения")
+    plog.set_defaults(func=cmd_log)
 
     pf = sub.add_parser("fans", help="вентиляторы: чтение / --set RPM (⚠️ запись)")
     pf.add_argument("--set", type=int, help="зафиксировать скорость, RPM (⚠️)")
