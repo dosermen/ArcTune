@@ -44,10 +44,17 @@ _DECIMALS: dict[str, int] = {
 }
 
 #: Жёсткие потолки проекта поверх IGCL (см. tuner.py); GUI не даёт выйти выше.
+#: vramMemSpeedLimit: 22 = максимум, который декларирует драйвер (19..22).
+#: >20 (номинал чипа SC20) — только после явного подтверждения «сверх номинала».
+#: Живой тест: 21 Гбит/с — работает; 22 драйвер отклонил (DATA_WRITE);
+#: 24 отклонено outright (вне диапазона) — выше 22 не подняться через IGCL.
 _HARD_MAX: dict[str, float] = {
     "powerLimit": 120.0,  # аппаратный лимит B580 (шунт ~226 Вт)
-    "vramMemSpeedLimit": 20.0,  # номинал чипа SC20; выше — только CLI --force
+    "vramMemSpeedLimit": 22.0,  # максимум драйвера; выше (24) — только vBIOS, вне scope
 }
+
+#: Номинал чипа памяти; значения выше — «сверх номинала», требуют сильного подтверждения.
+_VRAM_NOMINAL = 20.0
 
 
 class _FieldRow(QWidget):
@@ -124,8 +131,22 @@ class _FieldRow(QWidget):
         label, unit = _FIELD_LABELS[self._field]
         current = self._current.text().removeprefix("сейчас: ").strip() or "?"
         hard = ""
-        if self._field in _HARD_MAX:
+        if self._field == "vramMemSpeedLimit" and value > _VRAM_NOMINAL:
+            hard = (
+                f"⚠️ СВЕРХ НОМИНАЛА чипа SC20 ({_VRAM_NOMINAL:g} {unit})! "
+                f"Драйвер декларирует до {_HARD_MAX[self._field]:g}, но живой тест: "
+                f"21 — работает, 22 — отказ драйвера (DATA_WRITE). Стабильность не "
+                f"гарантирована: возможны артефакты/сброс драйвера."
+            )
+        elif self._field in _HARD_MAX:
             hard = f"Потолок проекта: {_HARD_MAX[self._field]:g} {unit} (обход невозможен)."
+        if self._field == "gpuVoltageOffset":
+            extra = (
+                "Intel требует waiver (принятие снижения срока службы) — вызывается "
+                "автоматически. В МИНУС смещение недоступно (драйвер даёт 0…100): "
+                "undervolt — через вкладку «V/F»."
+            )
+            hard = f"{hard}\n{extra}" if hard else extra
         if confirm_write(
             self.window(),
             "Подтверждение записи",
@@ -162,6 +183,12 @@ class OverclockTab(QWidget):
             self._rows[field] = row
             vbox.addWidget(row)
         vbox.addWidget(QLabel("* Лимит температуры: драйвер отдаёт units=PERCENT, значения — °C"))
+        vbox.addWidget(
+            QLabel(
+                "* Смещение напряжения: только ПЛЮС (драйвер даёт 0…100); в минус —"
+                " только через кривую V/F (вкладка «V/F»)."
+            )
+        )
 
         self._reset = QPushButton("⚠️ Сбросить всё к дефолту…")
         self._reset.clicked.connect(self._on_reset)

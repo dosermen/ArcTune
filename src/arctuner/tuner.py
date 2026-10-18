@@ -67,6 +67,16 @@ def _oc(api: IgclApi, handle) -> dict[str, OcControlInfo | bool]:
     return api.read_oc_properties(handle)
 
 
+def _ensure_waiver(api: IgclApi, handle) -> None:
+    """ctlOverclockWaiverSet — обязателен перед записью напряжения, отрицательного
+    смещения частоты и кривой V/F (иначе драйвер вернёт WAIVER_NOT_SET, 0x44000008).
+
+    Согласие пользователя — это подтверждение записи в CLI/GUI (Intel требует
+    «хотя бы один раз явно предупредить и получить согласие»).
+    """
+    api.set_overclock_waiver(handle)
+
+
 def set_power_limit(api: IgclApi, handle, percent: float) -> WriteReport:
     """Ставит лимит питания в %. Потолок B580 — 120% (аппаратный).
 
@@ -85,6 +95,9 @@ def set_power_limit(api: IgclApi, handle, percent: float) -> WriteReport:
 def set_gpu_freq_offset(api: IgclApi, handle, mhz: float) -> WriteReport:
     """Ставит смещение частоты ядра, МГц (типично −300…+1000).
 
+    Отрицательное смещение требует waiver (Intel: может поднять напряжение
+    выше заводских рамок) — вызывается автоматически перед записью.
+
     Raises:
         SafetyLimitError: вне диапазона IGCL.
         IgclError: ошибка вызова драйвера.
@@ -92,15 +105,22 @@ def set_gpu_freq_offset(api: IgclApi, handle, mhz: float) -> WriteReport:
     info = _oc(api, handle)["gpuFrequencyOffset"]
     assert isinstance(info, OcControlInfo)
     _check_igcl_range("gpu_freq_offset", mhz, info)
+    if mhz < 0:
+        _ensure_waiver(api, handle)
     api.set_gpu_freq_offset(handle, mhz)
     return WriteReport("gpuFrequencyOffset", info.default, mhz)
 
 
 def set_gpu_voltage_offset(api: IgclApi, handle, percent: float) -> WriteReport:
-    """Ставит смещение напряжения ядра, % (0…100, относительное).
+    """Ставит смещение напряжения ядра в % относительно текущего (0…100 — только ПЛЮС).
 
-    Повышение напряжения — теплово/деградационно рискованно; вызывающий
-    несёт ответственность за выбор значения. Здесь — только проверка IGCL.
+    B580: отрицательный диапазон драйвером не декларируется (min=0), а легаси-
+    функция в ±мВ отвечает DEPRECATED_API (0x44000009) — undervolt на B580
+    делается только через кривую V/F. Повышение напряжения — теплово/
+    деградационно рискованно; вызывающий несёт ответственность за значение.
+
+    Перед записью вызывается waiver — без него драйвер возвращает
+    WAIVER_NOT_SET (0x44000008); это и была «ошибка при изменении».
 
     Raises:
         SafetyLimitError: вне диапазона IGCL.
@@ -109,6 +129,7 @@ def set_gpu_voltage_offset(api: IgclApi, handle, percent: float) -> WriteReport:
     info = _oc(api, handle)["gpuVoltageOffset"]
     assert isinstance(info, OcControlInfo)
     _check_igcl_range("gpu_voltage_offset", percent, info)
+    _ensure_waiver(api, handle)
     api.set_gpu_voltage_offset(handle, percent)
     return WriteReport("gpuVoltageOffset", info.default, percent)
 
@@ -285,6 +306,7 @@ def apply_vf_curve(api: IgclApi, handle, points: list[VfPoint]) -> WriteReport:
         arr[i].voltage = round(p.voltage_mv)
         arr[i].frequency = round(p.freq_mhz)
 
+    _ensure_waiver(api, handle)  # igcl_api.h: waiver обязателен перед записью кривой
     code = api.loader.dll.ctlOverclockWriteCustomVFCurve(handle, len(points), arr)
     if code != T.CTL_RESULT_SUCCESS:
         raise IgclError(code, "ctlOverclockWriteCustomVFCurve")

@@ -123,10 +123,10 @@ def test_overclock_sets_ranges_and_disables_unsupported(qapp) -> None:
 
 
 def test_vram_spinbox_capped_at_project_limit(qapp) -> None:
-    """Потолок проекта 20 Гбит/с важнее IGCL-максимума 22 — спинбокс не даёт выйти выше."""
+    """Потолок GUI = максимум драйвера (22); >20 требует флага сверх номинала."""
     from arctuner.gui.tabs.overclock import _HARD_MAX
 
-    assert _HARD_MAX["vramMemSpeedLimit"] == 20.0
+    assert _HARD_MAX["vramMemSpeedLimit"] == 22.0
     assert _HARD_MAX["powerLimit"] == 120.0
 
 

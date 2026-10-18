@@ -153,7 +153,12 @@ class GpuContext:
         return self._write(tuner.set_temperature_limit, celsius)
 
     def set_vram_speed(self, gbps: float) -> WriteReport:
-        return self._write(tuner.set_vram_speed, gbps)
+        """>20 Гбит/с (сверх номинала SC20) — пользователь уже подтвердил в диалоге."""
+        return self._write(
+            tuner.set_vram_speed,
+            gbps,
+            allow_beyond_nominal=gbps > tuner.MAX_VRAM_SPEED_GBPS,
+        )
 
     def reset_oc(self) -> WriteReport:
         api, handle = self._require()

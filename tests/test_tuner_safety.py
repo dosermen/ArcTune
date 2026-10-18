@@ -76,3 +76,107 @@ def test_igcl_range_accepts_exact_multiple() -> None:
 def test_igcl_range_accepts_inclusive_bounds() -> None:
     _check_igcl_range("x", 50.0, _info(50.0, 100.0, step=1.0))
     _check_igcl_range("x", 100.0, _info(50.0, 100.0, step=1.0))
+
+
+# --- Waiver: обязателен перед напряжением / отрицательной частотой / V/F ---
+
+
+class _FakeApi:
+    """Дублёр IgclApi: отдаёт фиксированные диапазоны и запоминает порядок вызовов."""
+
+    def __init__(self, **overrides: OcControlInfo) -> None:
+        base = {
+            "supported": True,
+            "gpuFrequencyOffset": _info(-300.0, 1000.0),
+            "gpuVoltageOffset": _info(0.0, 100.0),
+            "powerLimit": _info(50.0, 120.0),
+            "temperatureLimit": _info(60.0, 100.0),
+            "vramMemSpeedLimit": _info(19.0, 22.0, step=0.001),
+        }
+        base.update(overrides)
+        self._ranges = base
+        self.calls: list[str] = []
+
+    def read_oc_properties(self, handle) -> dict:
+        return self._ranges
+
+    def set_overclock_waiver(self, handle) -> None:
+        self.calls.append("waiver")
+
+    def set_gpu_voltage_offset(self, handle, percent) -> None:
+        self.calls.append("voltage")
+
+    def set_gpu_freq_offset(self, handle, mhz) -> None:
+        self.calls.append(f"freq:{mhz:g}")
+
+    def set_power_limit(self, handle, percent) -> None:
+        self.calls.append("power")
+
+
+_HANDLE = object()
+
+
+def test_voltage_offset_calls_waiver_first() -> None:
+    """Без waiver драйвер даёт WAIVER_NOT_SET — вызов должен идти ДО set."""
+    from arctuner import tuner
+
+    api = _FakeApi()
+    tuner.set_gpu_voltage_offset(api, _HANDLE, 5.0)
+    assert api.calls == ["waiver", "voltage"]
+
+
+def test_negative_freq_offset_calls_waiver() -> None:
+    """Отрицательное смещение частоты — waiver по igcl_api.h."""
+    from arctuner import tuner
+
+    api = _FakeApi()
+    tuner.set_gpu_freq_offset(api, _HANDLE, -100.0)
+    assert api.calls == ["waiver", "freq:-100"]
+
+
+def test_positive_freq_offset_without_waiver() -> None:
+    """Положительное смещение waiver не требует — не вызываем без нужды."""
+    from arctuner import tuner
+
+    api = _FakeApi()
+    tuner.set_gpu_freq_offset(api, _HANDLE, 250.0)
+    assert api.calls == ["freq:250"]
+
+
+def test_power_limit_without_waiver() -> None:
+    """Лимит питания waiver не требует (подтверждено живыми записями без него)."""
+    from arctuner import tuner
+
+    api = _FakeApi()
+    tuner.set_power_limit(api, _HANDLE, 110.0)
+    assert api.calls == ["power"]
+
+
+def test_vram_21_requires_beyond_nominal_flag() -> None:
+    """21 Гбит/с: без флага — блок (номинал 20), с флагом — проходит и пишется."""
+    from arctuner import tuner
+
+    api = _FakeApi()
+    with pytest.raises(tuner.SafetyLimitError):
+        tuner.set_vram_speed(api, _HANDLE, 21.0)
+
+    class _WithSet(_FakeApi):
+        def set_vram_mem_speed(self, handle, gbps) -> None:
+            self.calls.append(f"vram:{gbps:g}")
+
+    api2 = _WithSet()
+    report = tuner.set_vram_speed(api2, _HANDLE, 21.0, allow_beyond_nominal=True)
+    assert report.new == 21.0
+    assert api2.calls == ["vram:21"]
+
+
+def test_vram_24_rejected_even_with_flag() -> None:
+    """24 Гбит/с: вне диапазона IGCL (max=22) — блок даже с allow_beyond_nominal."""
+    from arctuner import tuner
+
+    class _WithSet(_FakeApi):
+        def set_vram_mem_speed(self, handle, gbps) -> None:
+            self.calls.append(f"vram:{gbps:g}")
+
+    with pytest.raises(tuner.SafetyLimitError):
+        tuner.set_vram_speed(_WithSet(), _HANDLE, 24.0, allow_beyond_nominal=True)

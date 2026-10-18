@@ -201,6 +201,14 @@ def cmd_set(args: argparse.Namespace) -> int:
         print("⚠️  Это ИЗМЕНИТ настройки карты (write). Запрошено:")
         for name, value, _ in changes:
             print(f"    {name} = {value}")
+        if any(
+            name == "voltage_offset" or (name == "freq_offset" and value < 0)
+            for name, value, _ in changes
+        ):
+            print(
+                "    ℹ️ Будет вызван ctlOverclockWaiverSet — Intel требует его для записи"
+                " напряжения/отрицательной частоты (принятие риска снижения срока службы)."
+            )
         answer = input("Подтвердить запись? [y/N]: ").strip().lower()
         if answer not in ("y", "yes", "д", "да"):
             print("Отменено — ничего не записано.")

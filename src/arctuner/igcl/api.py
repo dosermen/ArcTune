@@ -383,6 +383,21 @@ class IgclApi:
         """ctlOverclockResetToDefault — откат всех OC-настроек к дефолту (план отката)."""
         _check(self.loader.dll.ctlOverclockResetToDefault(handle), "ctlOverclockResetToDefault")
 
+    def set_overclock_waiver(self, handle: CtlDeviceHandle) -> None:
+        """ctlOverclockWaiverSet — принятие пользователем риска разгона.
+
+        Intel требует этот вызов ПЕРЕД записью напряжения
+        (ctlOverclockGpuMaxVoltageOffsetSetV2), отрицательного смещения частоты
+        и записи кривой V/F — иначе драйвер возвращает
+        CTL_RESULT_ERROR_CORE_OVERCLOCK_WAIVER_NOT_SET (0x44000008).
+
+        По igcl_api.h приложение обязано хотя бы один раз явно предупредить
+        пользователя о снижении срока службы и получить согласие; подтверждение
+        записи в CLI/GUI и есть такое согласие. Вызов идемпотентен и сам по себе
+        настроек не меняет.
+        """
+        _check(self.loader.dll.ctlOverclockWaiverSet(handle), "ctlOverclockWaiverSet")
+
     # --- Вентиляторы ---
 
     def enum_fans(self, handle: CtlDeviceHandle) -> list[CtlFanHandle]:
