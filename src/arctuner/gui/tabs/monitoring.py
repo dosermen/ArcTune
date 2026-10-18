@@ -11,6 +11,10 @@ from arctuner.gui.charts import LiveChart
 from arctuner.gui.widgets import MetricCard
 from arctuner.igcl.api import TelemetrySnapshot
 
+#: пауза дольше этого считается пропуском данных (сон/подвисание) — график
+#: обнуляется, чтобы линия не «мостила» через паузу фальшивым значением.
+GAP_MAX_S = 5.0
+
 
 class MonitoringTab(QWidget):
     """Показывает текущую телеметрию и скроллящийся график последних минут."""
@@ -18,6 +22,7 @@ class MonitoringTab(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._t0 = time.monotonic()
+        self._t_last: float | None = None
 
         self._freq = MetricCard("Ядро", "МГц")
         self._voltage = MetricCard("Напряжение", "В")
@@ -65,14 +70,21 @@ class MonitoringTab(QWidget):
         self._vram_freq.set_value(snap.vram_eff_freq_mbps, digits=2)
         self._vram_voltage.set_value(snap.vram_voltage_v, digits=3)
         self._vram_temp.set_value(snap.vram_temp_c)
-        self._activity.set_value(snap.activity_counter)
+        # Счётчик активности — int64, растёт всё время работы драйвера: сырой
+        # 13-значный номер нечитаем, разделяем разряды пробелами.
+        counter = snap.activity_counter
+        self._activity.set_value(None if counter is None else f"{counter:,}".replace(",", " "))
 
         self._limits.setText(f"Ограничение: {snap.limit_summary()}")
 
         # На график кладём только полные снимки — частичные точки соврали бы картинку.
         if None not in (snap.gpu_temp_c, snap.gpu_power_percent, snap.gpu_freq_mhz):
             t = time.monotonic() - self._t0
+            if self._t_last is not None and t - self._t_last > GAP_MAX_S:
+                # Долгий перерыв (сон/занятый воркер): линия через паузу — ложь.
+                self._chart.clear()
             self._chart.push(t, snap.gpu_temp_c, snap.gpu_power_percent, snap.gpu_freq_mhz)
+            self._t_last = t
 
 
 __all__ = ["MonitoringTab"]

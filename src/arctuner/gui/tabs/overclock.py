@@ -8,7 +8,7 @@ GpuContext -> tuner.py: там ещё раз проверяются жёстки
 
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QLocale, Signal
 from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import (
     QDoubleSpinBox,
@@ -66,6 +66,7 @@ class _FieldRow(QWidget):
         super().__init__(parent)
         self._field = field
         label, unit = _FIELD_LABELS[field]
+        self._supported = False  # станет True, когда IGCL подтвердит поддержку
 
         self._name = QLabel(label)
         self._range = QLabel("—")
@@ -74,6 +75,9 @@ class _FieldRow(QWidget):
         self._spin = QDoubleSpinBox()
         self._spin.setDecimals(_DECIMALS[field])
         self._spin.setEnabled(False)  # до получения диапазонов IGCL
+        # Локаль «C»: десятичный разделитель — точка, как в подписях и CLI
+        # (в системной локали «19,750» конфликтует с текстом вида «19.75»).
+        self._spin.setLocale(QLocale.c())
         # Иначе значения вида «19,750» обрезаются: стандартный размер берётся
         # до задания диапазона/decimals. Ширину считаем по самому широкому тексту.
         self._spin.setMinimumWidth(self._required_width())
@@ -114,17 +118,31 @@ class _FieldRow(QWidget):
 
     def set_range(self, info: OcControlInfo, current: float | None) -> None:
         """Задаёт диапазон из IGCL (с учётом жёстких потолков) и текущее значение."""
-        hi = min(info.max, _HARD_MAX.get(self._field, info.max))
+        hard = _HARD_MAX.get(self._field)
+        hi = info.max if hard is None else min(info.max, hard)
+        hi = max(hi, info.min)  # защита от инверсии диапазона на странных данных
         self._spin.setRange(info.min, hi)
         if info.step > 0:
             self._spin.setSingleStep(info.step)
         if current is not None:
             self._spin.setValue(current)
             self._current.setText(f"сейчас: {current:g}")
-        self._range.setText(f"{info.min:g}…{info.max:g}")
+        else:
+            # Иначе остаётся текст прошлой записи — устаревшее значение.
+            self._current.setText("сейчас: —")
+        if hi < info.max:
+            self._range.setText(f"{info.min:g}…{hi:g} (потолок проекта)")
+        else:
+            self._range.setText(f"{info.min:g}…{info.max:g}")
         self._spin.setMinimumWidth(self._required_width(info))
-        self._spin.setEnabled(info.supported)
-        self._btn.setEnabled(info.supported)
+        self._supported = info.supported
+        self._spin.setEnabled(self._supported)
+        self._btn.setEnabled(self._supported)
+
+    def set_busy(self, busy: bool) -> None:
+        """Блокирует запись на время операции воркера (анти-двойной клик)."""
+        self._spin.setEnabled(self._supported and not busy)
+        self._btn.setEnabled(self._supported and not busy)
 
     def _on_apply(self) -> None:
         value = self._spin.value()
@@ -208,6 +226,12 @@ class OverclockTab(QWidget):
             info = ranges.get(field)
             if isinstance(info, OcControlInfo):
                 row.set_range(info, currents.get(field))
+
+    def set_busy(self, busy: bool) -> None:
+        """Воркер занят: блокируем «Применить…» во всех строках и сброс."""
+        for row in self._rows.values():
+            row.set_busy(busy)
+        self._reset.setEnabled(not busy)
 
     def _on_reset(self) -> None:
         if confirm_write(

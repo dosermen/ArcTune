@@ -265,3 +265,9 @@ class GpuContext:
 
     def __exit__(self, *exc: object) -> None:
         self.close()
+
+
+#: Имена полей, поддерживаемых откатом (для предпросмотра в GUI «Журнал»):
+#: семантика logbook.rollback_targets — «самое старое known old на поле».
+#: Вентиляторы откатываются кнопкой «Вернуть в авто», не через журнал.
+ROLLBACKABLE_FIELDS: frozenset[str] = frozenset(GpuContext._ROLLBACK_MAP)

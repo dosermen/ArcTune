@@ -38,9 +38,11 @@ class VfTab(QWidget):
         self._info.setObjectName("hintLabel")
 
         self._export_btn = QPushButton("Экспорт в CSV…")
+        self._export_btn.setEnabled(False)  # до передачи кривой из IGCL
         self._export_btn.clicked.connect(self._on_export)
         self._import_btn = QPushButton("Записать из CSV…")
         self._import_btn.setObjectName("dangerButton")
+        self._import_btn.setEnabled(False)  # запись без кривой невозможна
         self._import_btn.clicked.connect(self._on_import)
         self._refresh_btn = QPushButton("Обновить")
         self._refresh_btn.clicked.connect(self.refresh_requested)
@@ -70,8 +72,14 @@ class VfTab(QWidget):
         self._points = list(points)
         self._chart.set_curve(self._points)
         self._info.setText(f"Точек: {len(self._points)}")
-        self._export_btn.setEnabled(bool(self._points))
-        self._import_btn.setEnabled(bool(self._points))
+        self.set_busy(False)
+
+    def set_busy(self, busy: bool) -> None:
+        """Воркер занят записью: кнопки блокируются, после — по реальному состоянию."""
+        has_points = bool(self._points)
+        self._export_btn.setEnabled(has_points and not busy)
+        self._import_btn.setEnabled(has_points and not busy)
+        self._refresh_btn.setEnabled(not busy)
 
     def _on_export(self) -> None:
         path, _ = QFileDialog.getSaveFileName(

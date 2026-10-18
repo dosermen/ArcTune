@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections import deque
 
 from PySide6.QtCharts import QChart, QChartView, QLineSeries, QValueAxis
@@ -84,6 +85,19 @@ class LiveChart(QChartView):
         # Прокрутка окна: показываем последние window_s секунд.
         self._axis_x.setMax(max(t, float(self._window_s)))
         self._axis_x.setMin(max(0.0, t - self._window_s))
+        # Адаптивные потолки: стартовые шкалы (0…100 и 0…3300) расширяются,
+        # если данные вышли за них — иначе точки молча обрезались бы по краю.
+        self._raise_axis(self._axis_left, max(temp, power), 10.0)
+        self._raise_axis(self._axis_right, freq, 100.0)
+
+    def _raise_axis(self, axis: QValueAxis, value: float, step: float) -> None:
+        """Поднимает максимум оси, если данные вышли за текущий предел.
+
+        Только вверх, без сужения: ненадолго вернувшийся к норме датчик не должен
+        дёргать шкалу каждый тик (не даём осциллировать).
+        """
+        if value > axis.max():
+            axis.setMax(float(math.ceil(value / step) * step))
 
     @staticmethod
     def _replace(series: QLineSeries, xs, ys) -> None:

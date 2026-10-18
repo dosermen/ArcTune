@@ -31,7 +31,8 @@ class GpuWorker(QObject):
     vf_ready = Signal(object)  # list[tuple[int, int]] (мВ, МГц)
     log_ready = Signal(object)  # list[LogEntry]
     write_done = Signal(str)  # человекочитаемый итог записи
-    error = Signal(str)  # ошибка/блокировка для показа в UI
+    error = Signal(str)  # ошибка чтения/старта для показа в UI (без диалога)
+    write_error = Signal(str)  # ошибка ЗАПИСИ — показывается модально
     busy_changed = Signal(bool)
 
     #: имя пункта UI -> метод GpuContext (все проходят tuner-проверки)
@@ -75,6 +76,10 @@ class GpuWorker(QObject):
 
     @Slot()
     def poll_telemetry(self) -> None:
+        if not self._ctx.is_open:
+            # Сессия не открыта: ошибка старта уже показана один раз. Молча
+            # пропускаем тик, чтобы не спамить диалогом каждую секунду.
+            return
         try:
             snap = self._ctx.telemetry()
         except (IgclError, SafetyLimitError) as e:
@@ -84,13 +89,23 @@ class GpuWorker(QObject):
 
     @Slot()
     def reload_static(self) -> None:
-        """Перечитывает диапазоны OC, текущие значения, вентиляторы, V/F и журнал."""
+        """Перечитывает диапазоны OC, текущие значения, вентиляторы, V/F и журнал.
+
+        Блоки независимы: сбой одного не должен оставлять пустыми остальные
+        вкладки (раньше единый try/except обнулял всё при первой ошибке).
+        """
         try:
             self.oc_ready.emit(self._ctx.oc_ranges(), self._ctx.current_values())
+        except (IgclError, SafetyLimitError) as e:
+            self.error.emit(f"диапазоны OC: {e}")
+        try:
             self.fans_ready.emit(self._ctx.fans())
+        except (IgclError, SafetyLimitError) as e:
+            self.error.emit(f"вентиляторы: {e}")
+        try:
             self.vf_ready.emit(self._ctx.vf_curve())
         except (IgclError, SafetyLimitError) as e:
-            self.error.emit(str(e))
+            self.error.emit(f"кривая V/F: {e}")
         self.log_ready.emit(self._ctx.log.read_all())
 
     @Slot()
@@ -107,7 +122,7 @@ class GpuWorker(QObject):
         """Ставит одно значение. Подтверждение уже сделано в UI; здесь — проверки."""
         writer = self._WRITERS.get(field)
         if writer is None:
-            self.error.emit(f"неизвестное поле: {field}")
+            self.write_error.emit(f"неизвестное поле: {field}")
             return
         self._guarded(lambda: self._emit_write(writer(self._ctx, value)))
 
@@ -127,6 +142,8 @@ class GpuWorker(QObject):
                 self._ctx.set_fan_speed(fan.index, rpm)
                 applied += 1
             self.write_done.emit(f"вентиляторы: {applied} шт. зафиксированы на {rpm} RPM")
+            # Перечитываем RPM: иначе вкладка покажет старую скорость до окна опроса.
+            self.reload_fans()
 
         self._guarded(run)
 
@@ -135,6 +152,7 @@ class GpuWorker(QObject):
         def run() -> None:
             self._ctx.reset_fans()
             self.write_done.emit("вентиляторы возвращены в авто")
+            self.reload_fans()
 
         self._guarded(run)
 
@@ -179,15 +197,22 @@ class GpuWorker(QObject):
     # --- внутренности ---
 
     def _guarded(self, fn: Callable[[], None]) -> None:
-        """Выполняет операцию, переводя ошибки IGCL/проверок в сигнал error."""
+        """Выполняет операцию записи.
+
+        Ошибки уходят в write_error (модальный диалог — запись не должна пройти
+        молча), занятость — в busy_changed (UI блокирует кнопки записей).
+        """
+        self.busy_changed.emit(True)
         try:
             fn()
         except SafetyLimitError as e:
-            self.error.emit(f"заблокировано проверкой: {e}")
+            self.write_error.emit(f"заблокировано проверкой: {e}")
         except IgclError as e:
-            self.error.emit(f"ошибка драйвера: {e}")
+            self.write_error.emit(f"ошибка драйвера: {e}")
         except OSError as e:
-            self.error.emit(f"файл/диск: {e}")
+            self.write_error.emit(f"файл/диск: {e}")
+        finally:
+            self.busy_changed.emit(False)
 
     def _emit_write(self, report: WriteReport) -> None:
         """Показывает итог записи и перечитывает статику, чтобы UI был свежим."""

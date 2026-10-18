@@ -39,7 +39,12 @@ class MetricCard(QFrame):
         if value is None:
             self._value.setText("—")
             return
-        text = f"{value:.{digits}f}" if isinstance(value, float) else str(value)
+        if isinstance(value, float):
+            if value == 0.0:
+                value = 0.0  # −0.0 печаталось как «-0.000» и смущало
+            text = f"{value:.{digits}f}"
+        else:
+            text = str(value)
         self._value.setText(f"{text} {self._unit}".rstrip())
 
 

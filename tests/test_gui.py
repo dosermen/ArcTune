@@ -274,3 +274,113 @@ def test_spinbox_width_fits_widest_value(qapp) -> None:
     text_width = QFontMetrics(spin.font()).horizontalAdvance(spin.textFromValue(spin.value()))
     # Поле под текст + запас под кнопки «стрелки» — минимум, который мы задали.
     assert spin.minimumWidth() >= text_width + 60
+
+
+def test_spinbox_uses_c_locale_decimal_point(qapp) -> None:
+    """Разделитель спинбокса — точка, как в подписях/CLI (системная локаль путала)."""
+    from arctuner.gui.tabs.overclock import _FieldRow
+
+    row = _FieldRow("vramMemSpeedLimit")
+    assert row._spin.textFromValue(19.75) == "19.750"
+
+
+def test_overclock_current_unknown_shows_dash(qapp) -> None:
+    """Нет текущего значения — «сейчас: —», а не застарелый текст прошлой записи."""
+    from arctuner.gui.tabs.overclock import _FieldRow
+
+    row = _FieldRow("powerLimit")
+    row.set_range(_info(min=50.0, max=120.0), None)
+    assert row._current.text() == "сейчас: —"
+
+
+def test_overclock_range_label_shows_project_cap(qapp) -> None:
+    """Диапазон с потолком проекта подписывается честно, спинбокс зажат ceiling'ом."""
+    from arctuner.gui.tabs.overclock import _FieldRow
+
+    row = _FieldRow("powerLimit")
+    row.set_range(_info(min=50.0, max=150.0), 100.0)
+    assert row._spin.maximum() == 120.0
+    assert row._range.text() == "50…120 (потолок проекта)"
+
+
+def test_scale_load_accepts_only_known_choices(qapp, tmp_path, monkeypatch) -> None:
+    """Произвольный масштаб в QSettings игнорируется в пользу 1.0."""
+    from arctuner.gui import scale
+
+    monkeypatch.setattr(scale, "_settings", _isolated_settings(tmp_path))
+    scale.save_scale(1.33)
+    scale._settings().sync()
+    assert scale.load_scale() == 1.0
+    scale.save_scale(1.75)
+    scale._settings().sync()
+    assert scale.load_scale() == 1.75
+
+
+def test_metric_card_negative_zero_shown_plain(qapp) -> None:
+    """−0.0 не печатается как «-0.000» — выглядит как отрицательное значение."""
+    card = MetricCard("Напряжение", "В")
+    card.set_value(-0.0, digits=3)
+    assert card._value.text() == "0.000 В"
+
+
+def test_monitoring_activity_counter_grouped(qapp, snapshot: TelemetrySnapshot) -> None:
+    """Счётчик int64 читается: разряды разделены, а не 13 цифр подряд."""
+    from dataclasses import replace
+
+    tab = MonitoringTab()
+    tab.on_telemetry(replace(snapshot, activity_counter=1234567))
+    assert tab._activity._value.text() == "1 234 567 счётчик"
+
+
+def test_fans_tab_refresh_button_fires_signal(qapp) -> None:
+    """Кнопка «Обновить» перечитывает RPM (после записи RPM не проходил по сигналу)."""
+    tab = FansTab()
+    got: list[int] = []
+    tab.refresh_requested.connect(lambda: got.append(1))
+    tab._refresh_btn.click()
+    assert got == [1]
+
+
+def test_fans_tab_refresh_clears_stale_rows(qapp) -> None:
+    """Повторное обновление списка не накапливает виджеты-строки."""
+    tab = FansTab()
+    fans = [FanInfo(index=0, rpm=1199, props=_FanProps(maxRPM=3000, canControl=True))]
+    tab.set_fans(fans)
+    assert tab._list_layout.count() == 1
+    tab.set_fans(fans)
+    tab.set_fans(fans)
+    qapp.processEvents()  # deleteLater выполняется при возврате в event loop
+    assert tab._list_layout.count() == 1
+    assert len(tab._rows) == 1
+
+
+def test_logtab_rollback_targets_deduped_and_filtered(qapp) -> None:
+    """Предпросмотр отбата: первое old на поле, без вентиляторов (они вне карты отката)."""
+    entries = [
+        LogEntry(timestamp="2026-01-01T00:00:00+00:00", field="powerLimit", old=100.0, new=110.0),
+        LogEntry(timestamp="2026-01-01T00:01:00+00:00", field="powerLimit", old=110.0, new=113.0),
+        LogEntry(timestamp="2026-01-01T00:02:00+00:00", field="fan[0]", old=None, new=1500.0),
+        LogEntry(
+            timestamp="2026-01-01T00:03:00+00:00", field="temperatureLimit", old=None, new=95.0
+        ),
+        LogEntry(
+            timestamp="2026-01-01T00:04:00+00:00", field="gpuFrequencyOffset", old=0.0, new=160.0
+        ),
+    ]
+    assert LogTab._rollback_targets(entries) == [
+        "powerLimit: восстановить 100",
+        "gpuFrequencyOffset: восстановить 0",
+    ]
+
+
+def test_livechart_axis_grows_beyond_fixed_ranges(qapp) -> None:
+    """Значения выше стартовых шкал (100 / 3300) расширяют ось — не обрезаются."""
+    chart = LiveChart(window_s=60)
+    chart.push(1.0, 105.0, 80.0, 3200.0)
+    assert chart._axis_left.max() >= 110.0
+    chart.push(2.0, 60.0, 50.0, 3600.0)
+    assert chart._axis_right.max() >= 3400.0
+    # Обратно ось не сужается (иначе шкала дёргается каждый тик).
+    chart.push(3.0, 50.0, 40.0, 2400.0)
+    assert chart._axis_right.max() >= 3400.0
+    assert chart._axis_left.max() >= 110.0

@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from arctuner.gui.context import ROLLBACKABLE_FIELDS
 from arctuner.gui.widgets import confirm_write
 from arctuner.logbook import LogEntry
 
@@ -43,6 +44,7 @@ class LogTab(QWidget):
 
         self._rollback_btn = QPushButton("⚠️ Откатить к исходным…")
         self._rollback_btn.setObjectName("dangerButton")
+        self._rollback_btn.setEnabled(False)  # до первого чтения журнала
         self._rollback_btn.clicked.connect(self._on_rollback)
 
         top = QHBoxLayout()
@@ -72,8 +74,10 @@ class LogTab(QWidget):
         rows = list(reversed(self._entries))
         self._table.setRowCount(len(rows))
         for row, e in enumerate(rows):
+            # Полный ISO («2026-01-01T00:00:00+00:00») громоздок в ячейке:
+            # показываем «2026-01-01 00:00», полная метка — в подсказке.
             values = [
-                e.timestamp,
+                e.timestamp[:16].replace("T", " "),
                 e.field,
                 "" if e.old is None else f"{e.old:g}",
                 "" if e.new is None else f"{e.new:g}",
@@ -82,6 +86,7 @@ class LogTab(QWidget):
             ]
             for col, text in enumerate(values):
                 item = QTableWidgetItem(text)
+                item.setToolTip(e.timestamp)
                 if col in (2, 3):
                     item.setTextAlignment(
                         Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
@@ -89,8 +94,25 @@ class LogTab(QWidget):
                 self._table.setItem(row, col, item)
         self._table.resizeColumnsToContents()
 
+    @staticmethod
+    def _rollback_targets(entries: list[LogEntry]) -> list[str]:
+        """Строки предпросмотра отбата с семантикой logbook.rollback_targets.
+
+        Для каждого поля берётся самое старое известное old (хронология журнала);
+        откатываются только OC-поля (ROLLBACKABLE_FIELDS) — вентиляторы возвращаются
+        кнопкой на вкладке «Вентиляторы», fan[0] в журнале остаётся историей.
+        """
+        targets: list[str] = []
+        seen: set[str] = set()
+        for e in entries:
+            if e.field in seen or e.old is None or e.field not in ROLLBACKABLE_FIELDS:
+                continue
+            seen.add(e.field)
+            targets.append(f"{e.field}: восстановить {e.old:g}")
+        return targets
+
     def _on_rollback(self) -> None:
-        targets = [f"{e.field}: восстановить {e.old:g}" for e in self._entries if e.old is not None]
+        targets = self._rollback_targets(self._entries)
         preview = "\n".join(targets[:8]) or "нет данных для отката"
         if len(targets) > 8:
             preview += f"\n  … и ещё {len(targets) - 8}"
@@ -101,6 +123,11 @@ class LogTab(QWidget):
             detail=f"Будут восстановлены:\n{preview}",
         ):
             self.rollback_requested.emit()
+
+    def set_busy(self, busy: bool) -> None:
+        """Воркер занят записью: откат/обновление блокированы до его конца."""
+        self._rollback_btn.setEnabled(bool(self._entries) and not busy)
+        self._refresh_btn.setEnabled(not busy)
 
 
 __all__ = ["LogTab"]

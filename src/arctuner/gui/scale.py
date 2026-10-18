@@ -27,11 +27,19 @@ def _settings() -> QSettings:
 
 
 def load_scale() -> float:
-    """Возвращает сохранённый масштаб; если его нет или он некорректен — 1.0."""
+    """Возвращает сохранённый масштаб; если его нет или он некорректен — 1.0.
+
+    Признаются только значения из SCALE_CHOICES: произвольный мусор в реестре
+    (скринридер, чужая программа, опечатка) не должен задавать QT_SCALE_FACTOR.
+    """
     try:
-        return float(_settings().value("ui/scale", _DEFAULT))
+        scale = float(_settings().value("ui/scale", _DEFAULT))
     except (TypeError, ValueError):
         return _DEFAULT
+    return next(
+        (choice for choice in SCALE_CHOICES if abs(choice - scale) < 1e-3),
+        _DEFAULT,
+    )
 
 
 def save_scale(value: float) -> None:

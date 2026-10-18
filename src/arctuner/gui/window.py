@@ -48,6 +48,10 @@ class MainWindow(QMainWindow):
         self._status.addPermanentWidget(self._device_label, stretch=1)
         self.setStatusBar(self._status)
 
+        # Устройство ещё не подтвердилось: первый error = провал старта
+        # («Подключение…» навсегда недопустим — останавливаем опрос и показываем).
+        self._device_seen = False
+
         self._build_view_menu()
 
         # --- worker в отдельном потоке: handle не потокобезопасен ---
@@ -77,6 +81,8 @@ class MainWindow(QMainWindow):
         w.log_ready.connect(self._log.set_entries)
         w.write_done.connect(self._on_write_done)
         w.error.connect(self._on_error)
+        w.write_error.connect(self._on_write_error)
+        w.busy_changed.connect(self._on_busy)
 
     def _wire_tabs(self) -> None:
         o = self._overclock
@@ -86,6 +92,7 @@ class MainWindow(QMainWindow):
         f = self._fans
         f.set_fan_requested.connect(self._worker.set_fan)
         f.reset_fans_requested.connect(self._worker.reset_fans)
+        f.refresh_requested.connect(self._worker.reload_fans)
 
         v = self._vf
         v.export_requested.connect(self._worker.export_vf)
@@ -142,6 +149,7 @@ class MainWindow(QMainWindow):
     # --- обработчики ---
 
     def _on_device(self, info: DeviceInfo) -> None:
+        self._device_seen = True
         self._device_label.setText(info.name)
         self.setWindowTitle(f"ArcTune — {info.name}")
 
@@ -149,9 +157,36 @@ class MainWindow(QMainWindow):
         self._status.showMessage(f"✅ {message}", 8000)
 
     def _on_error(self, message: str) -> None:
-        """Ошибки показываем и в статусе, и диалогом — запись не должна пройти молча."""
+        """Ошибка чтения/старта.
+
+        До подключения (device_ready не пришёл) — провалился старт: останавливаем
+        опрос (иначе он будет повторять ошибку каждую секунду) и показываем причину
+        диалогом. После — кратковременный сбой телеметрии виден только в статусе,
+        чтобы модальные окна не сыпались по одному на каждый тик.
+        """
         self._status.showMessage(f"⚠️ {message}", 15000)
-        QMessageBox.warning(self, "ArcTune — ошибка", message)
+        if not self._device_seen:
+            self._device_label.setText("Нет подключения")
+            self._timer.stop()
+            QMessageBox.warning(
+                self,
+                "ArcTune — нет подключения",
+                f"Не удалось подключиться к Intel Arc:\n{message}\n\n"
+                "Опрос остановлен. Запустите приложение заново после проверки "
+                "драйвера/подключения карты.",
+            )
+
+    def _on_write_error(self, message: str) -> None:
+        """Ошибка записи — модально: запись не должна пройти молча."""
+        self._status.showMessage(f"⚠️ {message}", 15000)
+        QMessageBox.warning(self, "ArcTune — ошибка записи", message)
+
+    def _on_busy(self, busy: bool) -> None:
+        """Воркер занят записью: блокируем кнопки записей во вкладках."""
+        self._overclock.set_busy(busy)
+        self._fans.set_busy(busy)
+        self._vf.set_busy(busy)
+        self._log.set_busy(busy)
 
     def closeEvent(self, event) -> None:  # noqa: N802 — имя Qt API
         """Останавливает опрос и закрывает IGCL-сессию в потоке воркера.
