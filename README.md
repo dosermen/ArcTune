@@ -29,9 +29,11 @@ Intel Graphics Software, но из кода: лимит питания, напр
 - ✅ **Read-only телеметрия** — датчики, причины ограничения, вентиляторы, кривая V/F
 - ✅ **Запись настроек** — лимит питания / частота / напряжение / температура / память,
   с двухуровневой проверкой и откатом
+- ✅ **Кривая V/F** — экспорт в CSV и валидированная запись
+- ✅ **Автопоиск стабильной точки** (`autofind`) — undervolt/частота с гарантией отката
 - ✅ **Журнал + откат**, экспорт телеметрии в CSV
 
-Дальше — автопоиск стабильной точки и GUI (см. [ROADMAP](docs/roadmap.md)).
+Дальше — GUI и Parquet-экспорт (см. [ROADMAP](docs/roadmap.md)).
 
 ---
 
@@ -111,12 +113,16 @@ python -m arctuner telemetry --csv out.csv   # + сохранить снимок
 python -m arctuner telemetry -w 1      # наблюдать каждую секунду
 python -m arctuner status              # диапазоны пунктов разгона (min/max/step)
 python -m arctuner fans                # скорость/свойства вентиляторов
+python -m arctuner vf                  # кривая V/F (чтение)
+python -m arctuner vf --csv vf.csv     # экспорт кривой V/F в CSV
 python -m arctuner log                 # история изменений настроек
 
 # ⚠️ ниже — запись (меняет карту, требует подтверждения):
 python -m arctuner set --power-limit 110    # лимит питания, %
 python -m arctuner set --vram-speed 20      # память, Гбит/с (≤20 без --force)
+python -m arctuner vf --apply vf.csv        # записать кривую V/F (с валидацией)
 python -m arctuner fans --set 1500          # зафиксировать вентиляторы, RPM
+python -m arctuner autofind                 # undervolt-поиск (запустите стресс!)
 python -m arctuner log --rollback           # откат к исходным значениям
 python -m arctuner reset --oc --fans        # сброс OC + вентиляторы в авто
 ```
