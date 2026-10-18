@@ -198,3 +198,100 @@ def _api_call(api: IgclApi, func_name: str, handle, p_out) -> None:
     code = fn(handle, p_out)
     if code != T.CTL_RESULT_SUCCESS:
         raise IgclError(code, func_name)
+
+
+# --- Кривая V/F: валидация и запись -----------------------------------------
+# Жёсткие границы для B580, выведенные из живой кривой (745..995 мВ,
+# 770..2800 МГц) с запасом. Это инварианты: кривая вне этих рамок отклоняется
+# до вызова IGCL. Драйвер дополнительно валидирует сам (см. коды
+# ERROR_CORE_OVERCLOCK_*_OUTSIDE_RANGE), мы не полагаемся только на него.
+
+VF_MIN_VOLTAGE_MV = 600.0  # ниже — нестабильность/провал под нагрузкой
+VF_MAX_VOLTAGE_MV = 1250.0  # стоковая кривая B580 доходит до 1195; запас, а не разгон
+VF_MIN_FREQ_MHZ = 300.0
+VF_MAX_FREQ_MHZ = 3300.0  # сток доходит до 3170; выше — вне диапазона кристалла
+
+
+@dataclass(frozen=True)
+class VfPoint:
+    """Точка кривой V/F: напряжение (мВ) и частота (МГц)."""
+
+    voltage_mv: float
+    freq_mhz: float
+
+
+def validate_vf_curve(points: list[VfPoint]) -> None:
+    """Проверяет кривую V/F до записи (инварианты + форма).
+
+    Требования:
+      - минимум 2 точки (иначе это не кривая);
+      - напряжение НЕ убывает по возрастанию частоты (иначе — нестабильный регион);
+      - частота НЕ убывает (V/F-кривая монотонна);
+      - каждая точка внутри жёстких границ [VF_MIN..VF_MAX].
+
+    Raises:
+        SafetyLimitError: любое нарушение формы/границ.
+    """
+    if len(points) < 2:
+        raise SafetyLimitError(f"V/F-кривая: нужно ≥2 точек, получено {len(points)}")
+
+    for i, p in enumerate(points):
+        if not (VF_MIN_VOLTAGE_MV <= p.voltage_mv <= VF_MAX_VOLTAGE_MV):
+            raise SafetyLimitError(
+                f"V/F[{i}]: напряжение {p.voltage_mv} мВ вне жёстких границ "
+                f"[{VF_MIN_VOLTAGE_MV}, {VF_MAX_VOLTAGE_MV}]"
+            )
+        if not (VF_MIN_FREQ_MHZ <= p.freq_mhz <= VF_MAX_FREQ_MHZ):
+            raise SafetyLimitError(
+                f"V/F[{i}]: частота {p.freq_mhz} МГц вне жёстких границ "
+                f"[{VF_MIN_FREQ_MHZ}, {VF_MAX_FREQ_MHZ}]"
+            )
+
+    for i in range(1, len(points)):
+        prev, cur = points[i - 1], points[i]
+        if cur.voltage_mv < prev.voltage_mv:
+            raise SafetyLimitError(
+                f"V/F[{i}]: напряжение убывает ({prev.voltage_mv} -> {cur.voltage_mv} мВ) — "
+                f"кривая должна монотонно возрастать"
+            )
+        if cur.freq_mhz < prev.freq_mhz:
+            raise SafetyLimitError(
+                f"V/F[{i}]: частота убывает ({prev.freq_mhz} -> {cur.freq_mhz} МГц) — "
+                f"кривая должна монотонно возрастать"
+            )
+
+
+def apply_vf_curve(api: IgclApi, handle, points: list[VfPoint]) -> WriteReport:
+    """⚠️ Записывает кастомную кривую V/F после валидации.
+
+    Перед записей дополнительно сверяет количество точек с тем, что вернул
+    драйвер (иначе IGCL отклонит), и запускает validate_vf_curve.
+
+    Raises:
+        SafetyLimitError: кривая прошла форму, но нарушает границы/монотонность.
+        IgclError: ошибка вызова драйвера (в т.ч. несовпадение числа точек).
+    """
+    validate_vf_curve(points)
+
+    existing = api.read_vf_curve(handle)
+    if existing and len(existing) != len(points):
+        raise SafetyLimitError(
+            f"V/F: драйвер ожидает {len(existing)} точек, передано {len(points)} — "
+            f"число точек должно совпадать со стоковой кривой"
+        )
+
+    arr = (T.CtlVoltageFrequencyPoint * len(points))()
+    for i, p in enumerate(points):
+        arr[i].voltage = round(p.voltage_mv)
+        arr[i].frequency = round(p.freq_mhz)
+
+    code = api.loader.dll.ctlOverclockWriteCustomVFCurve(handle, len(points), arr)
+    if code != T.CTL_RESULT_SUCCESS:
+        raise IgclError(code, "ctlOverclockWriteCustomVFCurve")
+
+    return WriteReport(
+        "vfCurve",
+        float(len(existing)) if existing else None,
+        float(len(points)),
+        f"записано {len(points)} точек",
+    )

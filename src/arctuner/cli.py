@@ -244,6 +244,92 @@ def cmd_set(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_vf(args: argparse.Namespace) -> int:
+    """Кривая V/F: чтение/экспорт (read-only) / ⚠️ запись --apply (с валидацией)."""
+    import csv
+    from pathlib import Path
+
+    from arctuner.igcl.api import IgclApi, IgclError
+    from arctuner.telemetry import find_arc_adapter
+    from arctuner.tuner import SafetyLimitError, VfPoint, apply_vf_curve, validate_vf_curve
+
+    def read_curve(api: IgclApi, handle) -> list:
+        return api.read_vf_curve(handle)
+
+    def print_curve(pts: list) -> None:
+        print(f"Точек: {len(pts)}")
+        print(f"  {'мВ':>6}  {'МГц':>6}")
+        for p in pts:
+            print(f"  {p.voltage:>6}  {p.frequency:>6}")
+
+    def export_csv(path: str, pts: list) -> None:
+        p = Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow(["voltage_mv", "freq_mhz"])
+            for pt in pts:
+                w.writerow([pt.voltage, pt.frequency])
+
+    def load_csv(path: str) -> list[VfPoint]:
+        out: list[VfPoint] = []
+        with Path(path).open(encoding="utf-8") as f:
+            r = csv.DictReader(f)
+            for row in r:
+                out.append(
+                    VfPoint(voltage_mv=float(row["voltage_mv"]), freq_mhz=float(row["freq_mhz"]))
+                )
+        return out
+
+    try:
+        with IgclApi() as api:
+            found = find_arc_adapter(api)
+            if not found:
+                print("[FAIL] Дискретная Intel Arc не найдена.")
+                return 1
+            handle, _ = found
+
+            if args.apply:
+                points = load_csv(args.apply)
+                print(f"Загружено {len(points)} точек из {args.apply}")
+                # Сначала валидация БЕЗ записи — показать, что именно уйдёт.
+                validate_vf_curve(points)
+                print("Валидация OK. Кривая:")
+                print_curve(points)
+                if not args.yes:
+                    print("\n⚠️  Это ЗАПИШЕТ кастомную кривую V/F (меняет карту).")
+                    ans = input("Подтвердить запись? [y/N]: ").strip().lower()
+                    if ans not in ("y", "yes", "д", "да"):
+                        print("Отменено — ничего не записано.")
+                        return 1
+                from arctuner.logbook import Logbook, default_logbook_path
+
+                report = apply_vf_curve(api, handle, points)
+                Logbook(default_logbook_path()).record(
+                    report.field, report.old, report.new, note=report.note
+                )
+                print(f"Готово: {report.note}. Откат: python -m arctuner reset --oc")
+                return 0
+
+            # Обычное чтение (+ опциональный экспорт)
+            pts = read_curve(api, handle)
+            if not pts:
+                print("[FAIL] Кривая V/F не читается на этом устройстве/драйвере.")
+                return 1
+            print_curve(pts)
+            if args.csv:
+                export_csv(args.csv, pts)
+                print(f"\n-> CSV: {args.csv}")
+                print(f"Запись той же кривой: python -m arctuner vf --apply {args.csv}")
+    except SafetyLimitError as e:
+        print(f"[BLOCK] {e}")
+        return 1
+    except IgclError as e:
+        print(f"[FAIL] {e}")
+        return 1
+    return 0
+
+
 def cmd_log(args: argparse.Namespace) -> int:
     """Журнал изменений: просмотр истории и откат к исходным значениям."""
     from arctuner.igcl.api import IgclApi, IgclError
@@ -434,6 +520,12 @@ def build_parser() -> argparse.ArgumentParser:
     plog.add_argument("--rollback", action="store_true", help="откатить к исходным значениям")
     plog.add_argument("--yes", "-y", action="store_true", help="без подтверждения")
     plog.set_defaults(func=cmd_log)
+
+    pvf = sub.add_parser("vf", help="кривая V/F: чтение/экспорт / ⚠️ --apply запись")
+    pvf.add_argument("--csv", metavar="FILE", help="экспортировать текущую кривую в CSV")
+    pvf.add_argument("--apply", metavar="FILE", help="⚠️ записать кривую из CSV (с валидацией)")
+    pvf.add_argument("--yes", "-y", action="store_true", help="без подтверждения")
+    pvf.set_defaults(func=cmd_vf)
 
     pf = sub.add_parser("fans", help="вентиляторы: чтение / --set RPM (⚠️ запись)")
     pf.add_argument("--set", type=int, help="зафиксировать скорость, RPM (⚠️)")
