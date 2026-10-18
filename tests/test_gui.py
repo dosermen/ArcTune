@@ -332,6 +332,19 @@ def test_monitoring_activity_counter_grouped(qapp, snapshot: TelemetrySnapshot) 
     assert tab._activity._value.text() == "1 234 567 счётчик"
 
 
+def test_monitoring_shows_watts_when_available(qapp, snapshot: TelemetrySnapshot) -> None:
+    """Есть ватты из счётчиков энергии — карточка «Питание» в Вт, % в подсказке."""
+    from dataclasses import replace
+
+    tab = MonitoringTab()
+    tab.on_telemetry(replace(snapshot, gpu_power_w=148.0))
+    assert tab._power._value.text() == "148 Вт"
+    assert tab._power._value.toolTip() == "70 %"
+    # Ваттов нет — карточка честно падает на проценты (первый тик / старый драйвер).
+    tab.on_telemetry(snapshot)
+    assert tab._power._value.text() == "70 %"
+
+
 def test_fans_tab_refresh_button_fires_signal(qapp) -> None:
     """Кнопка «Обновить» перечитывает RPM (после записи RPM не проходил по сигналу)."""
     tab = FansTab()

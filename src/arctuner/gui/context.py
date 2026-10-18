@@ -25,7 +25,7 @@ from arctuner.igcl.api import (
 )
 from arctuner.igcl.types import CtlFanProperties
 from arctuner.logbook import Logbook, default_logbook_path
-from arctuner.telemetry import find_arc_adapter
+from arctuner.telemetry import PowerMeter, find_arc_adapter
 from arctuner.tuner import SafetyLimitError, VfPoint, WriteReport
 
 
@@ -46,6 +46,8 @@ class GpuContext:
         self._handle: object | None = None
         self._info: DeviceInfo | None = None
         self._log = Logbook(default_logbook_path())
+        # Расчёт ватт из счётчиков энергии: одна база на всю сессию опроса.
+        self._power_meter = PowerMeter()
 
     # --- жизненный цикл ---
 
@@ -102,7 +104,8 @@ class GpuContext:
 
     def telemetry(self) -> TelemetrySnapshot:
         api, handle = self._require()
-        return api.read_power_telemetry(handle)
+        # enrich добавляет среднюю мощность (Вт) из счётчиков энергии.
+        return self._power_meter.enrich(api.read_power_telemetry(handle))
 
     def oc_ranges(self) -> dict[str, OcControlInfo | bool]:
         api, handle = self._require()

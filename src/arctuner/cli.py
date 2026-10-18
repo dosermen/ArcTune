@@ -49,7 +49,7 @@ def cmd_telemetry(args: argparse.Namespace) -> int:
     from pathlib import Path
 
     from arctuner.igcl.api import IgclApi, IgclError
-    from arctuner.telemetry import find_arc_adapter
+    from arctuner.telemetry import PowerMeter, find_arc_adapter
 
     # Колонки CSV (стабильный порядок для анализа).
     csv_fields = [
@@ -58,6 +58,8 @@ def cmd_telemetry(args: argparse.Namespace) -> int:
         "gpu_voltage_v",
         "gpu_temp_c",
         "gpu_power_percent",
+        "gpu_power_w",
+        "card_power_w",
         "vram_eff_freq_mbps",
         "vram_voltage_v",
         "vram_temp_c",
@@ -75,6 +77,8 @@ def cmd_telemetry(args: argparse.Namespace) -> int:
             "gpu_voltage_v": t.gpu_voltage_v,
             "gpu_temp_c": t.gpu_temp_c,
             "gpu_power_percent": t.gpu_power_percent,
+            "gpu_power_w": t.gpu_power_w,
+            "card_power_w": t.card_power_w,
             "vram_eff_freq_mbps": t.vram_eff_freq_mbps,
             "vram_voltage_v": t.vram_voltage_v,
             "vram_temp_c": t.vram_temp_c,
@@ -112,14 +116,16 @@ def cmd_telemetry(args: argparse.Namespace) -> int:
 
             if watch_sec:
                 print(f"Наблюдение каждые {watch_sec} сек (Ctrl+C для выхода)...")
+            meter = PowerMeter()  # ватты из счётчиков энергии; первый тик — база
             while True:
-                t = api.read_power_telemetry(handle)
+                t = meter.enrich(api.read_power_telemetry(handle))
                 row = snapshot_row(t)
                 print("=== Телеметрия (read-only) ===")
                 print(
                     f"  Ядро:   {_fmt(t.gpu_freq_mhz, ' МГц'):>12}  "
                     f"{_fmt(t.gpu_voltage_v, ' В'):>8}  {_fmt(t.gpu_temp_c, ' °C'):>7}  "
                     f"питание {_fmt(t.gpu_power_percent, '%'):>6}"
+                    f" ({_fmt(t.gpu_power_w, ' Вт')})"
                 )
                 print(
                     f"  Память: {_fmt(t.vram_eff_freq_mbps, ' Гбит/с'):>12}  "

@@ -65,7 +65,13 @@ class MonitoringTab(QWidget):
         self._freq.set_value(snap.gpu_freq_mhz)
         self._voltage.set_value(snap.gpu_voltage_v, digits=3)
         self._temp.set_value(snap.gpu_temp_c)
-        self._power.set_value(snap.gpu_power_percent)
+        # Ватты — средняя мощность из счётчиков энергии (PowerMeter); пока она
+        # не накопилась (первый тик) — честный процент от лимита.
+        if snap.gpu_power_w is not None:
+            pct = f"{snap.gpu_power_percent:g} %" if snap.gpu_power_percent is not None else ""
+            self._power.set_value(snap.gpu_power_w, digits=0, unit="Вт", tooltip=pct)
+        else:
+            self._power.set_value(snap.gpu_power_percent)
 
         self._vram_freq.set_value(snap.vram_eff_freq_mbps, digits=2)
         self._vram_voltage.set_value(snap.vram_voltage_v, digits=3)

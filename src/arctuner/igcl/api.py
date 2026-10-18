@@ -87,6 +87,14 @@ class TelemetrySnapshot:
     # Монотонный счётчик активности GPU — растёт только под нагрузкой.
     # Нужен autofind, чтобы отличить «стабильно под стрессом» от «тихо в покое».
     activity_counter: int | None = None
+    # Накопительные счётчики энергии (Дж) — из них слой telemetry считает
+    # мощность в ваттах (ΔE/Δt); мгновенной строки «Вт» в структуре нет.
+    gpu_energy_counter_j: float | None = None
+    card_energy_counter_j: float | None = None
+    # Средняя мощность (Вт) за интервал опроса; заполняется в telemetry.enrich
+    # (PowerMeter), в api — всегда None (низкий слой не считает сам).
+    gpu_power_w: float | None = None
+    card_power_w: float | None = None
 
     def limit_summary(self) -> str:
         """Человекочитаемая строка причин ограничения."""
@@ -302,7 +310,20 @@ class IgclApi:
             voltage_limited=tel.gpuVoltageLimited,
             utilization_limited=tel.gpuUtilizationLimited,
             activity_counter=self._read_counter(tel.globalActivityCounter),
+            gpu_energy_counter_j=self._read_energy(tel.gpuEnergyCounter),
+            card_energy_counter_j=self._read_energy(tel.totalCardEnergyCounter),
         )
+
+    @staticmethod
+    def _read_energy(item: T.CtlOcTelemetryItem) -> float | None:
+        """Читает счётчик энергии как Дж; при иных единицах или без поддержки — None.
+
+        Возвращаем голое накопительное значение: расчёт мощности (ΔE/Δt) делает
+        слой telemetry, низкий слой только честно повторяет структуру драйвера.
+        """
+        if not item.bSupported or item.units != T.CtlUnits.ENERGY_JOULES:
+            return None
+        return T.read_item_value(item)
 
     @staticmethod
     def _read_counter(item: T.CtlOcTelemetryItem) -> int | None:

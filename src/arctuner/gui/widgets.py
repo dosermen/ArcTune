@@ -34,18 +34,34 @@ class MetricCard(QFrame):
         lay.addWidget(self._value)
         lay.addWidget(self._title)
 
-    def set_value(self, value: float | int | None, digits: int = 0) -> None:
-        """Показывает значение; None -> «—» (датчик недоступен)."""
+    def set_value(
+        self,
+        value: float | int | None,
+        digits: int = 0,
+        *,
+        unit: str | None = None,
+        tooltip: str = "",
+    ) -> None:
+        """Показывает значение; None -> «—» (датчик недоступен).
+
+        Args:
+            value: значение датчика; None — нет данных.
+            digits: знаков после запятой (для float).
+            unit: переопределить единицу (по умолчанию — подпись карточки).
+            tooltip: подпись при наведении (вторичная информация).
+        """
+        self._value.setToolTip(tooltip)
         if value is None:
             self._value.setText("—")
             return
+        shown = self._unit if unit is None else unit
         if isinstance(value, float):
             if value == 0.0:
                 value = 0.0  # −0.0 печаталось как «-0.000» и смущало
             text = f"{value:.{digits}f}"
         else:
             text = str(value)
-        self._value.setText(f"{text} {self._unit}".rstrip())
+        self._value.setText(f"{text} {shown}".rstrip())
 
 
 def confirm_write(
