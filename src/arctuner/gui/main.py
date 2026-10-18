@@ -14,7 +14,11 @@ def run() -> int:
     """Запускает приложение. Возвращает код выхода Qt."""
     from PySide6.QtWidgets import QApplication
 
+    from arctuner.gui.scale import apply_qt_scale
     from arctuner.gui.window import MainWindow
+
+    # До QApplication: Qt читает QT_SCALE_FACTOR только при создании app.
+    apply_qt_scale()
 
     app = QApplication(sys.argv)
     app.setApplicationName("ArcTune")

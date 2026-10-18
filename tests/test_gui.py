@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import os
+import sys
 
 import pytest
 
@@ -191,3 +192,85 @@ def test_worker_writer_map_covers_all_oc_fields() -> None:
 def test_device_info_is_dataclass() -> None:
     """Smoke: DeviceInfo доступен для статус-бара."""
     assert DeviceInfo.__name__ == "DeviceInfo"
+
+
+# --- масштаб интерфейса ---
+
+
+def _isolated_settings(tmp_path):
+    """Фабрика настроек в temp-файле: тесты не трогают реестр пользователя."""
+    from PySide6.QtCore import QSettings
+
+    path = str(tmp_path / "arctune-test.ini")
+
+    def factory() -> QSettings:
+        return QSettings(path, QSettings.Format.IniFormat)
+
+    return factory
+
+
+def test_scale_roundtrip(qapp, tmp_path, monkeypatch) -> None:
+    """save/load: масштаб сохраняется и читается; по умолчанию — 1.0."""
+    from arctuner.gui import scale
+
+    monkeypatch.setattr(scale, "_settings", _isolated_settings(tmp_path))
+
+    assert scale.load_scale() == 1.0  # ничего не сохранялось
+    scale.save_scale(1.5)
+    scale._settings().sync()
+    assert scale.load_scale() == 1.5
+
+    # Мусор в настройках не роняет загрузку.
+    scale._settings().setValue("ui/scale", "не число")
+    scale._settings().sync()
+    assert scale.load_scale() == 1.0
+
+
+def test_qt_scale_factor_applied_before_app(qapp, tmp_path, monkeypatch) -> None:
+    """apply_qt_scale ставит QT_SCALE_FACTOR только для непустого масштаба."""
+    from arctuner.gui import scale
+
+    monkeypatch.setattr(scale, "_settings", _isolated_settings(tmp_path))
+    monkeypatch.delenv("QT_SCALE_FACTOR", raising=False)
+
+    assert scale.apply_qt_scale() == 1.0
+    assert "QT_SCALE_FACTOR" not in os.environ  # 100% — не навязываем масштаб
+
+    scale.save_scale(1.75)
+    assert scale.apply_qt_scale() == 1.75
+    assert os.environ["QT_SCALE_FACTOR"] == "1.75"
+
+
+def test_restart_argv_matches_launch_mode() -> None:
+    """Из исходников перезапуск идёт через -m; из exe — просто бинарник."""
+    from arctuner.gui.scale import restart_argv
+
+    argv = restart_argv()
+    if getattr(sys, "frozen", False):
+        assert argv == []
+    else:
+        assert argv == ["-m", "arctuner.gui.main"]
+
+
+def test_spinbox_width_fits_widest_value(qapp) -> None:
+    """Спинбокс памяти (19,750) не должен обрезаться при минимальной ширине."""
+    from PySide6.QtGui import QFontMetrics
+
+    from arctuner.gui.tabs.overclock import _FieldRow
+    from arctuner.igcl.api import OcControlInfo
+
+    row = _FieldRow("vramMemSpeedLimit")
+    info = OcControlInfo(
+        supported=True,
+        relative=False,
+        units=0,
+        min=19.0,
+        max=22.0,
+        step=0.001,
+        default=19.0,
+    )
+    row.set_range(info, 19.75)
+    spin = row._spin
+    text_width = QFontMetrics(spin.font()).horizontalAdvance(spin.textFromValue(spin.value()))
+    # Поле под текст + запас под кнопки «стрелки» — минимум, который мы задали.
+    assert spin.minimumWidth() >= text_width + 60

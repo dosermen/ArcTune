@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QMetaObject, Qt, QThread, QTimer
+import sys
+
+from PySide6.QtCore import QMetaObject, QProcess, Qt, QThread, QTimer
+from PySide6.QtGui import QAction, QActionGroup
 from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
@@ -11,6 +14,7 @@ from PySide6.QtWidgets import (
     QTabWidget,
 )
 
+from arctuner.gui.scale import SCALE_CHOICES, load_scale, restart_argv, save_scale
 from arctuner.gui.tabs import FansTab, LogTab, MonitoringTab, OverclockTab, VfTab
 from arctuner.gui.worker import GpuWorker
 from arctuner.igcl.api import DeviceInfo
@@ -43,6 +47,8 @@ class MainWindow(QMainWindow):
         self._status = QStatusBar()
         self._status.addPermanentWidget(self._device_label, stretch=1)
         self.setStatusBar(self._status)
+
+        self._build_view_menu()
 
         # --- worker в отдельном потоке: handle не потокобезопасен ---
         self._thread = QThread(self)
@@ -89,6 +95,49 @@ class MainWindow(QMainWindow):
         lg = self._log
         lg.rollback_requested.connect(self._worker.rollback)
         lg.refresh_requested.connect(self._worker.reload_static)
+
+    # --- меню «Вид»: масштаб интерфейса ---
+
+    def _build_view_menu(self) -> None:
+        """Меню масштаба: 100–200%. QT_SCALE_FACTOR читается при старте, поэтому
+        переключение сохраняется и применяется после перезапуска."""
+        menu = self.menuBar().addMenu("Вид")
+        group = QActionGroup(self)
+        group.setExclusive(True)
+
+        current = load_scale()
+        self._scale_actions: dict[float, QAction] = {}
+        for value in SCALE_CHOICES:
+            action = QAction(f"{value * 100:g} %", self, checkable=True)
+            action.setChecked(abs(value - current) < 1e-6)
+            action.triggered.connect(lambda _=False, v=value: self._on_scale_selected(v))
+            group.addAction(action)
+            menu.addAction(action)
+            self._scale_actions[value] = action
+
+        menu.addSeparator()
+        self._restart_action = QAction("Перезапустить с новым масштабом", self)
+        self._restart_action.setEnabled(False)
+        self._restart_action.triggered.connect(self._on_restart)
+        menu.addAction(self._restart_action)
+
+    def _on_scale_selected(self, value: float) -> None:
+        save_scale(value)
+        self._restart_action.setEnabled(True)
+        self._status.showMessage(
+            f"Масштаб {value * 100:g}% сохранён — перезапустите приложение "
+            f"(меню «Вид» → «Перезапустить с новым масштабом»).",
+            10000,
+        )
+
+    def _on_restart(self) -> None:
+        """Перезапускает приложение, чтобы применить сохранённый масштаб."""
+        if QProcess.startDetached(sys.executable, restart_argv()):
+            self.close()  # closeEvent корректно закроет сессию IGCL в потоке воркера
+        else:
+            QMessageBox.information(
+                self, "ArcTune", "Не удалось перезапустить автоматически — запустите вручную."
+            )
 
     # --- обработчики ---
 

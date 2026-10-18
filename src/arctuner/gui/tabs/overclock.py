@@ -9,6 +9,7 @@ GpuContext -> tuner.py: там ещё раз проверяются жёстки
 from __future__ import annotations
 
 from PySide6.QtCore import Signal
+from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QGroupBox,
@@ -66,6 +67,9 @@ class _FieldRow(QWidget):
         self._spin = QDoubleSpinBox()
         self._spin.setDecimals(_DECIMALS[field])
         self._spin.setEnabled(False)  # до получения диапазонов IGCL
+        # Иначе значения вида «19,750» обрезаются: стандартный размер берётся
+        # до задания диапазона/decimals. Ширину считаем по самому широкому тексту.
+        self._spin.setMinimumWidth(self._required_width())
 
         self._unit = QLabel(unit)
 
@@ -85,6 +89,22 @@ class _FieldRow(QWidget):
         row.addWidget(self._current)
         row.addWidget(self._btn)
 
+    def _required_width(self, info: OcControlInfo | None = None) -> int:
+        """Минимальная ширина спинбокса по самому широкому возможному тексту.
+
+        QDoubleSpinBox по умолчанию меряется до setRange/setDecimals, поэтому
+        «19,750» в узком поле превращается в «19,7» — считаем ширину явно.
+        """
+        decimals = _DECIMALS[self._field]
+        if info is not None:
+            hi = min(info.max, _HARD_MAX.get(self._field, info.max))
+            widest = f"{hi:.{decimals}f}"
+        else:
+            widest = "0" * 8 + "." + "0" * decimals  # консервативная оценка до IGCL
+        text_width = QFontMetrics(self._spin.font()).horizontalAdvance(widest)
+        # + две кнопки «стрелки вверх/вниз» и внутренние отступы поля ввода
+        return text_width + 60
+
     def set_range(self, info: OcControlInfo, current: float | None) -> None:
         """Задаёт диапазон из IGCL (с учётом жёстких потолков) и текущее значение."""
         hi = min(info.max, _HARD_MAX.get(self._field, info.max))
@@ -95,6 +115,7 @@ class _FieldRow(QWidget):
             self._spin.setValue(current)
             self._current.setText(f"сейчас: {current:g}")
         self._range.setText(f"{info.min:g}…{info.max:g}")
+        self._spin.setMinimumWidth(self._required_width(info))
         self._spin.setEnabled(info.supported)
         self._btn.setEnabled(info.supported)
 
