@@ -1,54 +1,200 @@
 """Установка настроек разгона Intel Arc (write — единственный опасный модуль).
 
-Все записи проходят проверки: поддерживается ли пункт, не read-only ли, в допустимом
-ли диапазоне min/max/step из IGCL. Модуль принципиально НЕ умеет ставить запрещённое
-(лимит >120%, тайминги памяти, vBIOS) — это инварианты проекта (см. AGENTS.md).
+Каждая запись проходит ДВУХУРОННЕВУЮ проверку:
+  1. Жёсткие инварианты проекта (AGENTS.md) — ниже софт не ставит никогда.
+  2. Диапазон min/max/step/supported, возвращённый самим IGCL из
+     ctlOverclockGetProperties — нельзя выйти за то, что драйвер объявил.
+
+Модуль принципиально НЕ умеет ставить запрещённое: лимит >120%, тайминги
+памяти (страпы), vBIOS. Read-only операции живут в telemetry.py.
 """
 
 from __future__ import annotations
 
-from arctuner.igcl.api import IgclApi, IgclHandle
+import ctypes
+from dataclasses import dataclass
 
-# Жёсткие потолки, выше которых софт не должен ставить (см. docs/overclocking.md).
-MAX_POWER_LIMIT_PERCENT = 120.0  # аппаратный лимит B580 ≈226 Вт
-MAX_VRAM_SPEED_GBPS = 20.0  # номинал чипа SC20; выше — лотерея
+from arctuner.igcl import types as T
+from arctuner.igcl.api import IgclApi, IgclError, OcControlInfo
+
+# Жёсткие потолки (см. docs/overclocking.md, docs/safety.md).
+MAX_POWER_LIMIT_PERCENT = 120.0  # аппаратный лимит B580 ≈226 Вт (шунт)
+MAX_VRAM_SPEED_GBPS = 20.0  # номинал чипа Samsung SC20; выше — только явным решением
 
 
 class SafetyLimitError(ValueError):
     """Попытка выйти за безопасный/поддерживаемый диапазон."""
 
 
-def _check_range(name: str, value: float, lo: float, hi: float) -> None:
+@dataclass(frozen=True)
+class WriteReport:
+    """Отчёт о проделанной записи (для лога/отката)."""
+
+    field: str
+    old: float | None
+    new: float | None
+    note: str = ""
+
+
+def _check_hard_limit(name: str, value: float, lo: float, hi: float) -> None:
+    """Уровень 1: жёсткий инвариант проекта (не зависит от IGCL)."""
     if not (lo <= value <= hi):
-        raise SafetyLimitError(f"{name}={value} вне диапазона [{lo}, {hi}]")
+        raise SafetyLimitError(
+            f"{name}={value} выходит за жёсткий предел [{lo}, {hi}] — "
+            f"инвариант проекта, обход невозможен"
+        )
 
 
-def set_vram_speed(api: IgclApi, adapter: IgclHandle, gbps: float) -> None:
-    """Ставит скорость памяти, Гбит/с. Безопасный потолок — 20 (номинал чипа SC20).
+def _check_igcl_range(name: str, value: float, info: OcControlInfo) -> None:
+    """Уровень 2: диапазон/supported из ctlOverclockGetProperties."""
+    if not info.supported:
+        raise SafetyLimitError(f"{name} не поддерживается на этом устройстве/драйвере")
+    if not (info.min <= value <= info.max):
+        raise SafetyLimitError(
+            f"{name}={value} вне поддерживаемого диапазона [{info.min}, {info.max}] (IGCL)"
+        )
+    if info.step > 0:
+        # Кратность шагу относительно min (с допуском на float).
+        steps = round((value - info.min) / info.step)
+        if abs((info.min + steps * info.step) - value) > 1e-6:
+            raise SafetyLimitError(
+                f"{name}={value} не кратен шагу {info.step} от min={info.min} (IGCL)"
+            )
+
+
+def _oc(api: IgclApi, handle) -> dict[str, OcControlInfo | bool]:
+    """Актуальные диапазоны OC — свежий запрос на каждую запись."""
+    return api.read_oc_properties(handle)
+
+
+def set_power_limit(api: IgclApi, handle, percent: float) -> WriteReport:
+    """Ставит лимит питания в %. Потолок B580 — 120% (аппаратный).
 
     Raises:
-        SafetyLimitError: если значение выходит за поддерживаемый диапазон.
-        NotImplementedError: до реализации записи в MVP.
+        SafetyLimitError: вне [50, 120] или вне диапазона IGCL.
+        IgclError: ошибка вызова драйвера.
     """
-    _check_range("vram_speed", gbps, 19.0, MAX_VRAM_SPEED_GBPS)
-    raise NotImplementedError("ctlOverclockVramMemSpeedLimitSetV2 — в ближайшем MVP.")
+    _check_hard_limit("power_limit", percent, 50.0, MAX_POWER_LIMIT_PERCENT)
+    info = _oc(api, handle)["powerLimit"]
+    assert isinstance(info, OcControlInfo)
+    _check_igcl_range("power_limit", percent, info)
+    api.set_power_limit(handle, percent)
+    return WriteReport("powerLimit", info.default, percent)
 
 
-def set_power_limit(api: IgclApi, adapter: IgclHandle, percent: float) -> None:
-    """Ставит лимит питания в %. Софтверный потолок B580 — 120%.
+def set_gpu_freq_offset(api: IgclApi, handle, mhz: float) -> WriteReport:
+    """Ставит смещение частоты ядра, МГц (типично −300…+1000).
 
     Raises:
-        SafetyLimitError: если >120% (аппаратный потолок, обход невозможен софтом).
-        NotImplementedError: до реализации записи в MVP.
+        SafetyLimitError: вне диапазона IGCL.
+        IgclError: ошибка вызова драйвера.
     """
-    _check_range("power_limit", percent, 50.0, MAX_POWER_LIMIT_PERCENT)
-    raise NotImplementedError("ctlOverclockPowerLimitSetV2 — в ближайшем MVP.")
+    info = _oc(api, handle)["gpuFrequencyOffset"]
+    assert isinstance(info, OcControlInfo)
+    _check_igcl_range("gpu_freq_offset", mhz, info)
+    api.set_gpu_freq_offset(handle, mhz)
+    return WriteReport("gpuFrequencyOffset", info.default, mhz)
 
 
-def reset_to_default(api: IgclApi, adapter: IgclHandle) -> None:
-    """Сброс всех OC-настроек к дефолту (план отката).
+def set_gpu_voltage_offset(api: IgclApi, handle, percent: float) -> WriteReport:
+    """Ставит смещение напряжения ядра, % (0…100, относительное).
+
+    Повышение напряжения — теплово/деградационно рискованно; вызывающий
+    несёт ответственность за выбор значения. Здесь — только проверка IGCL.
 
     Raises:
-        NotImplementedError: до реализации записи в MVP.
+        SafetyLimitError: вне диапазона IGCL.
+        IgclError: ошибка вызова драйвера.
     """
-    raise NotImplementedError("ctlOverclockResetToDefault — в ближайшем MVP.")
+    info = _oc(api, handle)["gpuVoltageOffset"]
+    assert isinstance(info, OcControlInfo)
+    _check_igcl_range("gpu_voltage_offset", percent, info)
+    api.set_gpu_voltage_offset(handle, percent)
+    return WriteReport("gpuVoltageOffset", info.default, percent)
+
+
+def set_temperature_limit(api: IgclApi, handle, celsius: float) -> WriteReport:
+    """Ставит лимит температуры, °C (IGCL: 60…100).
+
+    Raises:
+        SafetyLimitError: вне диапазона IGCL.
+        IgclError: ошибка вызова драйвера.
+    """
+    info = _oc(api, handle)["temperatureLimit"]
+    assert isinstance(info, OcControlInfo)
+    _check_igcl_range("temperature_limit", celsius, info)
+    api.set_temperature_limit(handle, celsius)
+    return WriteReport("temperatureLimit", info.default, celsius)
+
+
+def set_vram_speed(
+    api: IgclApi, handle, gbps: float, *, allow_beyond_nominal: bool = False
+) -> WriteReport:
+    """Ставит скорость памяти, Гбит/с.
+
+    Безопасный потолок — 20 (номинал чипа SC20). Выше 20 драйвер формально
+    разрешает до 22, но это разгон сверх номинала чипа — поэтому требует
+    явного флага allow_beyond_nominal=True (согласованное решение пользователя).
+
+    Raises:
+        SafetyLimitError: вне [19, 20] (или [19, 22] с флагом), либо вне IGCL.
+        IgclError: ошибка вызова драйвера.
+    """
+    hi = 22.0 if allow_beyond_nominal else MAX_VRAM_SPEED_GBPS
+    _check_hard_limit("vram_speed", gbps, 19.0, hi)
+    info = _oc(api, handle)["vramMemSpeedLimit"]
+    assert isinstance(info, OcControlInfo)
+    _check_igcl_range("vram_speed", gbps, info)
+    api.set_vram_mem_speed(handle, gbps)
+    note = "сверх номинала SC20 (20) — явное согласие" if gbps > MAX_VRAM_SPEED_GBPS else ""
+    return WriteReport("vramMemSpeedLimit", info.default, gbps, note)
+
+
+def reset_to_default(api: IgclApi, handle) -> WriteReport:
+    """Сброс всех OC-настроек к дефолту (основной план отката).
+
+    Не проходит проверки диапазонов — это и есть возврат к безопасному
+    состоянию. Единственная запись, разрешённая без выбора значения.
+
+    Raises:
+        IgclError: ошибка вызова драйвера.
+    """
+    api.reset_to_default(handle)
+    return WriteReport("all", None, None, "сброс к дефолту")
+
+
+def current_values(api: IgclApi, handle) -> dict[str, float | None]:
+    """Текущие (не дефолтные) значения OC-пунктов через V2 Get-функции.
+
+    Нужно для лога «что было → что стало» перед записью.
+    """
+    out: dict[str, float | None] = {}
+    getters = [
+        ("gpuFrequencyOffset", "ctlOverclockGpuFrequencyOffsetGetV2"),
+        ("powerLimit", "ctlOverclockPowerLimitGetV2"),
+        ("temperatureLimit", "ctlOverclockTemperatureLimitGetV2"),
+        ("vramMemSpeedLimit", "ctlOverclockVramMemSpeedLimitGetV2"),
+        ("gpuVoltageOffset", "ctlOverclockGpuMaxVoltageOffsetGetV2"),
+    ]
+    for field, func in getters:
+        if not api.loader.has(func):
+            out[field] = None
+            continue
+        val = ctypes.c_double(0)
+        try:
+            _api_call(api, func, handle, ctypes.byref(val))
+            out[field] = val.value
+        except IgclError:
+            out[field] = None
+    return out
+
+
+# Небольшие хелперы, чтобы не тянуть ctypes в публичный интерфейс.
+def _api_call(api: IgclApi, func_name: str, handle, p_out) -> None:
+    """Вызывает V2 Get-функцию (handle, double*) и проверяет результат."""
+    fn = getattr(api.loader.dll, func_name)
+    fn.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_double)]
+    fn.restype = ctypes.c_uint32
+    code = fn(handle, p_out)
+    if code != T.CTL_RESULT_SUCCESS:
+        raise IgclError(code, func_name)

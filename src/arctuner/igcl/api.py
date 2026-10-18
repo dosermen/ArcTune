@@ -32,6 +32,7 @@ def _check(code: int, func: str) -> None:
 
 CtlApiHandle = ctypes.c_void_p
 CtlDeviceHandle = ctypes.c_void_p
+CtlFanHandle = ctypes.c_void_p
 
 
 @dataclass(frozen=True)
@@ -141,6 +142,73 @@ class IgclApi:
                 ctypes.POINTER(T.CtlOcProperties),
             ]
             dll.ctlOverclockGetProperties.restype = ctypes.c_uint32
+
+        # --- Запись разгона: все set-функции принимают (handle, double) ---
+        for name in (
+            "ctlOverclockGpuFrequencyOffsetSetV2",
+            "ctlOverclockGpuMaxVoltageOffsetSetV2",
+            "ctlOverclockPowerLimitSetV2",
+            "ctlOverclockTemperatureLimitSetV2",
+            "ctlOverclockVramMemSpeedLimitSetV2",
+        ):
+            if self.loader.has(name):
+                getattr(dll, name).argtypes = [CtlDeviceHandle, ctypes.c_double]
+                getattr(dll, name).restype = ctypes.c_uint32
+
+        # Сброс к дефолту / waiver: (handle)
+        for name in ("ctlOverclockResetToDefault", "ctlOverclockWaiverSet"):
+            if self.loader.has(name):
+                getattr(dll, name).argtypes = [CtlDeviceHandle]
+                getattr(dll, name).restype = ctypes.c_uint32
+
+        # --- Вентиляторы ---
+        if self.loader.has("ctlEnumFans"):
+            dll.ctlEnumFans.argtypes = [
+                CtlDeviceHandle,
+                ctypes.POINTER(ctypes.c_uint32),
+                ctypes.POINTER(CtlFanHandle),
+            ]
+            dll.ctlEnumFans.restype = ctypes.c_uint32
+        if self.loader.has("ctlFanGetProperties"):
+            dll.ctlFanGetProperties.argtypes = [CtlFanHandle, ctypes.POINTER(T.CtlFanProperties)]
+            dll.ctlFanGetProperties.restype = ctypes.c_uint32
+        if self.loader.has("ctlFanGetState"):
+            dll.ctlFanGetState.argtypes = [
+                CtlFanHandle,
+                ctypes.c_int32,
+                ctypes.POINTER(ctypes.c_int32),
+            ]
+            dll.ctlFanGetState.restype = ctypes.c_uint32
+        if self.loader.has("ctlFanSetFixedSpeedMode"):
+            dll.ctlFanSetFixedSpeedMode.argtypes = [CtlFanHandle, ctypes.POINTER(T.CtlFanSpeed)]
+            dll.ctlFanSetFixedSpeedMode.restype = ctypes.c_uint32
+        if self.loader.has("ctlFanSetSpeedTableMode"):
+            dll.ctlFanSetSpeedTableMode.argtypes = [
+                CtlFanHandle,
+                ctypes.POINTER(T.CtlFanSpeedTable),
+            ]
+            dll.ctlFanSetSpeedTableMode.restype = ctypes.c_uint32
+        if self.loader.has("ctlFanSetDefaultMode"):
+            dll.ctlFanSetDefaultMode.argtypes = [CtlFanHandle]
+            dll.ctlFanSetDefaultMode.restype = ctypes.c_uint32
+
+        # --- Кривая V/F ---
+        if self.loader.has("ctlOverclockReadVFCurve"):
+            dll.ctlOverclockReadVFCurve.argtypes = [
+                CtlDeviceHandle,
+                ctypes.c_int32,  # ctl_vf_curve_type_t
+                ctypes.c_int32,  # ctl_vf_curve_details_t
+                ctypes.POINTER(ctypes.c_uint32),
+                ctypes.POINTER(T.CtlVoltageFrequencyPoint),
+            ]
+            dll.ctlOverclockReadVFCurve.restype = ctypes.c_uint32
+        if self.loader.has("ctlOverclockWriteCustomVFCurve"):
+            dll.ctlOverclockWriteCustomVFCurve.argtypes = [
+                CtlDeviceHandle,
+                ctypes.c_uint32,
+                ctypes.POINTER(T.CtlVoltageFrequencyPoint),
+            ]
+            dll.ctlOverclockWriteCustomVFCurve.restype = ctypes.c_uint32
 
     def initialize(self) -> None:
         """ctlInit — инициализация API. Требует USE_LEVEL_ZERO для телеметрии."""
@@ -261,6 +329,140 @@ class IgclApi:
             "temperatureLimit": conv(props.temperatureLimit),
             "vramMemSpeedLimit": conv(props.vramMemSpeedLimit),
         }
+
+    # --- Запись (⚠️ меняет состояние карты). Вызывается только из tuner.py
+    #     после проверок min/max/step/supported и инвариантов проекта. ---
+
+    def _set_value(self, func_name: str, handle: CtlDeviceHandle, value: float) -> None:
+        """Вызывает set-функцию (handle, double) и проверяет результат."""
+        _check(getattr(self.loader.dll, func_name)(handle, value), func_name)
+
+    def set_power_limit(self, handle: CtlDeviceHandle, percent: float) -> None:
+        """ctlOverclockPowerLimitSetV2 — лимит питания, % (макс 120)."""
+        self._set_value("ctlOverclockPowerLimitSetV2", handle, percent)
+
+    def set_gpu_freq_offset(self, handle: CtlDeviceHandle, mhz: float) -> None:
+        """ctlOverclockGpuFrequencyOffsetSetV2 — смещение частоты ядра, МГц."""
+        self._set_value("ctlOverclockGpuFrequencyOffsetSetV2", handle, mhz)
+
+    def set_gpu_voltage_offset(self, handle: CtlDeviceHandle, percent: float) -> None:
+        """ctlOverclockGpuMaxVoltageOffsetSetV2 — смещение напряжения, %."""
+        self._set_value("ctlOverclockGpuMaxVoltageOffsetSetV2", handle, percent)
+
+    def set_temperature_limit(self, handle: CtlDeviceHandle, celsius: float) -> None:
+        """ctlOverclockTemperatureLimitSetV2 — лимит температуры, °C."""
+        self._set_value("ctlOverclockTemperatureLimitSetV2", handle, celsius)
+
+    def set_vram_mem_speed(self, handle: CtlDeviceHandle, gbps: float) -> None:
+        """ctlOverclockVramMemSpeedLimitSetV2 — скорость памяти, Гбит/с."""
+        self._set_value("ctlOverclockVramMemSpeedLimitSetV2", handle, gbps)
+
+    def reset_to_default(self, handle: CtlDeviceHandle) -> None:
+        """ctlOverclockResetToDefault — откат всех OC-настроек к дефолту (план отката)."""
+        _check(self.loader.dll.ctlOverclockResetToDefault(handle), "ctlOverclockResetToDefault")
+
+    # --- Вентиляторы ---
+
+    def enum_fans(self, handle: CtlDeviceHandle) -> list[CtlFanHandle]:
+        """ctlEnumFans — список handle вентиляторов устройства."""
+        count = ctypes.c_uint32(0)
+        _check(self.loader.dll.ctlEnumFans(handle, ctypes.byref(count), None), "ctlEnumFans")
+        n = count.value
+        if n == 0:
+            return []
+        arr = (CtlFanHandle * n)()
+        _check(self.loader.dll.ctlEnumFans(handle, ctypes.byref(count), arr), "ctlEnumFans")
+        return [h for h in arr if h]
+
+    def get_fan_properties(self, fan: CtlFanHandle) -> T.CtlFanProperties:
+        """ctlFanGetProperties — возможности вентилятора (read-only)."""
+        props = T.CtlFanProperties()
+        props.Size = ctypes.sizeof(T.CtlFanProperties)
+        props.Version = 0
+        _check(self.loader.dll.ctlFanGetProperties(fan, ctypes.byref(props)), "ctlFanGetProperties")
+        return props
+
+    def get_fan_speed(self, fan: CtlFanHandle, units: int | None = None) -> int:
+        """ctlFanGetState — текущая скорость вентилятора (-1 = не измеряется).
+
+        Если units не указан, единица выбирается автоматически из
+        supportedUnits свойств (у B580 доступен только RPM).
+        """
+        if units is None:
+            props = self.get_fan_properties(fan)
+            units = (
+                T.CTL_FAN_SPEED_UNITS_RPM
+                if props.supportedUnits & 1
+                else (T.CTL_FAN_SPEED_UNITS_PERCENT if props.supportedUnits & 2 else 0)
+            )
+        speed = ctypes.c_int32(0)
+        _check(self.loader.dll.ctlFanGetState(fan, units, ctypes.byref(speed)), "ctlFanGetState")
+        return speed.value
+
+    def set_fan_fixed_speed(self, fan: CtlFanHandle, speed: int, units: int | None = None) -> None:
+        """ctlFanSetFixedSpeedMode — ⚠️ фиксирует скорость вентилятора.
+
+        Единица по умолчанию выбирается из supportedUnits (у B580 — только RPM).
+        """
+        if units is None:
+            props = self.get_fan_properties(fan)
+            units = (
+                T.CTL_FAN_SPEED_UNITS_RPM
+                if props.supportedUnits & 1
+                else (T.CTL_FAN_SPEED_UNITS_PERCENT if props.supportedUnits & 2 else 0)
+            )
+        s = T.CtlFanSpeed()
+        s.Size = ctypes.sizeof(T.CtlFanSpeed)
+        s.Version = 0
+        s.speed = speed
+        s.units = units
+        _check(
+            self.loader.dll.ctlFanSetFixedSpeedMode(fan, ctypes.byref(s)),
+            "ctlFanSetFixedSpeedMode",
+        )
+
+    def set_fan_speed_table(self, fan: CtlFanHandle, table: T.CtlFanSpeedTable) -> None:
+        """ctlFanSetSpeedTableMode — ⚠️ применяет таблицу temp/speed вентилятора."""
+        _check(
+            self.loader.dll.ctlFanSetSpeedTableMode(fan, ctypes.byref(table)),
+            "ctlFanSetSpeedTableMode",
+        )
+
+    def set_fan_default(self, fan: CtlFanHandle) -> None:
+        """ctlFanSetDefaultMode — возврат вентилятора к аппаратному режиму."""
+        _check(self.loader.dll.ctlFanSetDefaultMode(fan), "ctlFanSetDefaultMode")
+
+    # --- Кривая V/F ---
+
+    def read_vf_curve(
+        self,
+        handle: CtlDeviceHandle,
+        curve_type: int = 0,
+        detail: int = 0,
+    ) -> list[T.CtlVoltageFrequencyPoint]:
+        """ctlOverclockReadVFCurve — чтение кривой V/F (read-only).
+
+        Двухвызовная идемпотентная схема IGCL: сначала count=0 → размер,
+        затем читаем точки.
+        """
+        count = ctypes.c_uint32(0)
+        _check(
+            self.loader.dll.ctlOverclockReadVFCurve(
+                handle, curve_type, detail, ctypes.byref(count), None
+            ),
+            "ctlOverclockReadVFCurve",
+        )
+        n = count.value
+        if n == 0:
+            return []
+        arr = (T.CtlVoltageFrequencyPoint * n)()
+        _check(
+            self.loader.dll.ctlOverclockReadVFCurve(
+                handle, curve_type, detail, ctypes.byref(count), arr
+            ),
+            "ctlOverclockReadVFCurve",
+        )
+        return list(arr)
 
     # Контекстный менеджер для автоматического shutdown
     def __enter__(self) -> IgclApi:

@@ -22,10 +22,16 @@
 
 ## Далее (запись)
 
-- [ ] `tuner.py` — запись настроек с проверками min/max/step/IsSupported из `ctlOverclockGetProperties`
-- [ ] Кривая вентиляторов (`ctlFanSetSpeedTableMode`)
-- [ ] Кастомная кривая V/F (`ctlOverclockReadVFCurve` / `WriteCustomVFCurve`)
-- [ ] Логирование настроек + возможность отката к дефолту
+- [x] `tuner.py` — запись с ДВУХУРОННЕВОЙ проверкой: жёсткие инварианты проекта
+      + min/max/step/supported из `ctlOverclockGetProperties`
+- [x] Откат к дефолту (`ctlOverclockResetToDefault`) + команда `reset`
+- [x] Вентиляторы: чтение RPM/свойств + фиксация скорости (`fans --set`)
+      * B580: только FIXED-режим (`supportedModes=0x2`), единица только RPM —
+        таблицы temp/speed нет, честно отмечено
+- [x] Кривая V/F: чтение (`ctlOverclockReadVFCurve`, 10 точек на B580)
+- [ ] Кастомная запись V/F (`ctlOverclockWriteCustomVFCurve`) — API готов,
+      в CLI не выведен (высокий риск нестабильности, требует валидации точек)
+- [ ] Логирование настроек в CSV + автооткат при нестабильности
 
 ## Перспективное
 

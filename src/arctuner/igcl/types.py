@@ -31,6 +31,7 @@ CTL_MAX_DEVICE_NAME_LEN = 100
 CTL_MAX_RESERVED_SIZE = 108
 CTL_PSU_COUNT = 5
 CTL_FAN_COUNT = 5
+CTL_FAN_TEMP_SPEED_PAIR_COUNT = 32  # размер table[] в _ctl_fan_speed_table_t
 
 
 # --- Enum'ы (в C это int) ---
@@ -104,6 +105,16 @@ class CtlAdapterPropertiesFlag(IntEnum):
     INTEGRATED = 1 << 0
     LDA_PRIMARY = 1 << 1
     LDA_SECONDARY = 1 << 2
+
+
+# ctl_fan_speed_mode_t
+CTL_FAN_SPEED_MODE_DEFAULT = 0  # аппаратные настройки по умолчанию
+CTL_FAN_SPEED_MODE_FIXED = 1  # фиксированная скорость
+CTL_FAN_SPEED_MODE_TABLE = 2  # динамика по таблице temp/speed
+
+# ctl_fan_speed_units_t
+CTL_FAN_SPEED_UNITS_RPM = 0
+CTL_FAN_SPEED_UNITS_PERCENT = 1
 
 
 # --- Union'ы ---
@@ -309,6 +320,65 @@ class CtlPowerTelemetry(ctypes.Structure):
         ("gpuTemperaturePercent", CtlOcTelemetryItem),
         ("vramReadBandwidth", CtlOcTelemetryItem),
         ("vramWriteBandwidth", CtlOcTelemetryItem),
+    ]
+
+
+# --- Вентиляторы (ctlFan*) ---
+
+
+class CtlFanSpeed(ctypes.Structure):
+    """_ctl_fan_speed_t — скорость вентилятора (+ единицы)."""
+
+    _fields_ = [
+        ("Size", ctypes.c_uint32),
+        ("Version", ctypes.c_uint8),
+        ("speed", ctypes.c_int32),  # -1 = фикс. скорости нет
+        ("units", ctypes.c_int32),  # ctl_fan_speed_units_t
+    ]
+
+
+class CtlFanTempSpeed(ctypes.Structure):
+    """_ctl_fan_temp_speed_t — пара температура/скорость для таблицы."""
+
+    _fields_ = [
+        ("Size", ctypes.c_uint32),
+        ("Version", ctypes.c_uint8),
+        ("temperature", ctypes.c_uint32),  # °C
+        ("speed", CtlFanSpeed),
+    ]
+
+
+class CtlFanSpeedTable(ctypes.Structure):
+    """_ctl_fan_speed_table_t — таблица temp/speed (до 32 пар)."""
+
+    _fields_ = [
+        ("Size", ctypes.c_uint32),
+        ("Version", ctypes.c_uint8),
+        ("numPoints", ctypes.c_int32),  # 0=пусто, -1=не поддерживается
+        ("table", CtlFanTempSpeed * CTL_FAN_TEMP_SPEED_PAIR_COUNT),
+    ]
+
+
+class CtlFanProperties(ctypes.Structure):
+    """_ctl_fan_properties_t — возможности вентилятора."""
+
+    _fields_ = [
+        ("Size", ctypes.c_uint32),
+        ("Version", ctypes.c_uint8),
+        ("canControl", ctypes.c_bool),
+        ("supportedModes", ctypes.c_uint32),  # битовая маска 1<<mode
+        ("supportedUnits", ctypes.c_uint32),  # битовая маска 1<<units
+        ("maxRPM", ctypes.c_int32),  # -1 = неизвестно
+        ("maxPoints", ctypes.c_int32),  # -1 = таблица не поддерживается
+    ]
+
+
+class CtlVoltageFrequencyPoint(ctypes.Structure):
+    """_ctl_voltage_frequency_point_t — точка кривой V/F (u32 + u32)."""
+
+    _fields_ = [
+        ("voltage", ctypes.c_uint32),  # мВ
+        ("frequency", ctypes.c_uint32),  # МГц
     ]
 
 

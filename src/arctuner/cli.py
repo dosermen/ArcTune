@@ -106,10 +106,161 @@ def cmd_status(_: argparse.Namespace) -> int:
 
 
 def cmd_set(args: argparse.Namespace) -> int:
-    print("⚠️  set пока не реализован — защита от случайной записи.")
-    print("См. docs/safety.md и docs/roadmap.md.")
-    if args.vram_speed:
-        print(f"(запрошено: vram_speed={args.vram_speed})")
+    """⚠️ Запись настроек. Требует явного подтверждения (меняет состояние карты)."""
+    from arctuner import tuner
+    from arctuner.igcl.api import IgclApi, IgclError
+    from arctuner.telemetry import find_arc_adapter
+    from arctuner.tuner import SafetyLimitError
+
+    # Собираем запрошенные изменения (только явно переданные флаги).
+    changes: list[tuple[str, float, object]] = []
+    if args.power_limit is not None:
+        changes.append(("power_limit", args.power_limit, tuner.set_power_limit))
+    if args.freq_offset is not None:
+        changes.append(("freq_offset", args.freq_offset, tuner.set_gpu_freq_offset))
+    if args.voltage_offset is not None:
+        changes.append(("voltage_offset", args.voltage_offset, tuner.set_gpu_voltage_offset))
+    if args.temp_limit is not None:
+        changes.append(("temp_limit", args.temp_limit, tuner.set_temperature_limit))
+    if args.vram_speed is not None:
+        changes.append(("vram_speed", args.vram_speed, tuner.set_vram_speed))
+
+    if not changes:
+        print("Нечего менять: передайте хотя бы один параметр (--power-limit и т.п.).")
+        print("Диапазоны: python -m arctuner status")
+        return 2
+
+    if not args.yes:
+        print("⚠️  Это ИЗМЕНИТ настройки карты (write). Запрошено:")
+        for name, value, _ in changes:
+            print(f"    {name} = {value}")
+        answer = input("Подтвердить запись? [y/N]: ").strip().lower()
+        if answer not in ("y", "yes", "д", "да"):
+            print("Отменено — ничего не записано.")
+            return 1
+
+    try:
+        with IgclApi() as api:
+            found = find_arc_adapter(api)
+            if not found:
+                print("[FAIL] Дискретная Intel Arc не найдена.")
+                return 1
+            handle, _ = found
+            before = tuner.current_values(api, handle)
+            print(f"\nБыло: {before}")
+            for _, value, fn in changes:
+                if fn is tuner.set_vram_speed:
+                    report = fn(api, handle, value, allow_beyond_nominal=args.force)
+                else:
+                    report = fn(api, handle, value)
+                line = f"  {report.field}: {report.old} -> {report.new}"
+                if report.note:
+                    line += f"  ({report.note})"
+                print(line)
+            print("Готово. Проверьте: python -m arctuner telemetry")
+    except SafetyLimitError as e:
+        print(f"[BLOCK] {e}")
+        return 1
+    except IgclError as e:
+        print(f"[FAIL] {e}")
+        return 1
+    return 0
+
+
+def cmd_fans(args: argparse.Namespace) -> int:
+    """Вентиляторы: чтение (по умолчанию) / ⚠️ фиксация скорости с --set."""
+    from arctuner.igcl.api import IgclApi, IgclError
+    from arctuner.telemetry import find_arc_adapter
+    from arctuner.tuner import SafetyLimitError
+
+    try:
+        with IgclApi() as api:
+            found = find_arc_adapter(api)
+            if not found:
+                print("[FAIL] Дискретная Intel Arc не найдена.")
+                return 1
+            handle, _ = found
+            fans = api.enum_fans(handle)
+            if not fans:
+                print("Вентиляторы не найдены (возможно, ноутбук/внешний кулер).")
+                return 0
+            for i, f in enumerate(fans):
+                p = api.get_fan_properties(f)
+                modes = "/".join(
+                    m
+                    for bit, m in ((1, "default"), (2, "fixed"), (4, "table"))
+                    if p.supportedModes & bit
+                )
+                speed = api.get_fan_speed(f)
+                print(
+                    f"  [{i}] {speed:>4} RPM (max {p.maxRPM})  "
+                    f"режимы: {modes or '-'}  управляемый: {p.canControl}"
+                )
+
+            if args.set is not None:
+                if not args.yes:
+                    print(f"\n⚠️  Зафиксировать скорость ВСЕХ вентиляторов на {args.set} RPM?")
+                    ans = input("Подтвердить запись? [y/N]: ").strip().lower()
+                    if ans not in ("y", "yes", "д", "да"):
+                        print("Отменено.")
+                        return 1
+                for i, f in enumerate(fans):
+                    p = api.get_fan_properties(f)
+                    if not p.canControl:
+                        print(f"  [{i}] пропущен (не управляется)")
+                        continue
+                    if args.set > p.maxRPM > 0:
+                        print(f"  [{i}] BLOCK: {args.set} > maxRPM {p.maxRPM}")
+                        continue
+                    api.set_fan_fixed_speed(f, args.set)
+                    print(f"  [{i}] установлено {args.set} RPM")
+                print("Вернуть авто: python -m arctuner reset --fans")
+    except (IgclError, SafetyLimitError) as e:
+        print(f"[FAIL] {e}")
+        return 1
+    return 0
+
+
+def cmd_reset(args: argparse.Namespace) -> int:
+    """⚠️ Откат: OC-настроек к дефолту и/или вентиляторов в авто."""
+    from arctuner.igcl.api import IgclApi, IgclError
+    from arctuner.telemetry import find_arc_adapter
+
+    if not (args.oc or args.fans):
+        print("Укажите, что сбрасывать: --oc и/или --fans")
+        return 2
+
+    if not args.yes:
+        what = []
+        if args.oc:
+            what.append("все OC-настройки")
+        if args.fans:
+            what.append("вентиляторы -> авто")
+        print(f"⚠️  Сброс: {', '.join(what)}")
+        ans = input("Подтвердить? [y/N]: ").strip().lower()
+        if ans not in ("y", "yes", "д", "да"):
+            print("Отменено.")
+            return 1
+
+    try:
+        with IgclApi() as api:
+            found = find_arc_adapter(api)
+            if not found:
+                print("[FAIL] Дискретная Intel Arc не найдена.")
+                return 1
+            handle, _ = found
+            if args.oc:
+                from arctuner import tuner
+
+                tuner.reset_to_default(api, handle)
+                print("OC-настройки сброшены к дефолту.")
+            if args.fans:
+                for f in api.enum_fans(handle):
+                    api.set_fan_default(f)
+                print("Вентиляторы возвращены в аппаратный режим.")
+    except IgclError as e:
+        print(f"[FAIL] {e}")
+        return 1
     return 0
 
 
@@ -121,11 +272,34 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("telemetry", help="телеметрия (read-only)").set_defaults(func=cmd_telemetry)
     sub.add_parser("status", help="диапазоны разгона (read-only)").set_defaults(func=cmd_status)
 
+    pf = sub.add_parser("fans", help="вентиляторы: чтение / --set RPM (⚠️ запись)")
+    pf.add_argument("--set", type=int, help="зафиксировать скорость, RPM (⚠️)")
+    pf.add_argument("--yes", "-y", action="store_true", help="без подтверждения")
+    pf.set_defaults(func=cmd_fans)
+
+    pr = sub.add_parser("reset", help="⚠️ откат к дефолту")
+    pr.add_argument("--oc", action="store_true", help="сбросить OC-настройки")
+    pr.add_argument("--fans", action="store_true", help="вентиляторы в авто")
+    pr.add_argument("--yes", "-y", action="store_true", help="без подтверждения")
+    pr.set_defaults(func=cmd_reset)
+
     ps = sub.add_parser("set", help="⚠️ установка настроек (меняет карту)")
     ps.add_argument("--vram-speed", type=float, help="скорость памяти, Гбит/с")
     ps.add_argument("--power-limit", type=float, help="лимит питания, %%")
     ps.add_argument("--voltage-offset", type=float, help="смещение напряжения ядра, %%")
     ps.add_argument("--freq-offset", type=float, help="смещение частоты ядра, МГц")
+    ps.add_argument("--temp-limit", type=float, help="лимит температуры, °C")
+    ps.add_argument(
+        "--yes",
+        "-y",
+        action="store_true",
+        help="пропустить подтверждение (для скриптов)",
+    )
+    ps.add_argument(
+        "--force",
+        action="store_true",
+        help="разрешить vram_speed выше номинала 20 Гбит/с (до 22)",
+    )
     ps.set_defaults(func=cmd_set)
     return p
 
