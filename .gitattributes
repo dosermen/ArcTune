@@ -1,0 +1,24 @@
+# Единые окончания строк — нормализуем всё к LF в репозитории.
+* text=auto eol=lf
+
+# Явно текстовые типы
+*.md    text eol=lf
+*.py    text eol=lf
+*.toml  text eol=lf
+*.txt   text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.json  text eol=lf
+
+# Windows-скрипты PowerShell — оставляем CRLF
+*.ps1   text eol=crlf
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+
+# Бинарники не трогаем
+*.dll   binary
+*.exe   binary
+*.sys   binary
+*.png   binary
+*.jpg   binary
+*.ico   binary
