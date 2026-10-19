@@ -389,7 +389,11 @@ def cmd_vf(args: argparse.Namespace) -> int:
                 print_curve(points)
                 if not args.yes:
                     print("\n⚠️  Это ЗАПИШЕТ кастомную кривую V/F (меняет карту).")
-                    ans = input("Подтвердить запись? [y/N]: ")
+                    try:
+                        ans = input("Подтвердить запись? [y/N]: ")
+                    except EOFError:
+                        print("\nНеожиданный конец ввода — отмена.")
+                        return 1
                     if ans.strip().lower() not in ("y", "yes", "д", "да"):
                         print("Отменено — ничего не записано.")
                         return 1
@@ -578,7 +582,11 @@ def cmd_log(args: argparse.Namespace) -> int:
             print("⚠️  Откат к исходным значениям журнала:")
             for k, v in targets.items():
                 print(f"    {k} <- {v}")
-            ans = input("Подтвердить? [y/N]: ")
+            try:
+                ans = input("Подтвердить? [y/N]: ")
+            except EOFError:
+                print("\nНеожиданный конец ввода — отмена отката.")
+                return 1
             if ans.strip().lower() not in ("y", "yes", "д", "да"):
                 print("Отменено.")
                 return 1
@@ -674,7 +682,11 @@ def cmd_fans(args: argparse.Namespace) -> int:
             if args.set is not None:
                 if not args.yes:
                     print(f"\n⚠️  Зафиксировать скорость ВСЕХ вентиляторов на {args.set} RPM?")
-                    ans = input("Подтвердить запись? [y/N]: ")
+                    try:
+                        ans = input("Подтвердить запись? [y/N]: ")
+                    except EOFError:
+                        print("\nНеожиданный конец ввода — отмена.")
+                        return 1
                     if ans.strip().lower() not in ("y", "yes", "д", "да"):
                         print("Отменено.")
                         return 1
