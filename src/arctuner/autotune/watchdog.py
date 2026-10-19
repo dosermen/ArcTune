@@ -26,6 +26,10 @@ from typing import ClassVar
 
 from arctuner.igcl.api import TelemetrySnapshot
 
+# Запуск из GUI: окно консоли не должно вспыхивать на каждом шаге
+# (на не-Windows флага нет — 0, поведение не меняется).
+_NO_WINDOW: int = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
 
 @dataclass(frozen=True)
 class WatchdogEvent:
@@ -137,9 +141,10 @@ class Watchdog:
         )
         try:
             result = subprocess.run(
-                ["powershell", "-NoProfile", "-Command", ps],
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
                 capture_output=True,
                 timeout=10.0,
+                creationflags=_NO_WINDOW,
             )
         except (OSError, subprocess.TimeoutExpired):
             # Нет PowerShell/таймаут — TDR не проверить: молча (не наш инцидент).

@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -372,6 +373,26 @@ class TestLoader:
         assert proc.waited
         assert captured["cmd"] == ["taskkill", "/F", "/T", "/PID", "4242"]
         assert captured["kwargs"].get("capture_output") is True
+        # Окно консоли вспыхивать из GUI не должно (win32: CREATE_NO_WINDOW).
+        assert captured["kwargs"].get("creationflags") == getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+    def test_tdr_query_runs_hidden(self, monkeypatch) -> None:
+        """PowerShell TDR-запрос запускается без вспыхивающей консоли (GUI)."""
+        captured: dict[str, object] = {}
+
+        class _Empty:
+            stdout = b""
+
+        def fake_run(cmd, **kwargs: object) -> _Empty:
+            captured["cmd"] = cmd
+            captured["kwargs"] = kwargs
+            return _Empty()
+
+        monkeypatch.setattr(wd_mod.subprocess, "run", fake_run)
+        Watchdog()._query_tdr_events()
+        assert captured["kwargs"].get("creationflags") == getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        flags = captured["cmd"]
+        assert isinstance(flags, list) and "-NoProfile" in flags and "-NonInteractive" in flags
 
 
 class TestProfiles:

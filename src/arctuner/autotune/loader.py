@@ -18,6 +18,9 @@ from collections.abc import Callable
 
 from arctuner.igcl.api import TelemetrySnapshot
 
+# Запуск из GUI: окно консоли не должно вспыхивать (на не-Windows — 0).
+_NO_WINDOW: int = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
 
 def _activity(read_telemetry: Callable[[], TelemetrySnapshot]) -> int | None:
     """Считывает activity_counter через переданный источник телеметрии.
@@ -132,6 +135,7 @@ def terminate_stress(proc: subprocess.Popen) -> None:
             ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
             capture_output=True,
             timeout=10.0,
+            creationflags=_NO_WINDOW,
         )
     else:
         proc.terminate()
