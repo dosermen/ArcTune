@@ -33,8 +33,9 @@ _NOTES: dict[str, str] = {
     "артефакты и вылеты. Ключевой датчик при разгоне памяти.",
     "vram_power": "Мощность памяти в ваттах — из счётчика энергии vramEnergyCounter "
     "(read-only, честные джоули).",
-    "activity": "Счётчик времени активности драйвера (секунды с загрузки). Растёт всегда — "
-    "используется для дельт и реплея инцидентов.",
+    "activity": "Накопленное время занятости GPU (секунды активной работы). Растёт "
+    "только под нагрузкой; в простое счётчик может стоять на месте — это норма, "
+    "а не сбой. Нужен для дельт и реплея инцидентов.",
     "gpu_vr": "Температура фаз питания (VRM) ядра — мосфеты на плате. Греются от тока, а "
     "не от вычислений: перегрев фаз по кристаллу не виден.",
     "vram_vr": "Температура фаз питания памяти. В простое часто самая горячая из пяти "
@@ -62,7 +63,7 @@ class MonitoringTab(QWidget):
         self._vram_temp = MetricCard("Память, T", "°C", accent="temp", note=_NOTES["vram_temp"])
         self._vram_power = MetricCard("Память, Вт", "Вт", accent="power", note=_NOTES["vram_power"])
 
-        self._activity = MetricCard("Активность", "счётчик", note=_NOTES["activity"])
+        self._activity = MetricCard("Активность", "с", note=_NOTES["activity"])
         self._gpu_vr = MetricCard("VR ядра", "°C", accent="temp", note=_NOTES["gpu_vr"])
         self._vram_vr = MetricCard("VR памяти", "°C", accent="temp", note=_NOTES["vram_vr"])
         self._sa_vr = MetricCard("VR SA", "°C", accent="temp", note=_NOTES["sa_vr"])
@@ -126,8 +127,10 @@ class MonitoringTab(QWidget):
         self._gpu_vr.set_value(snap.gpu_vr_temp_c)
         self._vram_vr.set_value(snap.vram_vr_temp_c)
         self._sa_vr.set_value(snap.sa_vr_temp_c)
-        # Счётчик активности — int64, растёт всё время работы драйвера: сырой
-        # 13-значный номер нечитаем, разделяем разряды пробелами.
+        # Счётчик активности — накопленная занятость GPU в секундах: живой прогон
+        # подтвердил, что в простое стоит (12 с по часам → +1 при первом рывке
+        # частоты), растёт под нагрузкой. Сырые большие числа нечитаемы —
+        # разделяем разряды пробелами. Это НЕ «время с загрузки драйвера».
         counter = snap.activity_counter
         self._activity.set_value(None if counter is None else f"{counter:,}".replace(",", " "))
 

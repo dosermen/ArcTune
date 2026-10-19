@@ -123,6 +123,9 @@ def test_monitoring_cards_have_notes(qapp) -> None:
     assert "GDDR6" in tab._vram_temp.toolTip()
     assert "VRM" in tab._gpu_vr.toolTip() or "фаз" in tab._gpu_vr.toolTip()
     assert "System Agent" in tab._sa_vr.toolTip()
+    # Прожитый факт: счётчик активности НЕ аптайм — в простое стоит на месте.
+    assert "занятости" in tab._activity.toolTip()
+    assert "норма" in tab._activity.toolTip()
 
 
 def test_metric_card_click_shows_note_window(qapp, monkeypatch) -> None:
@@ -461,12 +464,12 @@ def test_metric_card_negative_zero_shown_plain(qapp) -> None:
 
 
 def test_monitoring_activity_counter_grouped(qapp, snapshot: TelemetrySnapshot) -> None:
-    """Счётчик int64 читается: разряды разделены, а не 13 цифр подряд."""
+    """Счётчик занятости в секундах: разряды разделены, единица — «с»."""
     from dataclasses import replace
 
     tab = MonitoringTab()
     tab.on_telemetry(replace(snapshot, activity_counter=1234567))
-    assert tab._activity._value.text() == "1 234 567 счётчик"
+    assert tab._activity._value.text() == "1 234 567 с"
 
 
 def test_monitoring_shows_watts_when_available(qapp, snapshot: TelemetrySnapshot) -> None:
