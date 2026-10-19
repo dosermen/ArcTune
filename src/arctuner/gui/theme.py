@@ -15,8 +15,8 @@ from __future__ import annotations
 
 from typing import Final
 
-from PySide6.QtCore import QSettings
-from PySide6.QtGui import QColor, QPalette
+from PySide6.QtCore import QPointF, QSettings, Qt
+from PySide6.QtGui import QColor, QIcon, QLinearGradient, QPainter, QPainterPath, QPalette, QPixmap
 from PySide6.QtWidgets import QApplication
 
 # --- цвета серий графиков (одинаковы в обеих темах — контрастные и чистые) ---
@@ -263,6 +263,46 @@ def _palette(dark: bool) -> QPalette:
     return pal
 
 
+def flame_icon(size: int = 24) -> QIcon:
+    """Иконка пламени (вкладка «Разгон»): рисуется кодом, без файлов ресурсов.
+
+    Внешнее пламя — градиент оранжевый→красный (цвета серий POWER/TEMP),
+    внутренний язык — светло-жёлтый. Вьюбокс 24×24, масштабируется размером.
+    """
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.scale(size / 24.0, size / 24.0)
+    painter.setPen(Qt.PenStyle.NoPen)
+
+    outer = QPainterPath()
+    outer.moveTo(13.0, 1.5)
+    outer.cubicTo(15.5, 5.0, 19.5, 8.0, 19.5, 13.0)
+    outer.cubicTo(19.5, 18.0, 16.2, 21.5, 12.0, 21.5)
+    outer.cubicTo(7.8, 21.5, 4.5, 18.0, 4.5, 13.0)
+    outer.cubicTo(4.5, 10.0, 6.0, 8.0, 7.5, 6.5)
+    outer.cubicTo(8.0, 8.5, 9.0, 9.5, 10.0, 9.5)
+    outer.cubicTo(9.5, 6.5, 11.0, 3.5, 13.0, 1.5)
+    gradient = QLinearGradient(QPointF(12.0, 2.0), QPointF(12.0, 22.0))
+    gradient.setColorAt(0.0, QColor(SERIES_POWER))
+    gradient.setColorAt(1.0, QColor(SERIES_TEMP))
+    painter.setBrush(gradient)
+    painter.drawPath(outer)
+
+    inner = QPainterPath()
+    inner.moveTo(12.0, 11.5)
+    inner.cubicTo(13.6, 13.6, 14.6, 15.3, 14.6, 17.0)
+    inner.cubicTo(14.6, 19.0, 13.4, 20.2, 12.0, 20.2)
+    inner.cubicTo(10.6, 20.2, 9.4, 19.0, 9.4, 17.0)
+    inner.cubicTo(9.4, 15.3, 10.4, 13.6, 12.0, 11.5)
+    painter.setBrush(QColor("#f6c851"))
+    painter.drawPath(inner)
+
+    painter.end()
+    return QIcon(pixmap)
+
+
 def apply_theme(app: QApplication, dark: bool) -> None:
     """Fusion + палитра + QSS. Вызывается в main.py до окна и при смене темы.
 
@@ -281,6 +321,7 @@ __all__ = [
     "SERIES_TEMP",
     "THEMES",
     "apply_theme",
+    "flame_icon",
     "load_theme",
     "qss",
     "save_theme",

@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 
 from arctuner.gui.scale import SCALE_CHOICES, load_scale, restart_argv, save_scale
 from arctuner.gui.tabs import FansTab, LogTab, MonitoringTab, OverclockTab, VfTab
-from arctuner.gui.theme import apply_theme, load_theme, save_theme
+from arctuner.gui.theme import apply_theme, flame_icon, load_theme, save_theme
 from arctuner.gui.worker import GpuWorker
 from arctuner.igcl.api import DeviceInfo
 
@@ -44,15 +44,27 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(style.standardIcon(QStyle.StandardPixmap.SP_ComputerIcon))
         for index, (widget, icon_kind, name) in enumerate(
             (
-                (self._monitoring, QStyle.StandardPixmap.SP_ComputerIcon, "Мониторинг"),
-                (self._overclock, QStyle.StandardPixmap.SP_ArrowUp, "Разгон"),
-                (self._fans, QStyle.StandardPixmap.SP_BrowserReload, "Вентиляторы"),
-                (self._vf, QStyle.StandardPixmap.SP_FileDialogDetailedView, "V/F"),
-                (self._log, QStyle.StandardPixmap.SP_FileIcon, "Журнал"),
+                (
+                    self._monitoring,
+                    style.standardIcon(QStyle.StandardPixmap.SP_ComputerIcon),
+                    "Мониторинг",
+                ),
+                (self._overclock, flame_icon(), "Разгон"),  # огонь вместо чёрной стрелки
+                (
+                    self._fans,
+                    style.standardIcon(QStyle.StandardPixmap.SP_BrowserReload),
+                    "Вентиляторы",
+                ),
+                (
+                    self._vf,
+                    style.standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView),
+                    "V/F",
+                ),
+                (self._log, style.standardIcon(QStyle.StandardPixmap.SP_FileIcon), "Журнал"),
             )
         ):
             self._tabs.addTab(widget, name)
-            self._tabs.setTabIcon(index, style.standardIcon(icon_kind))
+            self._tabs.setTabIcon(index, icon_kind)
         self.setCentralWidget(self._tabs)
 
         self._device_label = QLabel("Подключение…")

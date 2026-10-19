@@ -113,6 +113,17 @@ def test_theme_switch_preserves_monitoring_chart(qapp) -> None:
     assert vf.chart().theme() == QChart.ChartTheme.ChartThemeLight
 
 
+def test_flame_icon_painted(qapp) -> None:
+    """Иконка пламени рисуется кодом: непустая, с прозрачным фоном и цветным телом."""
+    from arctuner.gui.theme import flame_icon
+
+    icon = flame_icon(24)
+    assert not icon.isNull()
+    image = icon.pixmap(24, 24).toImage()
+    assert image.pixelColor(12, 18).alpha() > 0  # тело пламени в центре-низу
+    assert image.pixelColor(1, 1).alpha() == 0  # угол прозрачен (не квадрат-заливка)
+
+
 # --- попадание данных в виджеты ---
 
 
