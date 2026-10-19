@@ -334,6 +334,25 @@ def test_device_info_is_dataclass() -> None:
     assert DeviceInfo.__name__ == "DeviceInfo"
 
 
+def test_gpu_context_field_grid() -> None:
+    """field_grid отдаёт (min, step) для снаппинга; мусор/неподдержка — None."""
+    from arctuner.gui.context import GpuContext
+
+    ctx = GpuContext()
+    # Сессия не открывается: подменяем чтение диапазонов (read-only).
+    ctx.oc_ranges = lambda: {  # type: ignore[method-assign]
+        "gpuFrequencyOffset": _info(min=-300.0, max=1000.0, step=1.0),
+        "unsupported": _info(supported=False),
+        "noStep": _info(step=0.0),
+        "flag": False,
+    }
+    assert ctx.field_grid("gpuFrequencyOffset") == (-300.0, 1.0)
+    assert ctx.field_grid("unsupported") is None
+    assert ctx.field_grid("noStep") is None
+    assert ctx.field_grid("flag") is None
+    assert ctx.field_grid("absent") is None
+
+
 # --- масштаб интерфейса ---
 
 

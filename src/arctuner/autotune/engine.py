@@ -45,6 +45,13 @@ class TuningContext(Protocol):
         """Текущие значения OC-полей."""
         ...
 
+    def field_grid(self, field: str) -> tuple[float, float] | None:
+        """Сетка IGCL поля (min, step) — кандидаты приводятся к ней перед записью.
+
+        None — сетка неизвестна/не поддерживается (движок не приводит).
+        """
+        ...
+
     def set_freq_offset(self, mhz: float) -> Any:
         """Запись смещения частоты ядра, МГц."""
         ...
@@ -223,6 +230,9 @@ class TuningEngine:
         ctx = self._ctx
         cfg.validate()  # до любых обращений к карте: битый профиль не должен её трогать
         field_name = "gpuVoltageOffset" if cfg.mode == MODE_UNDERVOLT else "gpuFrequencyOffset"
+        # Сетка IGCL (min, step): кандидаты приводятся к ней, иначе tuner
+        # отклоняет запись («не кратен шагу») — движок обрывался на 3-м шаге.
+        grid = ctx.field_grid(field_name)
 
         baseline = ctx.current_values().get(field_name)
         if baseline is None:
@@ -267,6 +277,15 @@ class TuningEngine:
                 # candidate считается ОТ BEST: стабильные шаги накапливаются,
                 # а не нанизываются мелкими от baseline.
                 candidate = round(best + direction * current_step, 6)
+                if grid is not None:
+                    lo, gs = grid
+                    snapped = round(lo + round((candidate - lo) / gs) * gs, 6)
+                    if snapped == best:
+                        # Шаг мельче сетки: следующее кратное значение — это
+                        # сам best, шагать больше некуда (не крутим до max_steps).
+                        reason = "шаг мельче сетки IGCL (кратность) — граница найдена"
+                        break
+                    candidate = snapped
 
                 # Флаг ПЕРЕД записью: любое исключение между apply и засчётом
                 # шага (IgclError из телеметрии, сбой колбэка…) обязано откатить

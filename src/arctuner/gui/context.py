@@ -111,6 +111,17 @@ class GpuContext:
         api, handle = self._require()
         return api.read_oc_properties(handle)
 
+    def field_grid(self, field: str) -> tuple[float, float] | None:
+        """Сетка IGCL поля (min, step) для авторазгона; None — не поддерживается.
+
+        IGCL отклоняет значения, не кратные шагу от min (36.6 при step=1.0) —
+        движок приводит кандидаты к этой сетке до записи.
+        """
+        info = self.oc_ranges().get(field)
+        if isinstance(info, bool) or info is None or not info.supported or info.step <= 0:
+            return None
+        return (info.min, info.step)
+
     def current_values(self) -> dict[str, float | None]:
         api, handle = self._require()
         return tuner.current_values(api, handle)

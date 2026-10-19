@@ -64,9 +64,14 @@ class FakeCtx:
         self.temp_c = temp
         self.activity = activity
         self.reset_count = 0
+        self.grid: tuple[float, float] | None = None  # (min, step) IGCL; None — без сетки
 
     def current_values(self) -> dict[str, float | None]:
         return dict(self.values)
+
+    def field_grid(self, field: str) -> tuple[float, float] | None:
+        """Сетка IGCL: по умолчанию не ограничена (тесты сетки задают явно)."""
+        return self.grid
 
     def set_freq_offset(self, mhz: float) -> object:
         if not FREQ_MIN <= mhz <= FREQ_MAX:
@@ -539,3 +544,30 @@ class TestExceptionSafety:
         ctx = FakeCtx()
         result = TuningEngine(ctx, _cfg(external_cmd="bench.exe", max_steps=1)).run()
         assert result.steps_taken == 1  # результат дошёл целиком
+
+
+class TestGridSnapping:
+    """Кандидаты приводятся к сетке IGCL (кратность шагу от min).
+
+    Регрессия: движок выдавал 36.6 при step=1.0 → tuner отклонял запись
+    («не кратен шагу»), поиск обрывался с вводящим в заблуждение «диапазон».
+    """
+
+    def test_candidates_snap_to_grid(self) -> None:
+        """Дробный кандидат округляется к сетке (36.6 → 37) — запись проходит."""
+        ctx = FakeCtx()
+        ctx.grid = (-300.0, 1.0)  # как на B580: min=-300, step=1.0 МГц
+        result = TuningEngine(ctx, _cfg(step=15.0, min_step=3.0, max_steps=4)).run()
+        # 15 → 27 → 36.6→37 → 44.68→45: без снаппинга шаг 3 отклонён бы
+        assert result.steps_taken == 4
+        assert result.best_stable == 45.0
+        assert all(v == int(v) for v in ctx.applied)
+
+    def test_step_below_grid_stops_as_boundary(self) -> None:
+        """Шаг мельче сетки → «граница найдена», а не крутка до max_steps."""
+        ctx = FakeCtx()
+        ctx.grid = (-300.0, 50.0)  # крупная сетка: шаг 15 не даёт нового кратного
+        result = TuningEngine(ctx, _cfg(step=15.0, max_steps=5)).run()
+        assert result.steps_taken == 0
+        assert "сетки IGCL" in result.stopped_reason
+        assert ctx.applied == []  # ни одной записи — сетка не позволила шага
