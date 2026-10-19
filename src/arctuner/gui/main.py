@@ -15,6 +15,7 @@ def run() -> int:
     from PySide6.QtWidgets import QApplication
 
     from arctuner.gui.scale import apply_qt_scale
+    from arctuner.gui.theme import apply_theme, load_theme
     from arctuner.gui.window import MainWindow
 
     # До QApplication: Qt читает QT_SCALE_FACTOR только при создании app.
@@ -23,6 +24,9 @@ def run() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("ArcTune")
     app.setOrganizationName("ArcTune")
+
+    # Fusion + палитра + QSS до создания окна: вид не зависит от стиля Windows.
+    apply_theme(app, load_theme() == "dark")
 
     window = MainWindow()
     window.show()

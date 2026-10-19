@@ -9,6 +9,7 @@ from PySide6.QtCharts import QChart, QChartView, QLineSeries, QValueAxis
 from PySide6.QtCore import QPointF, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPen
 
+from arctuner.gui.theme import SERIES_FREQ, SERIES_POWER, SERIES_TEMP
 from arctuner.tuner import (
     VF_MAX_FREQ_MHZ,
     VF_MAX_VOLTAGE_MV,
@@ -17,9 +18,10 @@ from arctuner.tuner import (
 )
 
 # Цвета серий (темп/мощность/частота) — одинаковы и в легенде, и на графике.
-_TEMP_COLOR = QColor("#e05555")
-_POWER_COLOR = QColor("#e0a13a")
-_FREQ_COLOR = QColor("#4a90d9")
+# Значения приходят из theme.py (единый источник с маркерами карточек).
+_TEMP_COLOR = QColor(SERIES_TEMP)
+_POWER_COLOR = QColor(SERIES_POWER)
+_FREQ_COLOR = QColor(SERIES_FREQ)
 
 
 class LiveChart(QChartView):
@@ -115,6 +117,14 @@ class LiveChart(QChartView):
         for series in (self._temp_series, self._power_series, self._freq_series):
             series.clear()
 
+    def set_dark(self, dark: bool) -> None:
+        """Интентионно no-op: вид графика мониторинга пользователь просил сохранить.
+
+        Белый фон, сетка, легенда и цвета линий не меняются при переключении
+        темы — это «приборная панель», её внематериальный вид стабильнее.
+        """
+        del dark
+
 
 _VF_GRAB_PX = 14.0  # радиус захвата точки на графике, пиксели
 
@@ -178,6 +188,17 @@ class VfChart(QChartView):
     def editable(self) -> bool:
         """Правка точек мышью включена?"""
         return self._editable
+
+    def set_dark(self, dark: bool) -> None:
+        """Подгоняет фон/сетку кривой V/F под тему приложения.
+
+        Встроенная тема QChart перекрашивает серии — после неё вернём свой
+        синий (#4a90d9): тот же цвет, что у маркера карточек «Ядро/Память».
+        """
+        self.chart().setTheme(
+            QChart.ChartTheme.ChartThemeDark if dark else QChart.ChartTheme.ChartThemeLight
+        )
+        self._series.setPen(QPen(_FREQ_COLOR, 2))
 
     # --- программная правка (тот же код, что и у мыши) ---
 

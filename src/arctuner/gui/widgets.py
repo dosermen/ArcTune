@@ -13,12 +13,24 @@ from PySide6.QtWidgets import (
 
 
 class MetricCard(QFrame):
-    """Карточка одного датчика: крупное значение + подпись."""
+    """Карточка одного датчика: крупное значение + подпись + цветной маркер.
 
-    def __init__(self, title: str, unit: str = "", parent: QWidget | None = None) -> None:
+    Маркер ("temp"/"power"/"freq") — тот же цвет, что у соответствующей линии
+    живого графика (константы из theme.py): дашборд и график связаны глазом.
+    """
+
+    def __init__(
+        self,
+        title: str,
+        unit: str = "",
+        parent: QWidget | None = None,
+        accent: str | None = None,
+    ) -> None:
         super().__init__(parent)
         self.setObjectName("metricCard")
         self._unit = unit
+        if accent is not None:
+            self.setProperty("accent", accent)  # QSS [accent=…] подсвечивает верх
 
         self._value = QLabel("—")
         self._value.setObjectName("metricValue")

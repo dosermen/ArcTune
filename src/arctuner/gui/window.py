@@ -4,18 +4,22 @@ from __future__ import annotations
 
 import sys
 
+from PySide6.QtCharts import QChartView
 from PySide6.QtCore import QMetaObject, QProcess, Qt, QThread, QTimer
 from PySide6.QtGui import QAction, QActionGroup
 from PySide6.QtWidgets import (
+    QApplication,
     QLabel,
     QMainWindow,
     QMessageBox,
     QStatusBar,
+    QStyle,
     QTabWidget,
 )
 
 from arctuner.gui.scale import SCALE_CHOICES, load_scale, restart_argv, save_scale
 from arctuner.gui.tabs import FansTab, LogTab, MonitoringTab, OverclockTab, VfTab
+from arctuner.gui.theme import apply_theme, load_theme, save_theme
 from arctuner.gui.worker import GpuWorker
 from arctuner.igcl.api import DeviceInfo
 
@@ -36,16 +40,29 @@ class MainWindow(QMainWindow):
         self._fans = FansTab()
         self._vf = VfTab()
         self._log = LogTab()
-        self._tabs.addTab(self._monitoring, "Мониторинг")
-        self._tabs.addTab(self._overclock, "Разгон")
-        self._tabs.addTab(self._fans, "Вентиляторы")
-        self._tabs.addTab(self._vf, "V/F")
-        self._tabs.addTab(self._log, "Журнал")
+        style = self.style()  # иконки вкладок и окна — стандартные Qt, без ресурсов
+        self.setWindowIcon(style.standardIcon(QStyle.StandardPixmap.SP_ComputerIcon))
+        for index, (widget, icon_kind, name) in enumerate(
+            (
+                (self._monitoring, QStyle.StandardPixmap.SP_ComputerIcon, "Мониторинг"),
+                (self._overclock, QStyle.StandardPixmap.SP_ArrowUp, "Разгон"),
+                (self._fans, QStyle.StandardPixmap.SP_BrowserReload, "Вентиляторы"),
+                (self._vf, QStyle.StandardPixmap.SP_FileDialogDetailedView, "V/F"),
+                (self._log, QStyle.StandardPixmap.SP_FileIcon, "Журнал"),
+            )
+        ):
+            self._tabs.addTab(widget, name)
+            self._tabs.setTabIcon(index, style.standardIcon(icon_kind))
         self.setCentralWidget(self._tabs)
 
         self._device_label = QLabel("Подключение…")
         self._status = QStatusBar()
         self._status.addPermanentWidget(self._device_label, stretch=1)
+        # Пилюля состояния вместо безликого текста: ok (запись) / warn / danger (инцидент).
+        self._pill = QLabel("")
+        self._pill.setObjectName("statePill")
+        self._pill.hide()
+        self._status.addPermanentWidget(self._pill)
         self.setStatusBar(self._status)
 
         # Устройство ещё не подтвердилось: первый error = провал старта
@@ -61,6 +78,8 @@ class MainWindow(QMainWindow):
 
         self._wire_worker()
         self._wire_tabs()
+        # Кривая V/F стартует в текущей теме (график мониторинга игнорирует — no-op).
+        self._apply_theme_to_charts(load_theme() == "dark")
 
         self._timer = QTimer(self)
         self._timer.setInterval(POLL_MS)
@@ -129,6 +148,20 @@ class MainWindow(QMainWindow):
         self._restart_action.triggered.connect(self._on_restart)
         menu.addAction(self._restart_action)
 
+        menu.addSeparator()
+        theme_menu = menu.addMenu("Тема")
+        theme_group = QActionGroup(self)
+        theme_group.setExclusive(True)
+        current = load_theme()
+        self._theme_actions: dict[str, QAction] = {}
+        for name, label in (("dark", "Тёмная"), ("light", "Светлая")):
+            action = QAction(label, self, checkable=True)
+            action.setChecked(name == current)
+            action.triggered.connect(lambda _=False, n=name: self._on_theme_selected(n))
+            theme_group.addAction(action)
+            theme_menu.addAction(action)
+            self._theme_actions[name] = action
+
     def _on_scale_selected(self, value: float) -> None:
         save_scale(value)
         self._restart_action.setEnabled(True)
@@ -137,6 +170,23 @@ class MainWindow(QMainWindow):
             f"(меню «Вид» → «Перезапустить с новым масштабом»).",
             10000,
         )
+
+    def _on_theme_selected(self, name: str) -> None:
+        """Пересобирает палитру/QSS на ходу.
+
+        График мониторинга не трогаем (LiveChart.set_dark — намеренный no-op,
+        сохранённый вид по требованию владельца); кривая V/F подстраивается.
+        """
+        save_theme(name)
+        app = QApplication.instance()
+        if app is not None:
+            apply_theme(app, name == "dark")
+        self._apply_theme_to_charts(name == "dark")
+
+    def _apply_theme_to_charts(self, dark: bool) -> None:
+        """Синхронизирует темы всех графиков (мониторинг игнорирует — см. выше)."""
+        for view in self.findChildren(QChartView):
+            view.set_dark(dark)
 
     def _on_restart(self) -> None:
         """Перезапускает приложение, чтобы применить сохранённый масштаб."""
@@ -154,18 +204,32 @@ class MainWindow(QMainWindow):
         self._device_label.setText(info.name)
         self.setWindowTitle(f"ArcTune — {info.name}")
 
+    def _set_pill(self, kind: str, text: str) -> None:
+        """Стилизованная пилюля состояния вместо безликого showMessage-текста.
+
+        kind: ok (запись прошла) / warn (сбой чтения, ошибка записи) /
+        danger (инцидент). Держится до следующего события — последний итог записи
+        всегда виден, побочных таймаутов нет (showMessage остаётся для подсказок).
+        """
+        self._pill.setProperty("kind", kind)
+        self._pill.setText(text)
+        self._pill.show()
+        style = self._pill.style()
+        style.unpolish(self._pill)  # динамическое property требует пере-полировки
+        style.polish(self._pill)
+
     def _on_write_done(self, message: str) -> None:
-        self._status.showMessage(f"✅ {message}", 8000)
+        self._set_pill("ok", f"✅ {message}")
 
     def _on_error(self, message: str) -> None:
         """Ошибка чтения/старта.
 
         До подключения (device_ready не пришёл) — провалился старт: останавливаем
         опрос (иначе он будет повторять ошибку каждую секунду) и показываем причину
-        диалогом. После — кратковременный сбой телеметрии виден только в статусе,
-        чтобы модальные окна не сыпались по одному на каждый тик.
+        диалогом. После — кратковременный сбой телеметрии виден только в пилюле
+        (warn), чтобы модальные окна не сыпались по одному на каждый тик.
         """
-        self._status.showMessage(f"⚠️ {message}", 15000)
+        self._set_pill("warn", f"⚠️ {message}")
         if not self._device_seen:
             self._device_label.setText("Нет подключения")
             self._timer.stop()
@@ -179,18 +243,16 @@ class MainWindow(QMainWindow):
 
     def _on_write_error(self, message: str) -> None:
         """Ошибка записи — модально: запись не должна пройти молча."""
-        self._status.showMessage(f"⚠️ {message}", 15000)
+        self._set_pill("warn", f"⚠️ {message}")
         QMessageBox.warning(self, "ArcTune — ошибка записи", message)
 
     def _on_incident(self, path: str) -> None:
         """Инцидент: счётчик энергии сбросился = драйвер перезагрузился (TDR/ребут).
 
         Не модально (модальное окно собьёт живые графики в момент самого события),
-        но долго: 30 с в статус-баре укороченным сообщением, полный путь — в дампе.
+        в пилюле danger и надолго; полный путь — в дампе.
         """
-        self._status.showMessage(
-            f"🚨 Инцидент (драйвер перезагрузился?) — дамп телеметрии: {path}", 30000
-        )
+        self._set_pill("danger", f"🚨 Инцидент (драйвер перезагрузился?) — дамп: {path}")
 
     def _on_busy(self, busy: bool) -> None:
         """Воркер занят записью: блокируем кнопки записей во вкладках."""

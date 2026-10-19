@@ -63,10 +63,10 @@ class VfTab(QWidget):
         btns = QHBoxLayout()
         btns.addWidget(self._refresh_btn)
         btns.addWidget(self._export_btn)
+        btns.addStretch(1)  # чтение слева, записи справа — «опасное» визуально обособлено
         btns.addWidget(self._import_btn)
         btns.addWidget(self._apply_chart_btn)
         btns.addWidget(self._undo_btn)
-        btns.addStretch(1)
 
         note = QLabel(
             "Кривую можно править мышью прямо на графике (потяните точку: по вертикали — "

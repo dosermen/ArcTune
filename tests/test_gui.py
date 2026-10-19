@@ -89,6 +89,30 @@ def test_charts_construct(qapp) -> None:
     VfChart()
 
 
+def test_metric_card_accent_property(qapp) -> None:
+    """kind-маркеры карточек: temp/power/freq — в dynamic property для QSS."""
+    from arctuner.gui.widgets import MetricCard
+
+    card_temp = MetricCard("Т", "°C", accent="temp")
+    card_none = MetricCard("Без", "")
+    assert card_temp.property("accent") == "temp"
+    assert card_none.property("accent") is None
+
+
+def test_theme_switch_preserves_monitoring_chart(qapp) -> None:
+    """Тёмная тема НЕ меняет график мониторинга (сохранённый вид — осознанно)."""
+    from PySide6.QtCharts import QChart
+
+    live = LiveChart(window_s=60)
+    vf = VfChart()
+    live.set_dark(True)  # ноу-оп: «прибор» остаётся в светлом виде
+    vf.set_dark(True)
+    assert live.chart().theme() == QChart.ChartTheme.ChartThemeLight
+    assert vf.chart().theme() == QChart.ChartTheme.ChartThemeDark
+    vf.set_dark(False)
+    assert vf.chart().theme() == QChart.ChartTheme.ChartThemeLight
+
+
 # --- попадание данных в виджеты ---
 
 

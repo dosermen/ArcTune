@@ -24,20 +24,20 @@ class MonitoringTab(QWidget):
         self._t0 = time.monotonic()
         self._t_last: float | None = None
 
-        self._freq = MetricCard("Ядро", "МГц")
+        self._freq = MetricCard("Ядро", "МГц", accent="freq")
         self._voltage = MetricCard("Напряжение", "В")
-        self._temp = MetricCard("Температура", "°C")
-        self._power = MetricCard("Питание", "%")
+        self._temp = MetricCard("Температура", "°C", accent="temp")
+        self._power = MetricCard("Питание", "%", accent="power")
 
-        self._vram_freq = MetricCard("Память", "Гбит/с")
+        self._vram_freq = MetricCard("Память", "Гбит/с", accent="freq")
         self._vram_voltage = MetricCard("Память, V", "В")
-        self._vram_temp = MetricCard("Память, T", "°C")
-        self._vram_power = MetricCard("Память, Вт", "Вт")
+        self._vram_temp = MetricCard("Память, T", "°C", accent="temp")
+        self._vram_power = MetricCard("Память, Вт", "Вт", accent="power")
 
         self._activity = MetricCard("Активность", "счётчик")
-        self._gpu_vr = MetricCard("VR ядра", "°C")
-        self._vram_vr = MetricCard("VR памяти", "°C")
-        self._sa_vr = MetricCard("VR SA", "°C")
+        self._gpu_vr = MetricCard("VR ядра", "°C", accent="temp")
+        self._vram_vr = MetricCard("VR памяти", "°C", accent="temp")
+        self._sa_vr = MetricCard("VR SA", "°C", accent="temp")
 
         grid = QGridLayout()
         grid.setSpacing(8)
