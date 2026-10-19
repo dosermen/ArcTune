@@ -21,6 +21,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 PySide6 = pytest.importorskip("PySide6", reason="GUI-тесты требуют PySide6 (extra gui)")
 
+from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from arctuner.gui.charts import LiveChart, VfChart  # noqa: E402
@@ -97,6 +98,56 @@ def test_metric_card_accent_property(qapp) -> None:
     card_none = MetricCard("Без", "")
     assert card_temp.property("accent") == "temp"
     assert card_none.property("accent") is None
+
+
+def test_monitoring_cards_have_notes(qapp) -> None:
+    """Все 12 карточек мониторинга несут подсказку; температурные — по смыслу."""
+    tab = MonitoringTab()
+    cards = (
+        tab._freq,
+        tab._voltage,
+        tab._temp,
+        tab._power,
+        tab._vram_freq,
+        tab._vram_voltage,
+        tab._vram_temp,
+        tab._vram_power,
+        tab._activity,
+        tab._gpu_vr,
+        tab._vram_vr,
+        tab._sa_vr,
+    )
+    for card in cards:
+        assert card.toolTip(), f"нет подсказки: {card._title.text()}"
+        assert card._value.toolTip() == card.toolTip()
+    assert "GDDR6" in tab._vram_temp.toolTip()
+    assert "VRM" in tab._gpu_vr.toolTip() or "фаз" in tab._gpu_vr.toolTip()
+    assert "System Agent" in tab._sa_vr.toolTip()
+
+
+def test_metric_card_click_shows_note_window(qapp, monkeypatch) -> None:
+    """Клик по карточке — явное окно с пояснением (не исчезающий tooltip)."""
+    from PySide6.QtTest import QTest
+
+    from arctuner.gui.widgets import MetricCard
+
+    card = MetricCard("Температура", "°C", note="Кристалл GPU, держите <80 °C")
+    captured: dict[str, str] = {}
+
+    def fake_information(parent, title, text, *_a, **_kw):
+        captured["title"] = title
+        captured["text"] = text
+        return None
+
+    monkeypatch.setattr("arctuner.gui.widgets.QMessageBox.information", fake_information)
+    QTest.mouseClick(card, Qt.MouseButton.LeftButton)
+    assert captured == {"title": "Температура", "text": "Кристалл GPU, держите <80 °C"}
+
+    # Карточка без подсказки: клик не открывает пустое окно.
+    captured.clear()
+    plain = MetricCard("Без", "")
+    QTest.mouseClick(plain, Qt.MouseButton.LeftButton)
+    assert captured == {}
 
 
 def test_theme_switch_preserves_monitoring_chart(qapp) -> None:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, Qt
 from PySide6.QtWidgets import (
     QFrame,
     QLabel,
@@ -25,6 +25,7 @@ class MetricCard(QFrame):
         unit: str = "",
         parent: QWidget | None = None,
         accent: str | None = None,
+        note: str = "",
     ) -> None:
         super().__init__(parent)
         self.setObjectName("metricCard")
@@ -45,6 +46,32 @@ class MetricCard(QFrame):
         lay.setSpacing(2)
         lay.addWidget(self._value)
         lay.addWidget(self._title)
+
+        if note:
+            # Подсказка на карточку и на оба поля: наведение на любое место
+            # показывает пояснение (у QLabel своя зона событий, у фрейма — своя).
+            for widget in (self, self._value, self._title):
+                widget.setToolTip(note)
+                widget.setCursor(Qt.CursorShape.PointingHandCursor)
+                widget.installEventFilter(self)
+        self._note = note
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802 (имя Qt API)
+        """Клик по карточке с подсказкой — явное окно с полным пояснением.
+
+        Наведение даёт быстрый tooltip, клик — стабильное окно (не исчезает,
+        пока не закрыто). Клик поглощается: под ним нет других действий.
+        """
+        if self._note and event.type() == QEvent.Type.MouseButtonPress:
+            self.show_note()
+            return True
+        return super().eventFilter(obj, event)
+
+    def show_note(self) -> None:
+        """Показывает пояснение карточки отдельным окном (явный запрос)."""
+        if not self._note:
+            return
+        QMessageBox.information(self.window(), self._title.text(), self._note)
 
     def set_value(
         self,

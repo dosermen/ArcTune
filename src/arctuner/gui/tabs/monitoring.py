@@ -16,6 +16,34 @@ from arctuner.igcl.api import TelemetrySnapshot
 GAP_MAX_S = 5.0
 
 
+#: пояснения датчиков (tooltip при наведении, окно по клику на карточку):
+#: честно «что это» и «зачем следить», без угадывания.
+_NOTES: dict[str, str] = {
+    "freq": "Фактическая частота графического ядра. При троттлинге (Power/Temperature "
+    "Limited) падает ниже заданной — сравнивайте с плашкой «Ограничение».",
+    "voltage": "Напряжение ядра. Смещение в плюс — вкладка «Разгон»; тонкая настройка — "
+    "кривая V/F.",
+    "temp": "Температура кристалла GPU — главный датчик нагрева. По ней работает лимит "
+    "температуры и троттлинг. Ориентир проекта: держать <80 °C под нагрузкой.",
+    "power": "Мощность: % от текущего лимита питания; ватты — средняя из счётчиков "
+    "энергии (появляются со 2-го тика опроса).",
+    "vram_freq": "Фактическая эффективная скорость памяти GDDR6 (номинал B580 — 20 Гбит/с).",
+    "vram_voltage": "Напряжение памяти. На B580 фиксировано на 1.35 В — драйвер не даёт его менять.",
+    "vram_temp": "Температура чипов GDDR6 (6× Samsung SC20). Перегрев памяти → ошибки → "
+    "артефакты и вылеты. Ключевой датчик при разгоне памяти.",
+    "vram_power": "Мощность памяти в ваттах — из счётчика энергии vramEnergyCounter "
+    "(read-only, честные джоули).",
+    "activity": "Счётчик времени активности драйвера (секунды с загрузки). Растёт всегда — "
+    "используется для дельт и реплея инцидентов.",
+    "gpu_vr": "Температура фаз питания (VRM) ядра — мосфеты на плате. Греются от тока, а "
+    "не от вычислений: перегрев фаз по кристаллу не виден.",
+    "vram_vr": "Температура фаз питания памяти. В простое часто самая горячая из пяти "
+    "(на живой B580 ~64 °C при 45–48 °C кристалла).",
+    "sa_vr": "Температура фаз питания SA (System Agent — домен контроллера/обвязки "
+    "кристалла). Обычно наименее нагруженная.",
+}
+
+
 class MonitoringTab(QWidget):
     """Показывает текущую телеметрию и скроллящийся график последних минут."""
 
@@ -24,20 +52,20 @@ class MonitoringTab(QWidget):
         self._t0 = time.monotonic()
         self._t_last: float | None = None
 
-        self._freq = MetricCard("Ядро", "МГц", accent="freq")
-        self._voltage = MetricCard("Напряжение", "В")
-        self._temp = MetricCard("Температура", "°C", accent="temp")
-        self._power = MetricCard("Питание", "%", accent="power")
+        self._freq = MetricCard("Ядро", "МГц", accent="freq", note=_NOTES["freq"])
+        self._voltage = MetricCard("Напряжение", "В", note=_NOTES["voltage"])
+        self._temp = MetricCard("Температура", "°C", accent="temp", note=_NOTES["temp"])
+        self._power = MetricCard("Питание", "%", accent="power", note=_NOTES["power"])
 
-        self._vram_freq = MetricCard("Память", "Гбит/с", accent="freq")
-        self._vram_voltage = MetricCard("Память, V", "В")
-        self._vram_temp = MetricCard("Память, T", "°C", accent="temp")
-        self._vram_power = MetricCard("Память, Вт", "Вт", accent="power")
+        self._vram_freq = MetricCard("Память", "Гбит/с", accent="freq", note=_NOTES["vram_freq"])
+        self._vram_voltage = MetricCard("Память, V", "В", note=_NOTES["vram_voltage"])
+        self._vram_temp = MetricCard("Память, T", "°C", accent="temp", note=_NOTES["vram_temp"])
+        self._vram_power = MetricCard("Память, Вт", "Вт", accent="power", note=_NOTES["vram_power"])
 
-        self._activity = MetricCard("Активность", "счётчик")
-        self._gpu_vr = MetricCard("VR ядра", "°C", accent="temp")
-        self._vram_vr = MetricCard("VR памяти", "°C", accent="temp")
-        self._sa_vr = MetricCard("VR SA", "°C", accent="temp")
+        self._activity = MetricCard("Активность", "счётчик", note=_NOTES["activity"])
+        self._gpu_vr = MetricCard("VR ядра", "°C", accent="temp", note=_NOTES["gpu_vr"])
+        self._vram_vr = MetricCard("VR памяти", "°C", accent="temp", note=_NOTES["vram_vr"])
+        self._sa_vr = MetricCard("VR SA", "°C", accent="temp", note=_NOTES["sa_vr"])
 
         grid = QGridLayout()
         grid.setSpacing(8)
@@ -53,6 +81,11 @@ class MonitoringTab(QWidget):
         self._limits = QLabel("Ограничение: —")
         self._limits.setObjectName("limitsLabel")
         self._limits.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._limits.setToolTip(
+            "Активный лимитер прямо сейчас: Power / Temperature / Current / Voltage / "
+            "Utilization Limited — что именно мешает карте держать частоту. «Нет» — "
+            "ничего не ограничивает."
+        )
 
         self._chart = LiveChart(window_s=300)
         self._chart.setMinimumHeight(220)
@@ -61,9 +94,13 @@ class MonitoringTab(QWidget):
         chart_row.addWidget(QLabel("График (°C / % слева, МГц справа, окно 5 мин):"))
         chart_row.addStretch(1)
 
+        hint = QLabel("Наведите на карточку — подсказка; клик по карточке — подробное окно.")
+        hint.setObjectName("hintLabel")
+
         lay = QVBoxLayout(self)
         lay.addLayout(grid)
         lay.addWidget(self._limits)
+        lay.addWidget(hint)
         lay.addLayout(chart_row)
         lay.addWidget(self._chart, stretch=1)
 
