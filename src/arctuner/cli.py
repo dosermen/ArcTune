@@ -60,6 +60,13 @@ def cmd_telemetry(args: argparse.Namespace) -> int:
         "gpu_power_percent",
         "gpu_power_w",
         "card_power_w",
+        "vram_power_w",
+        "gpu_vr_temp_c",
+        "vram_vr_temp_c",
+        "sa_vr_temp_c",
+        "vram_read_bandwidth_mbps",
+        "vram_write_bandwidth_mbps",
+        "gpu_over_voltage_percent",
         "vram_eff_freq_mbps",
         "vram_voltage_v",
         "vram_temp_c",
@@ -79,6 +86,13 @@ def cmd_telemetry(args: argparse.Namespace) -> int:
             "gpu_power_percent": t.gpu_power_percent,
             "gpu_power_w": t.gpu_power_w,
             "card_power_w": t.card_power_w,
+            "vram_power_w": t.vram_power_w,
+            "gpu_vr_temp_c": t.gpu_vr_temp_c,
+            "vram_vr_temp_c": t.vram_vr_temp_c,
+            "sa_vr_temp_c": t.sa_vr_temp_c,
+            "vram_read_bandwidth_mbps": t.vram_read_bandwidth_mbps,
+            "vram_write_bandwidth_mbps": t.vram_write_bandwidth_mbps,
+            "gpu_over_voltage_percent": t.gpu_over_voltage_percent,
             "vram_eff_freq_mbps": t.vram_eff_freq_mbps,
             "vram_voltage_v": t.vram_voltage_v,
             "vram_temp_c": t.vram_temp_c,
@@ -131,8 +145,24 @@ def cmd_telemetry(args: argparse.Namespace) -> int:
                     print("  Вт: считаются из счётчика энергии — появятся со 2-го тика (--watch).")
                 print(
                     f"  Память: {_fmt(t.vram_eff_freq_mbps, ' Гбит/с'):>12}  "
-                    f"{_fmt(t.vram_voltage_v, ' В'):>8}  {_fmt(t.vram_temp_c, ' °C'):>7}"
+                    f"{_fmt(t.vram_voltage_v, ' В'):>8}  {_fmt(t.vram_temp_c, ' °C'):>7}  "
+                    f"{_fmt(t.vram_power_w, ' Вт')}"
                 )
+                bw = (
+                    f"чтение {_fmt(t.vram_read_bandwidth_mbps, ' МБ/с')}  "
+                    f"запись {_fmt(t.vram_write_bandwidth_mbps, ' МБ/с')}"
+                )
+                print(f"  Память, фактическая скорость: {bw}")
+                vr = "/".join(
+                    "—" if v is None else f"{v:.0f}"
+                    for v in (t.gpu_vr_temp_c, t.vram_vr_temp_c, t.sa_vr_temp_c)
+                )
+                over = (
+                    f"  надбавка напряжения {_fmt(t.gpu_over_voltage_percent, ' %')}"
+                    if t.gpu_over_voltage_percent is not None
+                    else ""
+                )
+                print(f"  VR-фазы (ядро/память/SA): {vr} °C{over}")
                 print(f"\n  Ограничение: {t.limit_summary()}")
 
                 if csv_path:
@@ -470,6 +500,7 @@ def cmd_log(args: argparse.Namespace) -> int:
         if e.note:
             print(f"      {e.note}")
     print("\nОткат: python -m arctuner log --rollback")
+    return 0  # иначе main() падает на int(None) — TypeError после печати
 
 
 # Карта полей → функции восстановления (для rollback).

@@ -38,9 +38,10 @@ class PowerMeter:
     """Считает среднюю мощность в ваттах дифференциацией счётчиков энергии (Дж).
 
     В структуре ctl_power_telemetry_t нет мгновенной строки «Вт» — есть только
-    накопительные счётчики энергии (gpuEnergyCounter / totalCardEnergyCounter).
-    Отношение ΔE/Δt за интервал опроса даёт честную среднюю мощность без
-    «ручных» конверсий из процентов (проценты зависят от текущего лимита).
+    накопительные счётчики энергии (gpuEnergyCounter / vramEnergyCounter /
+    totalCardEnergyCounter). Отношение ΔE/Δt за интервал опроса даёт честную
+    среднюю мощность без «ручных» конверсий из процентов (проценты зависят от
+    текущего лимита).
 
     Поведение:
       - первый снимок — базовая точка, ватт ещё нет (None);
@@ -58,12 +59,13 @@ class PowerMeter:
         # (t_monotonic, joules) последней базы расчёта на каждый счётчик
         self._gpu: tuple[float, float] | None = None
         self._card: tuple[float, float] | None = None
+        self._vram: tuple[float, float] | None = None
 
     def enrich(self, snap: TelemetrySnapshot, t: float | None = None) -> TelemetrySnapshot:
-        """Возвращает копию снимка с заполненными gpu_power_w / card_power_w.
+        """Возвращает копию снимка с заполненными gpu/card/vram_power_w.
 
         Args:
-            snap: снимок от read_power_telemetry (с сырьём gpu/card_energy_counter_j).
+            snap: снимок от read_power_telemetry (с сырьём *_energy_counter_j).
             t: метка времени (monotonic); по умолчанию — текущий момент. В тестах
                 передаётся явно, в проде — всегда time.monotonic().
 
@@ -73,7 +75,8 @@ class PowerMeter:
         now = time.monotonic() if t is None else t
         gpu_w, self._gpu = self._step(self._gpu, now, snap.gpu_energy_counter_j)
         card_w, self._card = self._step(self._card, now, snap.card_energy_counter_j)
-        return replace(snap, gpu_power_w=gpu_w, card_power_w=card_w)
+        vram_w, self._vram = self._step(self._vram, now, snap.vram_energy_counter_j)
+        return replace(snap, gpu_power_w=gpu_w, card_power_w=card_w, vram_power_w=vram_w)
 
     def _step(
         self,

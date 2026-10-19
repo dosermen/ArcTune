@@ -345,6 +345,30 @@ def test_monitoring_shows_watts_when_available(qapp, snapshot: TelemetrySnapshot
     assert tab._power._value.text() == "70 %"
 
 
+def test_monitoring_vram_watts_and_vr_temps(qapp, snapshot: TelemetrySnapshot) -> None:
+    """Ватты памяти + VR-фазы (ядра/память/SA) приходят из нового снимка."""
+    from dataclasses import replace
+
+    tab = MonitoringTab()
+    tab.on_telemetry(
+        replace(
+            snapshot,
+            vram_power_w=3.0,
+            gpu_vr_temp_c=40.0,
+            vram_vr_temp_c=53.0,
+            sa_vr_temp_c=43.0,
+        )
+    )
+    assert tab._vram_power._value.text() == "3 Вт"
+    assert tab._gpu_vr._value.text() == "40 °C"
+    assert tab._vram_vr._value.text() == "53 °C"
+    assert tab._sa_vr._value.text() == "43 °C"
+    # Без данных (старый драйвер / первый тик) — честное «—», не нули.
+    tab.on_telemetry(snapshot)
+    assert tab._vram_power._value.text() == "—"
+    assert tab._gpu_vr._value.text() == "—"
+
+
 def test_fans_tab_refresh_button_fires_signal(qapp) -> None:
     """Кнопка «Обновить» перечитывает RPM (после записи RPM не проходил по сигналу)."""
     tab = FansTab()

@@ -95,6 +95,23 @@ class TelemetrySnapshot:
     # (PowerMeter), в api — всегда None (низкий слой не считает сам).
     gpu_power_w: float | None = None
     card_power_w: float | None = None
+    # VR-температуры (Version > 0 структуры; на живой B580 supported). Это
+    # температуры фаз питания: перегрев VRM — ограничитель, датчики ядра/памяти
+    # его не показывают.
+    gpu_vr_temp_c: float | None = None
+    vram_vr_temp_c: float | None = None
+    sa_vr_temp_c: float | None = None
+    # Фактическая пропускная способность памяти (units BANDWIDTH_MBPS) —
+    # полезна при разгоне памяти: прирост виден сразу, без бенчмарка.
+    vram_read_bandwidth_mbps: float | None = None
+    vram_write_bandwidth_mbps: float | None = None
+    # Надбавка напряжения VRM ядра (%) — полнота использования разрешённого
+    # бюджета при ундервольте/разгоне.
+    gpu_over_voltage_percent: float | None = None
+    # Счётчик энергии памяти (Дж) → ватты памяти считает PowerMeter (ΔE/Δt).
+    vram_energy_counter_j: float | None = None
+    # Средняя мощность памяти (Вт); заполняется PowerMeter, в api — None.
+    vram_power_w: float | None = None
 
     def limit_summary(self) -> str:
         """Человекочитаемая строка причин ограничения."""
@@ -312,7 +329,32 @@ class IgclApi:
             activity_counter=self._read_counter(tel.globalActivityCounter),
             gpu_energy_counter_j=self._read_energy(tel.gpuEnergyCounter),
             card_energy_counter_j=self._read_energy(tel.totalCardEnergyCounter),
+            gpu_vr_temp_c=self._read_unit_value(tel.gpuVrTemp, T.CtlUnits.TEMPERATURE_CELSIUS),
+            vram_vr_temp_c=self._read_unit_value(tel.vramVrTemp, T.CtlUnits.TEMPERATURE_CELSIUS),
+            sa_vr_temp_c=self._read_unit_value(tel.saVrTemp, T.CtlUnits.TEMPERATURE_CELSIUS),
+            vram_read_bandwidth_mbps=self._read_unit_value(
+                tel.vramReadBandwidth, T.CtlUnits.BANDWIDTH_MBPS
+            ),
+            vram_write_bandwidth_mbps=self._read_unit_value(
+                tel.vramWriteBandwidth, T.CtlUnits.BANDWIDTH_MBPS
+            ),
+            gpu_over_voltage_percent=self._read_unit_value(
+                tel.gpuOverVoltagePercent, T.CtlUnits.PERCENT
+            ),
+            vram_energy_counter_j=self._read_energy(tel.vramEnergyCounter),
         )
+
+    @staticmethod
+    def _read_unit_value(item: T.CtlOcTelemetryItem, units: int) -> float | None:
+        """Читает элемент телеметрии как float только при ожидаемых единицах.
+
+        Проверка units защищает от «сырых» чисел неизвестного масштаба: если
+        драйвер отдаёт поле в других единицах (или не поддерживает) — None,
+        а не обрезанное/переведённое на глаз значение.
+        """
+        if not item.bSupported or item.units != units:
+            return None
+        return T.read_item_value(item)
 
     @staticmethod
     def _read_energy(item: T.CtlOcTelemetryItem) -> float | None:
@@ -321,9 +363,7 @@ class IgclApi:
         Возвращаем голое накопительное значение: расчёт мощности (ΔE/Δt) делает
         слой telemetry, низкий слой только честно повторяет структуру драйвера.
         """
-        if not item.bSupported or item.units != T.CtlUnits.ENERGY_JOULES:
-            return None
-        return T.read_item_value(item)
+        return IgclApi._read_unit_value(item, T.CtlUnits.ENERGY_JOULES)
 
     @staticmethod
     def _read_counter(item: T.CtlOcTelemetryItem) -> int | None:

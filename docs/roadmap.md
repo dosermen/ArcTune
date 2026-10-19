@@ -22,6 +22,12 @@
 - **Ватты из счётчиков энергии**: `gpuEnergyCounter`/`totalCardEnergyCounter`
   supported (единицы = Дж); средняя мощность = ΔE/Δt. На живой карте:
   GPU ~68 Вт, вся карта ~120 Вт при 65 % от лимита питания
+- **Ватты памяти** (`vramEnergyCounter`, Дж) — тем же PowerMeter: на живой
+  карте idle ~7 Вт; **VR-фазы** (ядро/память/SA) ≈ 52/64/55 °C idle;
+  **фактическая пропускная способность памяти** (vramRead/WriteBandwidth,
+  units BANDWIDTH_MBPS): 1703/252 МБ/с в покое; надбавка напряжения 0 %
+  (`gpuOverVoltagePercent`). Слово Counter у bandwidth-полей — unsupported,
+  работающие поля без префикса Counter (живой прогон 2026-10-19)
 
 ### Обёрнуто IGCL API (22 функции)
 
@@ -127,13 +133,17 @@ PCIe/firmware (4), домены (3), GpuLock (2), дисплей (~80, вне sc
 
 #### 3.1 Быстрая реализация (уже читаются, нужно только извлечь)
 
-- [ ] **Поля `vram*Limited` (power/temp/current/voltage/utilization)** — 5 флагов
-      из `CtlPowerTelemetry`, которые драйвер уже заполняет; показывают «в чём
-      упёрлась память» — диагностический ключ (извлекать в `TelemetrySnapshot`)
-- [ ] **`vramEnergyCounter`** — Вт памяти (считается аналогично gpu/totalCard)
-- [ ] **`vramRead/WriteBandwidthCounter`** — пропускная способность чтения/записи
-- [ ] **`renderComputeActivityCounter` / `mediaActivityCounter`** — детализация
-      активности CPU/GPU (тоже уже читаются `globalActivityCounter`)
+- [x] **Поля телеметрии извлечены** (живой B580): Вт памяти (`vramEnergyCounter`
+      → `vram_power_w` через PowerMeter), VR-фазы `gpuVrTemp`/`vramVrTemp`/
+      `saVrTemp` (перегрев питания не виден по датчикам ядра/памяти),
+      фактическая скорость памяти `vramReadBandwidth`/`vramWriteBandwidth`
+      (units BANDWIDTH_MBPS), надбавка напряжения `gpuOverVoltagePercent`.
+      Путь: snapshot → CSV (+7 колонок) → CLI → карточки GUI
+      (Память Вт; VR ядра/памяти/SA). Флаги `vram*Limited` проверены живым:
+      deprecated, всегда false — «в чём упёрлась память» драйвер не сообщает
+- [ ] `renderComputeActivityCounter`/`mediaActivityCounter` — поддержка есть
+      (живой прогон), но единицы — секунды (TIME_SECONDS), не тики;
+      полезность «сколько карта считала за всё время» ниже прочего — отложено
 - [ ] **Границы VF-кривой** — `gpuVFCurveVoltageLimit` / `gpuVFCurveFrequencyLimit`
       уже читаются `read_oc_properties()`, но скрыты в CLI/GUI
 
@@ -176,8 +186,9 @@ PCIe/firmware (4), домены (3), GpuLock (2), дисплей (~80, вне sc
 
 ### Мелкие правки (chore)
 
-- [ ] **Баг: `arctune log` без `--rollback` падает с TypeError** — `cmd_log` не
-      делает `return`, `main()` получает `None` (печать проходит, падение после)
+- [x] **Баг: `arctune log` без `--rollback` падал с TypeError** — `cmd_log` не
+      делал `return`, `main()` падал на `int(None)`; исправлено, проверено на
+      живой карте (EXIT=0)
 - [ ] Мёртвый флаг `telemetry --once` — удалить или задействовать
 - [ ] `development.md` описывает несуществующий `telemetry --verbose`
 - [ ] Устаревшие пометки «(TODO)» у autofind в README.md / architecture.md

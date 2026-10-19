@@ -13,7 +13,11 @@ from arctuner.igcl.api import TelemetrySnapshot
 from arctuner.telemetry import PowerMeter
 
 
-def _snap(gpu_j: float | None = None, card_j: float | None = None) -> TelemetrySnapshot:
+def _snap(
+    gpu_j: float | None = None,
+    card_j: float | None = None,
+    vram_j: float | None = None,
+) -> TelemetrySnapshot:
     """Минимальный снимок: нужны только счётчики энергии."""
     return TelemetrySnapshot(
         gpu_voltage_v=1.0,
@@ -31,6 +35,7 @@ def _snap(gpu_j: float | None = None, card_j: float | None = None) -> TelemetryS
         activity_counter=0,
         gpu_energy_counter_j=gpu_j,
         card_energy_counter_j=card_j,
+        vram_energy_counter_j=vram_j,
     )
 
 
@@ -39,6 +44,7 @@ def test_first_sample_is_baseline_only() -> None:
     out = PowerMeter().enrich(_snap(gpu_j=1000.0), t=0.0)
     assert out.gpu_power_w is None
     assert out.card_power_w is None
+    assert out.vram_power_w is None
 
 
 def test_watts_from_energy_delta() -> None:
@@ -86,6 +92,27 @@ def test_unsupported_counter_stays_none() -> None:
     out = meter.enrich(_snap(gpu_j=None, card_j=1200.0), t=1.0)
     assert out.gpu_power_w is None
     assert out.card_power_w == pytest.approx(200.0)
+
+
+def test_vram_watts_from_energy_delta() -> None:
+    """Память считается тем же правилом: 12 Дж за 4 с = 3 Вт (3 канала VR)."""
+    meter = PowerMeter()
+    meter.enrich(_snap(vram_j=1000.0), t=0.0)
+    out = meter.enrich(_snap(vram_j=1012.0), t=4.0)
+    assert out.vram_power_w == pytest.approx(3.0)
+
+
+def test_new_fields_default_none() -> None:
+    """VR-температуры/bandwidth/надбавка — None по умолчанию: api не выдумывает."""
+    snap = _snap()
+    assert snap.gpu_vr_temp_c is None
+    assert snap.vram_vr_temp_c is None
+    assert snap.sa_vr_temp_c is None
+    assert snap.vram_read_bandwidth_mbps is None
+    assert snap.vram_write_bandwidth_mbps is None
+    assert snap.gpu_over_voltage_percent is None
+    assert snap.vram_energy_counter_j is None
+    assert snap.vram_power_w is None
 
 
 def test_snapshot_watts_default_none() -> None:

@@ -32,16 +32,23 @@ class MonitoringTab(QWidget):
         self._vram_freq = MetricCard("Память", "Гбит/с")
         self._vram_voltage = MetricCard("Память, V", "В")
         self._vram_temp = MetricCard("Память, T", "°C")
+        self._vram_power = MetricCard("Память, Вт", "Вт")
+
         self._activity = MetricCard("Активность", "счётчик")
+        self._gpu_vr = MetricCard("VR ядра", "°C")
+        self._vram_vr = MetricCard("VR памяти", "°C")
+        self._sa_vr = MetricCard("VR SA", "°C")
 
         grid = QGridLayout()
         grid.setSpacing(8)
         for col, card in enumerate((self._freq, self._voltage, self._temp, self._power)):
             grid.addWidget(card, 0, col)
         for col, card in enumerate(
-            (self._vram_freq, self._vram_voltage, self._vram_temp, self._activity)
+            (self._vram_freq, self._vram_voltage, self._vram_temp, self._vram_power)
         ):
             grid.addWidget(card, 1, col)
+        for col, card in enumerate((self._activity, self._gpu_vr, self._vram_vr, self._sa_vr)):
+            grid.addWidget(card, 2, col)
 
         self._limits = QLabel("Ограничение: —")
         self._limits.setObjectName("limitsLabel")
@@ -76,6 +83,12 @@ class MonitoringTab(QWidget):
         self._vram_freq.set_value(snap.vram_eff_freq_mbps, digits=2)
         self._vram_voltage.set_value(snap.vram_voltage_v, digits=3)
         self._vram_temp.set_value(snap.vram_temp_c)
+        # Ватты памяти — тот же PowerMeter, третий счётчик; до второго тика — «—».
+        self._vram_power.set_value(snap.vram_power_w)
+        # VR-температуры: перегрев фаз питания не виден по датчикам ядра/памяти.
+        self._gpu_vr.set_value(snap.gpu_vr_temp_c)
+        self._vram_vr.set_value(snap.vram_vr_temp_c)
+        self._sa_vr.set_value(snap.sa_vr_temp_c)
         # Счётчик активности — int64, растёт всё время работы драйвера: сырой
         # 13-значный номер нечитаем, разделяем разряды пробелами.
         counter = snap.activity_counter
