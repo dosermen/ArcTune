@@ -278,15 +278,23 @@ class IgclApi:
 
     def initialize(self) -> None:
         """ctlInit — инициализация API. Требует USE_LEVEL_ZERO для телеметрии."""
-        args = T.CtlInitArgs()
-        args.Size = ctypes.sizeof(T.CtlInitArgs)
-        args.Version = 0
-        args.AppVersion = T.ctl_make_version(T.CTL_IMPL_MAJOR_VERSION, T.CTL_IMPL_MINOR_VERSION)
-        args.flags = T.CTL_INIT_FLAG_USE_LEVEL_ZERO
-        args.SupportedVersion = 0
-        handle = CtlApiHandle()
-        _check(self.loader.dll.ctlInit(ctypes.byref(args), ctypes.byref(handle)), "ctlInit")
-        self._api = handle.value
+        # Проверка: функция может отсутствовать в старых драйверах.
+        if not self.loader.has("ctlInit"):
+            raise IgclError(
+                T.CtlResult.ERROR_NOT_SUPPORTED,
+                "ctlInit отсутствует в загруженной библиотеке — "
+                "обновите драйвер Intel Arc (32.0.101.9xxx+)",
+            )
+        if self.loader.has("ctlClose"):
+            args = T.CtlInitArgs()
+            args.Size = ctypes.sizeof(T.CtlInitArgs)
+            args.Version = 0
+            args.AppVersion = T.ctl_make_version(T.CTL_IMPL_MAJOR_VERSION, T.CTL_IMPL_MINOR_VERSION)
+            args.flags = T.CTL_INIT_FLAG_USE_LEVEL_ZERO
+            args.SupportedVersion = 0
+            handle = CtlApiHandle()
+            _check(self.loader.dll.ctlInit(ctypes.byref(args), ctypes.byref(handle)), "ctlInit")
+            self._api = handle.value
 
     def shutdown(self) -> None:
         """ctlClose — освобождение handle API."""

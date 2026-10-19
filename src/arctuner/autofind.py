@@ -77,6 +77,9 @@ def _wait_for_load(api: IgclApi, handle, timeout: float) -> bool:
     """Ждёт появления нагрузки GPU (дельта activity_counter > 0). Возвращает True, если есть."""
     if timeout <= 0:
         t1 = api.read_power_telemetry(handle)
+        # Небольшая пауза между двумя чтениями — activity_counter может обновляться
+        # не мгновенно (зависит от драйвера). Без задержки t1 == t2 при idle GPU.
+        time.sleep(0.1)
         t2 = api.read_power_telemetry(handle)
         return bool(
             t1.activity_counter is not None
@@ -106,12 +109,14 @@ def _guard_failed(t: TelemetrySnapshot, cfg: AutofindConfig, under_load: bool) -
 
 def _set_value(api: IgclApi, handle, cfg: AutofindConfig, value: float) -> None:
     """Применяет итерационное значение через tuner (двухуровневая проверка)."""
-    if cfg.mode == MODE_UNDERVOLT:
-        set_gpu_voltage_offset(api, handle, value)
-    elif cfg.mode == MODE_FREQUENCY:
-        from arctuner.tuner import set_gpu_freq_offset
+    # MODE_FREQUENCY (настройка частоты) не вызывается из CLI/GUI —
+    # только из скриптов напрямую; импорт здесь намеренно ленивый.
+    if cfg.mode == MODE_FREQUENCY:
+        from arctuner.tuner import set_gpu_freq_offset as _freq
 
-        set_gpu_freq_offset(api, handle, value)
+        _freq(api, handle, value)
+    elif cfg.mode == MODE_UNDERVOLT:
+        set_gpu_voltage_offset(api, handle, value)
     else:
         raise SafetyLimitError(f"неизвестный режим autofind: {cfg.mode}")
 

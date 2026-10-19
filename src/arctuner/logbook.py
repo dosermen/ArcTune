@@ -127,8 +127,13 @@ class Logbook:
 
 
 def default_logbook_path() -> Path:
-    """Путь журнала по умолчанию (учитывает переменную ARCTUNE_LOG для тестов)."""
+    """Путь журнала по умолчанию (учитывает ARCTUNE_LOG для тестов/продоки).
+
+    Если ARCTUNE_LOG установлен — расширяем до абсолютного пути,
+    но не валидируем расширение (доверенная переменная окружения).
+    По умолчанию: ~/.arctune/logbook.jsonl.
+    """
     override = os.environ.get("ARCTUNE_LOG")
     if override:
-        return Path(override)
+        return Path(override).resolve()
     return DEFAULT_LOG_DIR / DEFAULT_LOG_NAME

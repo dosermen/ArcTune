@@ -212,7 +212,16 @@ def current_values(api: IgclApi, handle) -> dict[str, float | None]:
 
 # Небольшие хелперы, чтобы не тянуть ctypes в публичный интерфейс.
 def _api_call(api: IgclApi, func_name: str, handle, p_out) -> None:
-    """Вызывает V2 Get-функцию (handle, double*) и проверяет результат."""
+    """Вызывает V2 Get-функцию (handle, double*) и проверяет результат.
+
+    Raises:
+        IgclError: если функция отсутствует в DLL или вернула не-SUCCESS.
+    """
+    if not api.loader.has(func_name):
+        raise IgclError(
+            T.CtlResult.ERROR_NOT_SUPPORTED,
+            f"{func_name} не поддерживается в текущей версии IGCL",
+        )
     fn = getattr(api.loader.dll, func_name)
     fn.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_double)]
     fn.restype = ctypes.c_uint32

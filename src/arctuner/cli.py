@@ -48,7 +48,7 @@ def cmd_telemetry(args: argparse.Namespace) -> int:
     import time
     from pathlib import Path
 
-    from arctuner.igcl.api import IgclApi, IgclError
+    from arctuner.igcl.api import IgclApi
     from arctuner.replay import IncidentReplay
     from arctuner.telemetry import PowerMeter, find_arc_adapter
 
@@ -195,8 +195,8 @@ def cmd_telemetry(args: argparse.Namespace) -> int:
         if replay is not None and replay.samples:
             path = replay.dump("manual_interrupt")
             print(f"Реплей инцидента сохранён по Ctrl+C: {path}")
-    except IgclError as e:
-        print(f"[FAIL] {e}")
+    except Exception as exc:
+        print(f"[UNEXPECTED] {exc}  ({type(exc).__module__}.{type(exc).__name__})")
         return 1
     return 0
 
@@ -285,8 +285,12 @@ def cmd_set(args: argparse.Namespace) -> int:
                 "    ℹ️ Будет вызван ctlOverclockWaiverSet — Intel требует его для записи"
                 " напряжения/отрицательной частоты (принятие риска снижения срока службы)."
             )
-        answer = input("Подтвердить запись? [y/N]: ").strip().lower()
-        if answer not in ("y", "yes", "д", "да"):
+        try:
+            answer = input("Подтвердить запись? [y/N]: ")
+        except EOFError:
+            print("\nНеожиданный конец ввода — отмена записи.")
+            return 1
+        if answer.strip().lower() not in ("y", "yes", "д", "да"):
             print("Отменено — ничего не записано.")
             return 1
 
@@ -324,6 +328,9 @@ def cmd_set(args: argparse.Namespace) -> int:
         return 1
     except IgclError as e:
         print(f"[FAIL] {e}")
+        return 1
+    except Exception as exc:
+        print(f"[UNEXPECTED] {exc}  ({type(exc).__module__}.{type(exc).__name__})")
         return 1
     return 0
 
@@ -382,8 +389,8 @@ def cmd_vf(args: argparse.Namespace) -> int:
                 print_curve(points)
                 if not args.yes:
                     print("\n⚠️  Это ЗАПИШЕТ кастомную кривую V/F (меняет карту).")
-                    ans = input("Подтвердить запись? [y/N]: ").strip().lower()
-                    if ans not in ("y", "yes", "д", "да"):
+                    ans = input("Подтвердить запись? [y/N]: ")
+                    if ans.strip().lower() not in ("y", "yes", "д", "да"):
                         print("Отменено — ничего не записано.")
                         return 1
                 from arctuner.logbook import Logbook, default_logbook_path
@@ -410,6 +417,9 @@ def cmd_vf(args: argparse.Namespace) -> int:
         return 1
     except IgclError as e:
         print(f"[FAIL] {e}")
+        return 1
+    except Exception as exc:
+        print(f"[UNEXPECTED] {exc}  ({type(exc).__module__}.{type(exc).__name__})")
         return 1
     return 0
 
@@ -445,8 +455,12 @@ def cmd_autofind(args: argparse.Namespace) -> int:
         print("  Телеметрия не видит крэши (TDR) — при сбое просто перезагрузите")
         print("  систему, настройки вернутся к дефолту при старте драйвера.")
     if not args.yes:
-        ans = input("\nПродолжить? [y/N]: ").strip().lower()
-        if ans not in ("y", "yes", "д", "да"):
+        try:
+            ans = input("\nПродолжить? [y/N]: ")
+        except EOFError:
+            print("\nНеожиданный конец ввода — отмена autofind.")
+            return 1
+        if ans.strip().lower() not in ("y", "yes", "д", "да"):
             print("Отменено — ничего не записано.")
             return 1
 
@@ -479,6 +493,9 @@ def cmd_autofind(args: argparse.Namespace) -> int:
         return 1
     except (IgclError, SafetyLimitError) as e:
         print(f"\n[FAIL] {e} (выполнен откат)")
+        return 1
+    except Exception as exc:
+        print(f"\n[UNEXPECTED] {exc}  ({type(exc).__module__}.{type(exc).__name__})")
         return 1
     return 0
 
@@ -538,6 +555,9 @@ def cmd_info(_: argparse.Namespace) -> int:
     except IgclError as e:
         print(f"[FAIL] {e}")
         return 1
+    except Exception as exc:
+        print(f"[UNEXPECTED] {exc}  ({type(exc).__module__}.{type(exc).__name__})")
+        return 1
     return 0
 
 
@@ -558,8 +578,8 @@ def cmd_log(args: argparse.Namespace) -> int:
             print("⚠️  Откат к исходным значениям журнала:")
             for k, v in targets.items():
                 print(f"    {k} <- {v}")
-            ans = input("Подтвердить? [y/N]: ").strip().lower()
-            if ans not in ("y", "yes", "д", "да"):
+            ans = input("Подтвердить? [y/N]: ")
+            if ans.strip().lower() not in ("y", "yes", "д", "да"):
                 print("Отменено.")
                 return 1
         try:
@@ -580,6 +600,9 @@ def cmd_log(args: argparse.Namespace) -> int:
                     log.mark_restored(name)
         except IgclError as e:
             print(f"[FAIL] {e}")
+            return 1
+        except Exception as exc:
+            print(f"[UNEXPECTED] {exc}  ({type(exc).__module__}.{type(exc).__name__})")
             return 1
         print("Откат завершён.")
         return 0
@@ -651,8 +674,8 @@ def cmd_fans(args: argparse.Namespace) -> int:
             if args.set is not None:
                 if not args.yes:
                     print(f"\n⚠️  Зафиксировать скорость ВСЕХ вентиляторов на {args.set} RPM?")
-                    ans = input("Подтвердить запись? [y/N]: ").strip().lower()
-                    if ans not in ("y", "yes", "д", "да"):
+                    ans = input("Подтвердить запись? [y/N]: ")
+                    if ans.strip().lower() not in ("y", "yes", "д", "да"):
                         print("Отменено.")
                         return 1
                 for i, f in enumerate(fans):
@@ -688,8 +711,12 @@ def cmd_reset(args: argparse.Namespace) -> int:
         if args.fans:
             what.append("вентиляторы -> авто")
         print(f"⚠️  Сброс: {', '.join(what)}")
-        ans = input("Подтвердить? [y/N]: ").strip().lower()
-        if ans not in ("y", "yes", "д", "да"):
+        try:
+            ans = input("Подтвердить? [y/N]: ")
+        except EOFError:
+            print("\nНеожиданный конец ввода — отмена сброса.")
+            return 1
+        if ans.strip().lower() not in ("y", "yes", "д", "да"):
             print("Отменено.")
             return 1
 
