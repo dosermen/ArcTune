@@ -8,12 +8,12 @@ GpuContext -> tuner.py: там ещё раз проверяются жёстки
 
 from __future__ import annotations
 
-from PySide6.QtCore import QLocale, Signal
+from PySide6.QtCore import QLocale, QObject, Qt, Signal
 from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import (
     QDoubleSpinBox,
+    QGridLayout,
     QGroupBox,
-    QHBoxLayout,
     QLabel,
     QPushButton,
     QVBoxLayout,
@@ -57,12 +57,18 @@ _HARD_MAX: dict[str, float] = {
 _VRAM_NOMINAL = 20.0
 
 
-class _FieldRow(QWidget):
-    """Одна строка: имя, спинбокс в диапазоне IGCL, кнопка «Применить»."""
+class _FieldRow(QObject):
+    """Контроллер одной строки разгона: имя, диапазон, спинбокс, «сейчас», кнопка.
+
+    Не QWidget: виджеты строки раскладывает общая QGridLayout вкладки — так
+    колонки выровнены по всем пунктам (раньше каждый QHBoxLayout тянулся
+    независимо, и середина «плыла»). Имена виджетов (_spin/_range/_current)
+    сохранены — на них завязаны тесты.
+    """
 
     apply_requested = Signal(str, float)  # (поле, значение)
 
-    def __init__(self, field: str, parent: QWidget | None = None) -> None:
+    def __init__(self, field: str, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._field = field
         label, unit = _FIELD_LABELS[field]
@@ -71,6 +77,7 @@ class _FieldRow(QWidget):
         self._name = QLabel(label)
         self._range = QLabel("—")
         self._range.setObjectName("rangeLabel")
+        self._range.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
         self._spin = QDoubleSpinBox()
         self._spin.setDecimals(_DECIMALS[field])
@@ -90,15 +97,12 @@ class _FieldRow(QWidget):
 
         self._current = QLabel("")
         self._current.setObjectName("currentLabel")
+        self._current.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
-        row = QHBoxLayout(self)
-        row.setContentsMargins(0, 2, 0, 2)
-        row.addWidget(self._name, stretch=2)
-        row.addWidget(self._range, stretch=2)
-        row.addWidget(self._spin)
-        row.addWidget(self._unit)
-        row.addWidget(self._current)
-        row.addWidget(self._btn)
+    @property
+    def widgets(self) -> tuple[QWidget, ...]:
+        """Виджеты строки в порядке колонок общей сетки вкладки."""
+        return (self._name, self._range, self._spin, self._unit, self._current, self._btn)
 
     def _required_width(self, info: OcControlInfo | None = None) -> int:
         """Минимальная ширина спинбокса по самому широкому возможному тексту.
@@ -194,19 +198,29 @@ class OverclockTab(QWidget):
         self._rows: dict[str, _FieldRow] = {}
 
         box = QGroupBox("Пункты разгона (диапазоны — из IGCL)")
-        vbox = QVBoxLayout(box)
-        for field in self.FIELDS:
-            row = _FieldRow(field)
+        grid = QGridLayout()
+        grid.setVerticalSpacing(10)
+        for row_index, field in enumerate(self.FIELDS):
+            row = _FieldRow(field, self)
             row.apply_requested.connect(self.apply_requested)
             self._rows[field] = row
-            vbox.addWidget(row)
-        vbox.addWidget(QLabel("* Лимит температуры: драйвер отдаёт units=PERCENT, значения — °C"))
-        vbox.addWidget(
-            QLabel(
-                "* Смещение напряжения: только ПЛЮС (драйвер даёт 0…100); в минус —"
-                " только через кривую V/F (вкладка «V/F»)."
-            )
-        )
+            for column, widget in enumerate(row.widgets):
+                grid.addWidget(widget, row_index, column)
+        # Имя и диапазон тянутся, спинбокс/единицы/кнопки — колонками по факту.
+        grid.setColumnStretch(0, 3)
+        grid.setColumnStretch(1, 2)
+
+        vbox = QVBoxLayout(box)
+        vbox.addLayout(grid)
+        for note_text in (
+            "* Лимит температуры: драйвер отдаёт units=PERCENT, значения — °C",
+            "* Смещение напряжения: только ПЛЮС (драйвер даёт 0…100); в минус —"
+            " только через кривую V/F (вкладка «V/F»).",
+        ):
+            note = QLabel(note_text)
+            note.setObjectName("hintLabel")
+            note.setWordWrap(True)
+            vbox.addWidget(note)
 
         self._reset = QPushButton("⚠️ Сбросить всё к дефолту…")
         self._reset.clicked.connect(self._on_reset)
