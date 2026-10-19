@@ -156,22 +156,45 @@ class AutoTuneTab(QWidget):
             self._state.setText(f"Поиск: {text}")
 
     def display_result(self, result: TuningResult) -> None:
-        """Итог поиска: лучшее стабильное значение, шаги, причина остановки."""
+        """Итог поиска: состояние карты, лучшее стабильное значение, шаги.
+
+        Главное — честно отвечает на «а применилось ли?»: карта либо на
+        конкретном значении (и оно названо), либо предупреждение об откате.
+        """
         self._state.setText(f"Итог: {result.stopped_reason}")
+        lines = [
+            f"Режим {result.mode}: база {result.baseline:+g} → лучший стабильный "
+            f"{result.best_stable:+g} (шагов: {result.steps_taken})"
+        ]
+        if result.card_value is None:
+            lines.append(
+                "⚠ КАРТА НЕ на стабильном значении — откат не удался, "
+                "сбросьте настройки на вкладке «Разгон»"
+            )
+        else:
+            lines.append(
+                f"✓ Карта оставлена на {result.card_value:+g} (сбросится при перезагрузке ОС)"
+            )
+        if result.baseline != 0.0:
+            lines.append(
+                "база ≠ 0: предыдущий разгон остался на карте — поиск шёл от него "
+                "(сброс перед поиском — на вкладке «Разгон»)"
+            )
         rows = [self._format_step(e) for e in result.history[-20:]]
         skipped = len(result.history) - len(rows)
         if skipped > 0:
             rows.insert(0, f"… {skipped} ранних шагов не показаны")
-        self._result.setText(
-            f"Режим {result.mode}: база {result.baseline:g} → лучший стабильный "
-            f"{result.best_stable:g} (шагов: {result.steps_taken})\n"
-            + ("\n".join(rows) if rows else "шагов не было")
-        )
+        lines.append("\n".join(rows) if rows else "шагов не было")
+        self._result.setText("\n".join(lines))
 
     @staticmethod
     def _format_step(entry: dict) -> str:
-        """Строка истории шага; None-датчики не печатаются (не падают)."""
-        parts = [f"шаг {entry.get('step', 0)}: {entry.get('value', 0.0):+g}"]
+        """Строка истории шага; None-датчики не печатаются (не падают).
+
+        Шаг в истории — только ЗАЧИТАННЫЙ (движок пишет после стабильности),
+        поэтому «применён» здесь честно.
+        """
+        parts = [f"шаг {entry.get('step', 0)}: {entry.get('value', 0.0):+g} применён"]
         if entry.get("temp_c") is not None:
             parts.append(f"{entry['temp_c']:.0f}°C")
         if entry.get("power_percent") is not None:

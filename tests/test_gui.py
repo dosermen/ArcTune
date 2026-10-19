@@ -757,10 +757,39 @@ def test_autotune_completed_reaches_tab(qapp) -> None:
         best_stable=54.0,
         steps_taken=2,
         stopped_reason="тест-причина",
+        card_value=54.0,  # карта подтверждённо на best
     )
     win._worker.autotune_completed.emit(fake)
     assert "тест-причина" in win._autotune._state.text()
     assert "54" in win._autotune._result.text()
+    # Итог обязан явно говорить, что на карте («а применилось ли?»).
+    assert "Карта оставлена на +54" in win._autotune._result.text()
+    win.close()
+
+
+def test_autotune_result_warns_when_card_not_on_best(qapp) -> None:
+    """Откат не удался → вкладка ПРЕДУПРЕЖДАЕТ, а не поздравляет с результатом."""
+    from arctuner.autotune.engine import TuningResult
+    from arctuner.gui.window import MainWindow
+
+    win = MainWindow()
+    win._timer.stop()
+    win._thread.quit()
+    win._thread.wait(2000)
+    win._worker.shutdown()
+
+    fake = TuningResult(
+        mode="frequency",
+        baseline=0.0,
+        best_stable=54.0,
+        steps_taken=2,
+        stopped_reason="тест",
+        card_value=None,  # откат не прошёл — состояние неизвестно
+    )
+    win._worker.autotune_completed.emit(fake)
+    text = win._autotune._result.text()
+    assert "НЕ на стабильном" in text
+    assert "Карта оставлена на" not in text
     win.close()
 
 

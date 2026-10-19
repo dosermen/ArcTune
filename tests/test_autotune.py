@@ -127,6 +127,7 @@ class TestEngineFrequency:
         assert [e["value"] for e in result.history] == [50.0, 90.0, 122.0]
         assert result.stopped_reason == "достигнут лимит шагов"
         assert ctx.values["gpuFrequencyOffset"] == 122.0  # карта на best
+        assert result.card_value == 122.0  # итог подтверждает: на карте best
 
     def test_min_step_boundary_finishes_early(self) -> None:
         """Убывающий шаг дожимает поиск до порога min_step."""
@@ -168,6 +169,7 @@ class TestEngineFrequency:
         assert result.steps_taken == 2
         assert result.best_stable == 90.0
         assert ctx.applied[-1] == 90.0
+        assert result.card_value == 90.0  # итог подтверждает откат к стабильному
         assert "остановлено пользователем" in result.stopped_reason
 
     def test_temp_guard_rolls_back_to_best(self) -> None:
@@ -178,6 +180,7 @@ class TestEngineFrequency:
         assert result.steps_taken == 0
         assert result.best_stable == 0.0
         assert ctx.applied[-1] == 0.0  # откат к базе провалившегося +50
+        assert result.card_value == 0.0  # карта подтверждённо на базе
         assert "температура" in result.stopped_reason
 
     def test_undervolt_blocked_with_hint(self) -> None:
@@ -544,6 +547,29 @@ class TestExceptionSafety:
         ctx = FakeCtx()
         result = TuningEngine(ctx, _cfg(external_cmd="bench.exe", max_steps=1)).run()
         assert result.steps_taken == 1  # результат дошёл целиком
+
+    def test_failed_restore_reports_card_unknown(self) -> None:
+        """Откат и сброс не прошли → card_value=None: вкладка предупредит.
+
+        Итог не имеет права «поздравлять» с best, когда карту не удалось
+        вернуть (драйвер отверг и запись стабильного, и сброс).
+        """
+        from arctuner.tuner import SafetyLimitError
+
+        ctx = FakeCtx(temp=90.0)  # выше потолка → шаг провален → откат к базе
+        orig = ctx.set_freq_offset
+        calls = {"n": 0}
+
+        def flaky(mhz: float) -> object:
+            calls["n"] += 1
+            if calls["n"] > 1:  # кандидат прошёл, откат к базе — отвергнут
+                raise SafetyLimitError("драйвер отверг откат")
+            return orig(mhz)
+
+        ctx.set_freq_offset = flaky  # type: ignore[method-assign]
+        result = TuningEngine(ctx, _cfg()).run()
+        assert result.card_value is None  # состояние карты честно «неизвестно»
+        assert ctx.reset_count == 1  # крайняя мера — полный сброс к дефолту
 
 
 class TestGridSnapping:

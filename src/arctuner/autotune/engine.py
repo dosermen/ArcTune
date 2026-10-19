@@ -135,6 +135,12 @@ class TuningResult:
     stopped_reason: str
     history: list[dict] = field(default_factory=list)
     fitness_history: list[dict] = field(default_factory=list)
+    card_value: float | None = None
+    """Фактическое подтверждённое значение на карте к концу поиска.
+
+    None — откат не удался (драйвер отверг даже сброс): состояние неизвестно,
+    вкладка обязана предупредить, а не «поздравить» с результатом.
+    """
 
     @property
     def improvement(self) -> float:
@@ -186,16 +192,24 @@ class TuningEngine:
         else:
             raise SafetyLimitError(f"неизвестный режим автопоиска: {self._cfg.mode}")
 
-    def _restore(self, value: float) -> None:
+    def _restore(self, value: float) -> bool:
         """Гарантированный откат к значению.
 
         Последняя попытка при невозможности шага — полный сброс к дефолту,
         чтобы не оставить полузадранное состояние (как в autofind.py).
+
+        Returns:
+            False — карта НЕ осталась на value (сброшена к дефолту либо сброс
+            тоже не удался): состояние неизвестно, итог сообщит честно.
         """
         try:
             self._apply(value)
+            return True
         except (IgclError, SafetyLimitError):
+            pass
+        with contextlib.suppress(IgclError, SafetyLimitError):
             self._ctx.reset_oc()
+        return False
 
     def run(
         self,
@@ -250,6 +264,10 @@ class TuningEngine:
         steps_taken = 0
         reason = "достигнут лимит шагов"
         need_restore = False  # карта НЕ на best → нужен откат
+        # Что подтверждённо на карте к концу поиска. best — пока записи шли
+        # штатно; None — откат не удался (драйвер отверг и сброс): вкладка
+        # обязана предупредить, а не «поздравить» с результатом.
+        card_value: float | None = best
         stress: Any | None = None  # внешний процесс нагрузки
 
         if on_status:
@@ -267,6 +285,7 @@ class TuningEngine:
                         stopped_reason=f"не удалось запустить стресс-нагрузчик: {cfg.external_cmd}",
                         history=history,
                         fitness_history=fitness_history,
+                        card_value=baseline,  # карта не тронута
                     )
 
             for i in range(1, cfg.max_steps + 1):
@@ -309,14 +328,14 @@ class TuningEngine:
 
                 if cfg.require_load:
                     if on_status:
-                        on_status(f"шаг {i}: кандидат {candidate:+g} — ожидание нагрузки…")
+                        on_status(f"шаг {i}: применено {candidate:+g} — ожидание нагрузки…")
                     if not loader.verify_stress(
                         ctx.telemetry, interval=0.5, timeout=cfg.load_timeout
                     ):
                         reason = f"нет нагрузки на шаге {i} — стабильность не подтверждена"
                         break
                 elif on_status:
-                    on_status(f"шаг {i}: кандидат {candidate:+g} — замер телеметрии…")
+                    on_status(f"шаг {i}: применено {candidate:+g} — замер телеметрии…")
 
                 snap = ctx.telemetry()
 
@@ -371,8 +390,12 @@ class TuningEngine:
                 # Ошибка отката не перекрывает исходное исключение/результат:
                 # карта проверена tuner'ом, безопасное состояние обеспечит
                 # повторный запуск/сброс (об ошибке отката сообщит канал воркера).
+                restored = False
                 with contextlib.suppress(IgclError, SafetyLimitError):
-                    self._restore(best)
+                    restored = self._restore(best)
+                card_value = best if restored else None
+            else:
+                card_value = best  # карта штатно на последнем стабильном
             if stress is not None:
                 # Остановка нагрузки не должна перекрывать результат/исключение.
                 with contextlib.suppress(OSError, subprocess.TimeoutExpired):
@@ -386,6 +409,7 @@ class TuningEngine:
             stopped_reason=reason,
             history=history,
             fitness_history=fitness_history,
+            card_value=card_value,
         )
 
     def _evaluate_fitness(self, snap: TelemetrySnapshot) -> float | None:

@@ -244,7 +244,9 @@ class GpuWorker(QObject):
             total = getattr(config, "max_steps", 0) or 0
 
             def _on_step(step: int, value: float, snap: object) -> None:
-                self.autotune_progress.emit(step, total, f"кандидат {value:+g}")
+                # Значение УЖЕ применено и проверено — называем его стабильным,
+                # а не «кандидатом» (иначе непонятно, применилось ли вообще).
+                self.autotune_progress.emit(step, total, f"{value:+g} применён, стабилен")
 
             def _on_status(text: str) -> None:
                 # current=0: вкладка покажет статус без «шага» (этап перед шагом).
