@@ -69,6 +69,44 @@ class OcControlInfo:
 
 
 @dataclass(frozen=True)
+class PciStateInfo:
+    """Показания PCI-линка: скорость, ReBAR, адрес (read-only)."""
+
+    gen: int | None  # -1 у драйвера = неизвестно
+    width: int | None
+    max_bandwidth_mbps: float | None  # maxSpeed
+    rebar_supported: bool
+    rebar_enabled: bool
+    address: str  # «домен:шина:устройство.функция»
+
+
+@dataclass(frozen=True)
+class FirmwareInfo:
+    """Имя/версия базовой прошивки ('unknown' = драйвер не определил)."""
+
+    name: str
+    version: str
+
+
+@dataclass(frozen=True)
+class EccStateInfo:
+    """Состояние ECC: поддержка и текущее/отложенное состояние."""
+
+    supported: bool
+    can_control: bool
+    current: str  # «default» / «enabled» / «disabled»
+    pending: str
+
+
+@dataclass(frozen=True)
+class FanConfigInfo:
+    """Текущий режим вентилятора (ctlFanGetConfig)."""
+
+    mode: str  # «default» / «fixed» / «table» / «unknown(N)»
+    fixed_rpm: int | None  # только для fixed-режима
+
+
+@dataclass(frozen=True)
 class TelemetrySnapshot:
     """Снимок телеметрии + причин ограничения."""
 
@@ -534,6 +572,100 @@ class IgclApi:
     def set_fan_default(self, fan: CtlFanHandle) -> None:
         """ctlFanSetDefaultMode — возврат вентилятора к аппаратному режиму."""
         _check(self.loader.dll.ctlFanSetDefaultMode(fan), "ctlFanSetDefaultMode")
+
+    # --- Информация об устройстве (read-only) ---
+
+    @staticmethod
+    def _pci_speed_str(speed: T.CtlPciSpeed) -> tuple[int | None, int | None, float | None]:
+        """Раскладывает ctl_pci_speed_t: (-1 у драйвера = неизвестно) → None."""
+        gen = speed.gen if speed.gen >= 0 else None
+        width = speed.width if speed.width >= 0 else None
+        bw = float(speed.maxBandwidth) if speed.maxBandwidth >= 0 else None
+        return gen, width, bw
+
+    def get_pci_state(self, handle: CtlDeviceHandle) -> PciStateInfo:
+        """ctlPciGetProperties + ctlPciGetState — ген/ширина/полоса/ReBAR."""
+        props = T.CtlPciProperties()
+        props.Size = ctypes.sizeof(T.CtlPciProperties)
+        props.Version = 0
+        _check(
+            self.loader.dll.ctlPciGetProperties(handle, ctypes.byref(props)),
+            "ctlPciGetProperties",
+        )
+        state = T.CtlPciState()
+        state.Size = ctypes.sizeof(T.CtlPciState)
+        state.Version = 0
+        _check(self.loader.dll.ctlPciGetState(handle, ctypes.byref(state)), "ctlPciGetState")
+        gen, width, _bw = self._pci_speed_str(state.speed)
+        _, _, max_bw = self._pci_speed_str(props.maxSpeed)
+        a = props.address
+        addr = f"{a.domain:04x}:{a.bus:02x}:{a.device:02x}.{a.function}"
+        return PciStateInfo(
+            gen=gen,
+            width=width,
+            max_bandwidth_mbps=max_bw / 1_000_000 if max_bw is not None else None,
+            rebar_supported=props.resizable_bar_supported,
+            rebar_enabled=props.resizable_bar_enabled,
+            address=addr,
+        )
+
+    def get_firmware_properties(self, handle: CtlDeviceHandle) -> FirmwareInfo:
+        """ctlGetFirmwareProperties — имя и версия базовой прошивки."""
+        fw = T.CtlFirmwareProperties()
+        fw.Size = ctypes.sizeof(T.CtlFirmwareProperties)
+        fw.Version = 0
+        _check(
+            self.loader.dll.ctlGetFirmwareProperties(handle, ctypes.byref(fw)),
+            "ctlGetFirmwareProperties",
+        )
+        return FirmwareInfo(
+            name=fw.name.decode(errors="replace").rstrip("\x00") or "unknown",
+            version=fw.version.decode(errors="replace").rstrip("\x00") or "unknown",
+        )
+
+    def get_ecc_state(self, handle: CtlDeviceHandle) -> EccStateInfo:
+        """ctlEccGetProperties + ctlEccGetState — статус ECC памяти."""
+        props = T.CtlEccProperties()
+        props.Size = ctypes.sizeof(T.CtlEccProperties)
+        props.Version = 0
+        _check(
+            self.loader.dll.ctlEccGetProperties(handle, ctypes.byref(props)),
+            "ctlEccGetProperties",
+        )
+        state = T.CtlEccStateDesc()
+        state.Size = ctypes.sizeof(T.CtlEccStateDesc)
+        state.Version = 0
+        _check(self.loader.dll.ctlEccGetState(handle, ctypes.byref(state)), "ctlEccGetState")
+        # Возврат ctl_ecc_state_desc_t: current/pending enum int32.
+
+        def ecc_name(v: int) -> str:
+            """Человекочитаемое имя ECC-состояния."""
+            try:
+                return T.CtlEccState(v).name.replace("_", "").lower() or "default"
+            except ValueError:
+                return f"unknown({v})"
+
+        return EccStateInfo(
+            supported=props.isSupported,
+            can_control=props.canControl,
+            current=ecc_name(state.currentEccState),
+            pending=ecc_name(state.pendingEccState),
+        )
+
+    def get_fan_config(self, fan: CtlFanHandle) -> FanConfigInfo:
+        """ctlFanGetConfig — текущий режим вентилятора (default/fixed/table)."""
+        cfg = T.CtlFanConfig()
+        cfg.Size = ctypes.sizeof(T.CtlFanConfig)
+        cfg.Version = 0
+        _check(self.loader.dll.ctlFanGetConfig(fan, ctypes.byref(cfg)), "ctlFanGetConfig")
+        try:
+            mode = T.CtlFanSpeedMode(cfg.mode).name.lower()
+        except ValueError:
+            mode = f"unknown({cfg.mode})"
+        fixed_rpm: int | None = None
+        if mode == "fixed":
+            fixed_rpm = cfg.speedFixed.speed if cfg.speedFixed.speed >= 0 else None
+        return FanConfigInfo(mode=mode, fixed_rpm=fixed_rpm)
 
     # --- Кривая V/F ---
 

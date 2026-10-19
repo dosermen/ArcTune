@@ -337,6 +337,114 @@ class CtlFanSpeed(ctypes.Structure):
     ]
 
 
+class CtlFanSpeedMode(IntEnum):
+    """ctl_fan_speed_mode_t — режим управления скоростью (читается GetConfig)."""
+
+    DEFAULT = 0  # аппаратные установки по умолчанию
+    FIXED = 1  # фиксированное значение
+    TABLE = 2  # таблица температура→скорость
+
+
+class CtlEccState(IntEnum):
+    """ctl_ecc_state_t — состояние ECC памяти."""
+
+    DEFAULT = 0
+    ENABLED = 1
+    DISABLED = 2
+
+
+class CtlEccProperties(ctypes.Structure):
+    """_ctl_ecc_properties_t — поддержка ECC на устройстве."""
+
+    _fields_ = [
+        ("Size", ctypes.c_uint32),
+        ("Version", ctypes.c_uint8),
+        ("isSupported", ctypes.c_bool),
+        ("canControl", ctypes.c_bool),
+    ]
+
+
+class CtlEccStateDesc(ctypes.Structure):
+    """_ctl_ecc_state_desc_t — текущее и отложенное ECC-состояние.
+
+    pending != current означает: смена вступит после перезагрузки.
+    """
+
+    _fields_ = [
+        ("Size", ctypes.c_uint32),
+        ("Version", ctypes.c_uint8),
+        ("currentEccState", ctypes.c_int32),  # ctl_ecc_state_t
+        ("pendingEccState", ctypes.c_int32),  # ctl_ecc_state_t
+    ]
+
+
+class CtlPciSpeed(ctypes.Structure):
+    """_ctl_pci_speed_t — скорость PCI-линка (ген/ширина/полоса)."""
+
+    _fields_ = [
+        ("Size", ctypes.c_uint32),
+        ("Version", ctypes.c_uint8),
+        ("gen", ctypes.c_int32),  # -1 = неизвестно
+        ("width", ctypes.c_int32),  # -1 = неизвестно
+        ("maxBandwidth", ctypes.c_int64),  # Байт/с, -1 = неизвестно
+    ]
+
+
+class CtlPciAddress(ctypes.Structure):
+    """_ctl_pci_address_t — BDF-адрес устройства."""
+
+    _fields_ = [
+        ("Size", ctypes.c_uint32),
+        ("Version", ctypes.c_uint8),
+        ("domain", ctypes.c_uint32),
+        ("bus", ctypes.c_uint32),
+        ("device", ctypes.c_uint32),
+        ("function", ctypes.c_uint32),
+    ]
+
+
+class CtlPciProperties(ctypes.Structure):
+    """_ctl_pci_properties_t — статические PCI-свойства (+ ReBAR)."""
+
+    _fields_ = [
+        ("Size", ctypes.c_uint32),
+        ("Version", ctypes.c_uint8),
+        ("address", CtlPciAddress),
+        ("maxSpeed", CtlPciSpeed),
+        ("resizable_bar_supported", ctypes.c_bool),
+        ("resizable_bar_enabled", ctypes.c_bool),
+    ]
+
+
+class CtlPciState(ctypes.Structure):
+    """_ctl_pci_state_t — текущая скорость PCI-линка."""
+
+    _fields_ = [
+        ("Size", ctypes.c_uint32),
+        ("Version", ctypes.c_uint8),
+        ("speed", CtlPciSpeed),
+    ]
+
+
+#: размер строковых полей firmware-свойств (CTL_FIRMWARE_PROPERTY_STR_SIZE)
+CTL_FIRMWARE_STR_SIZE = 64
+#: reserved-хвост CTL_FIRMWARE_PROPERTY (CTL_MAX_FIRMWARE_PROPERTIES_RESERVED_SIZE)
+CTL_FIRMWARE_RESERVED_SIZE = 16
+
+
+class CtlFirmwareProperties(ctypes.Structure):
+    """_ctl_firmware_properties_t — имя/версия базовой прошивки."""
+
+    _fields_ = [
+        ("Size", ctypes.c_uint32),
+        ("Version", ctypes.c_uint8),
+        ("name", ctypes.c_char * CTL_FIRMWARE_STR_SIZE),  # 'unknown' = не определено
+        ("version", ctypes.c_char * CTL_FIRMWARE_STR_SIZE),
+        ("FirmwareConfig", ctypes.c_uint32),  # ctl_firmware_config_flags_t
+        ("reserved", ctypes.c_char * CTL_FIRMWARE_RESERVED_SIZE),
+    ]
+
+
 class CtlFanTempSpeed(ctypes.Structure):
     """_ctl_fan_temp_speed_t — пара температура/скорость для таблицы."""
 
@@ -370,6 +478,18 @@ class CtlFanProperties(ctypes.Structure):
         ("supportedUnits", ctypes.c_uint32),  # битовая маска 1<<units
         ("maxRPM", ctypes.c_int32),  # -1 = неизвестно
         ("maxPoints", ctypes.c_int32),  # -1 = таблица не поддерживается
+    ]
+
+
+class CtlFanConfig(ctypes.Structure):
+    """_ctl_fan_config_t — текущая конфигурация вентилятора (read-only)."""
+
+    _fields_ = [
+        ("Size", ctypes.c_uint32),
+        ("Version", ctypes.c_uint8),
+        ("mode", ctypes.c_int32),  # ctl_fan_speed_mode_t
+        ("speedFixed", CtlFanSpeed),
+        ("speedTable", CtlFanSpeedTable),  # [out] только для TABLE-режима
     ]
 
 

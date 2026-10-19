@@ -463,6 +463,64 @@ def cmd_autofind(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_info(_: argparse.Namespace) -> int:
+    """PCIe/ReBAR, ECC, прошивка, режимы вентиляторов (read-only)."""
+    from arctuner.igcl.api import IgclApi, IgclError
+    from arctuner.telemetry import find_arc_adapter
+
+    try:
+        with IgclApi() as api:
+            found = find_arc_adapter(api)
+            if not found:
+                print("[FAIL] Дискретная Intel Arc не найдена.")
+                return 1
+            handle, dev = found
+            print(f"Устройство: {dev.name} (0x{dev.device_id:04X})")
+
+            # PCIe — первопричина «разгон не помогает» (x8 вместо x16, ReBAR off).
+            try:
+                pci = api.get_pci_state(handle)
+                print(
+                    f"  PCIe: Gen {pci.gen} x{pci.width}  адрес {pci.address}  "
+                    f"ReBAR: {'вкл' if pci.rebar_enabled else 'ВЫКЛ'}"
+                    + ("" if pci.rebar_supported else " (не поддержан)")
+                )
+            except IgclError as e:
+                print(f"  PCIe: нет данных ({e})")
+
+            # Прошивка: на B580 драйвер отвечает UNKNOWN — честно сообщаем.
+            try:
+                fw = api.get_firmware_properties(handle)
+                print(f"  Прошивка: {fw.name} / {fw.version}")
+            except IgclError as e:
+                print(f"  Прошивка: драйвер не сообщает ({e.code:#010x})")
+
+            # ECC: на consumer-картах обычно UNSUPPORTED_FEATURE.
+            try:
+                ecc = api.get_ecc_state(handle)
+                state = f"{ecc.current}" + (
+                    f" → {ecc.pending} (после перезагрузки)" if ecc.pending != ecc.current else ""
+                )
+                print(f"  ECC: {'вкл' if ecc.current == 'enabled' else 'выкл'} ({state})")
+            except IgclError as e:
+                print(f"  ECC: не поддерживается ({e.code:#010x})")
+
+            # Режимы вентиляторов.
+            fans = api.enum_fans(handle)
+            for i, fan in enumerate(fans):
+                try:
+                    cfg = api.get_fan_config(fan)
+                    speed = api.get_fan_speed(fan)
+                    note = f" (фикс {cfg.fixed_rpm} RPM)" if cfg.fixed_rpm else ""
+                    print(f"  Вентилятор [{i}]: режим {cfg.mode}{note}, {speed} RPM")
+                except IgclError as e:
+                    print(f"  Вентилятор [{i}]: конфиг не читается ({e.code():#010x})")
+    except IgclError as e:
+        print(f"[FAIL] {e}")
+        return 1
+    return 0
+
+
 def cmd_log(args: argparse.Namespace) -> int:
     """Журнал изменений: просмотр истории и откат к исходным значениям."""
     from arctuner.igcl.api import IgclApi, IgclError
@@ -715,6 +773,9 @@ def build_parser() -> argparse.ArgumentParser:
     pf.add_argument("--set", type=int, help="зафиксировать скорость, RPM (⚠️)")
     pf.add_argument("--yes", "-y", action="store_true", help="без подтверждения")
     pf.set_defaults(func=cmd_fans)
+
+    pi = sub.add_parser("info", help="PCIe / ReBAR / ECC / прошивка / режимы вентиляторов")
+    pi.set_defaults(func=cmd_info)
 
     pr = sub.add_parser("reset", help="⚠️ откат к дефолту")
     pr.add_argument("--oc", action="store_true", help="сбросить OC-настройки")

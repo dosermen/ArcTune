@@ -153,11 +153,13 @@ PCIe/firmware (4), домены (3), GpuLock (2), дисплей (~80, вне sc
 
 #### 3.2 Средняя сложность (нужна обёртка 1 функции)
 
-- [ ] **`ctlFanGetConfig`** — текущий режим вентилятора (auto/fixed/table)
-- [ ] **`ctlPciGetState` / `ctlGetFirmwareProperties`** — проверка ReBAR/x16
-      (частая причина «разгон не помогает»), версии firmware/vBIOS
-- [ ] **`ctlEccGetState` / `ctlEccSetState`** — статус ECC, важен при разгоне
-      памяти (ошибки, которые маскируются тестами); также `ctlEccGetProperties`
+- [x] **`ctlFanGetConfig`** — текущий режим вентилятора; на живой B580 работает,
+      виден в `arctune info` (режим default, скорость в RPM)
+- [x] **PCIe / firmware / ECC / режим вентиляторов — команда `arctune info`**
+      (живой B580): PCIe **Gen 4 x8**, ReBAR **вкл**, адрес 0000:03:00.0;
+      Прошивка `ctlGetFirmwareProperties` → UNKNOWN (0x4000000D),
+      ECC `ctlEccGetProperties` → UNSUPPORTED_FEATURE (0x4000000A) —
+      на B580 нет, честно сообщается, а не тянется «на всякий случай»
 - [ ] **`ctlOverclockGpuLockGet/Set`** — фиксация частоты для стабильных бенчей
       (предотращает дрожание буста)
 - [ ] **`ctlEnumFrequencyDomains` / `FrequencyGetState` / `FrequencyGetThrottleTime`**
