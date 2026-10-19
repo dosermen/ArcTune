@@ -17,11 +17,15 @@ from PySide6.QtWidgets import (
 
 from arctuner.gui.charts import VfChart
 from arctuner.gui.widgets import confirm_write
-from arctuner.tuner import VfPoint, validate_vf_curve
+from arctuner.tuner import (
+    SafetyLimitError,
+    VfPoint,
+    validate_vf_curve,
+)
 
 
 class VfTab(QWidget):
-    """Просмотр кривой V/F + экспорт в CSV + запись из CSV (с валидацией)."""
+    """Просмотр кривой V/F + правка точек на графике + CSV-экспорт/импорт (с валидацией)."""
 
     export_requested = Signal(str)  # путь к CSV
     apply_requested = Signal(object)  # list[VfPoint]
@@ -29,10 +33,12 @@ class VfTab(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._points: list[tuple[int, int]] = []
+        self._points: list[tuple[int, int]] = []  # сток с карты
+        self._edited: list[tuple[int, int]] | None = None  # правка на графике
 
         self._chart = VfChart()
         self._chart.setMinimumHeight(260)
+        self._chart.curve_edited.connect(self._on_chart_edit)
 
         self._info = QLabel("Точек: —")
         self._info.setObjectName("hintLabel")
@@ -44,6 +50,13 @@ class VfTab(QWidget):
         self._import_btn.setObjectName("dangerButton")
         self._import_btn.setEnabled(False)  # запись без кривой невозможна
         self._import_btn.clicked.connect(self._on_import)
+        self._apply_chart_btn = QPushButton("Записать из графика…")
+        self._apply_chart_btn.setObjectName("dangerButton")
+        self._apply_chart_btn.setEnabled(False)  # включится после правки точки
+        self._apply_chart_btn.clicked.connect(self._on_apply_chart)
+        self._undo_btn = QPushButton("Отменить правку")
+        self._undo_btn.setEnabled(False)
+        self._undo_btn.clicked.connect(self._on_undo)
         self._refresh_btn = QPushButton("Обновить")
         self._refresh_btn.clicked.connect(self.refresh_requested)
 
@@ -51,12 +64,15 @@ class VfTab(QWidget):
         btns.addWidget(self._refresh_btn)
         btns.addWidget(self._export_btn)
         btns.addWidget(self._import_btn)
+        btns.addWidget(self._apply_chart_btn)
+        btns.addWidget(self._undo_btn)
         btns.addStretch(1)
 
         note = QLabel(
-            "Запись кривой — через CSV (voltage_mv,freq_mhz). До отправки в драйвер "
-            "кривая проходит валидацию: границы 600…1250 мВ / 300…3300 МГц, монотонность "
-            "и совпадение числа точек со стоковой."
+            "Кривую можно править мышью прямо на графике (потяните точку: по вертикали — "
+            "напряжение 600…1250 мВ, по горизонтали — между соседями точек). Запись — "
+            "по кнопке с подтверждением; либо через CSV (voltage_mv,freq_mhz). Перед отправкой "
+            "в драйвер кривая проходит валидацию: границы и монотонность."
         )
         note.setObjectName("hintLabel")
         note.setWordWrap(True)
@@ -70,16 +86,97 @@ class VfTab(QWidget):
     def set_curve(self, points: list[tuple[int, int]]) -> None:
         """Принимает пары (мВ, МГц) от worker'а и рисует кривую."""
         self._points = list(points)
+        self._edited = None
         self._chart.set_curve(self._points)
-        self._info.setText(f"Точек: {len(self._points)}")
+        self._chart.set_editable(bool(points))
+        self._info.setText(f"Точек: {len(self._points)}" if points else "Точек: —")
         self.set_busy(False)
+
+    def edited_points(self) -> list[tuple[int, int]]:
+        """Текущие точки графика (с правкой или без) — для проверки курьером worker'а."""
+        if self._edited is not None:
+            return list(self._edited)
+        return list(self._points)
 
     def set_busy(self, busy: bool) -> None:
         """Воркер занят записью: кнопки блокируются, после — по реальному состоянию."""
         has_points = bool(self._points)
+        self._refresh_btn.setEnabled(not busy)
         self._export_btn.setEnabled(has_points and not busy)
         self._import_btn.setEnabled(has_points and not busy)
-        self._refresh_btn.setEnabled(not busy)
+        self._undo_btn.setEnabled(self._edited is not None and not busy)
+        self._apply_chart_btn.setEnabled(
+            self._edited is not None and not busy and self._edited_is_valid()
+        )
+
+    def _edited_is_valid(self) -> bool:
+        """Правка не нарушает границы/монотонность (клампы должны это гарантировать)."""
+        if self._edited is None:
+            return False
+        try:
+            validate_vf_curve([VfPoint(mv, freq) for mv, freq in self._edited])
+        except SafetyLimitError:
+            return False
+        return bool(self._points) and len(self._edited) == len(self._points)
+
+    def _on_chart_edit(self, pairs: list) -> None:
+        """Живая реакция на правку точки: статус + состояние кнопок."""
+        self._edited = list(pairs)
+        if self._edited == self._points:
+            self._edited = None
+            self._info.setText(f"Точек: {len(self._points)}")
+        elif self._edited_is_valid():
+            self._info.setText(
+                f"Точек: {len(self._edited)} — кривая изменена; запись через «Записать из графика…»"
+            )
+        else:
+            self._info.setText("Правка отклонена валидацией (границы/монотонность)")
+        self.set_busy(False)
+
+    def _on_apply_chart(self) -> None:
+        """Запись правки с графика: валидация → предпросмотр диффа → подтверждение."""
+        pairs = self.edited_points()
+        if not pairs:
+            return
+        points = [VfPoint(mv, freq) for mv, freq in pairs]
+        try:
+            validate_vf_curve(points)
+        except SafetyLimitError as e:
+            self._show_error(f"Кривая отклонена валидацией: {e}")
+            return
+
+        rows = [
+            (p, self._points[i] if i < len(self._points) else None)
+            for i, p in enumerate(points)
+            if i >= len(self._points)
+            or self._points[i][0] != p.voltage_mv
+            or self._points[i][1] != p.freq_mhz
+        ]
+        if not rows:
+            self._show_error("Кривая не изменилась — записывать нечего.")
+            return
+        preview = "\n".join(
+            f"  {p.voltage_mv:g} мВ @ {p.freq_mhz:g} МГц  (сток: {old[0]:g} мВ @ {old[1]:g} МГц)"
+            if old
+            else f"  {p.voltage_mv:g} мВ"
+            for p, old in rows[:8]
+        )
+        if len(rows) > 8:
+            preview += f"\n  … и ещё {len(rows) - 8}"
+        if confirm_write(
+            self.window(),
+            "Запись кривой V/F",
+            [f"изменено точек: {len(rows)} из {len(points)}"],
+            detail=f"Предпросмотр:\n{preview}",
+        ):
+            self.apply_requested.emit(points)
+
+    def _on_undo(self) -> None:
+        """Откат правки: вернуть сток с карты."""
+        self._edited = None
+        self._chart.set_curve(self._points)
+        self._info.setText(f"Точек: {len(self._points)}" if self._points else "Точек: —")
+        self.set_busy(False)
 
     def _on_export(self) -> None:
         path, _ = QFileDialog.getSaveFileName(

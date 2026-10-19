@@ -421,3 +421,109 @@ def test_livechart_axis_grows_beyond_fixed_ranges(qapp) -> None:
     chart.push(3.0, 50.0, 40.0, 2400.0)
     assert chart._axis_right.max() >= 3400.0
     assert chart._axis_left.max() >= 110.0
+
+
+_VF_STOCK = [(700, 400), (800, 1200), (900, 2000), (1100, 3000)]  # (мВ, МГц)
+
+
+def test_vf_chart_edit_point_clamps(qapp) -> None:
+    """Правка точки: кламп по границам проекта и между соседями (монотонность)."""
+    chart = VfChart()
+    chart.set_curve(_VF_STOCK)
+    chart.set_editable(True)
+    got: list[list[tuple[int, int]]] = []
+    chart.curve_edited.connect(lambda pts: got.append(list(pts)))
+    assert chart.editable() is True
+
+    # Y за соседом сверху (900) → 900 (монотонность); X за соседом (2000) → 1999.
+    assert chart.edit_point(1, 5000.0, 3000.0) is True
+    assert got[-1][1] == (900, 1999)
+
+    # Y ниже 600 → 600 (сосед не мешает: 900 сверху); X ниже 300 → 300.
+    assert chart.edit_point(0, -10.0, 100.0) is True
+    assert got[-1][0] == (600, 300)
+
+    # Точку 2 тянут влево за соседа (1999) → 2000: пересечь соседа нельзя.
+    assert chart.edit_point(2, 900.0, 100.0) is True
+    assert got[-1][2] == (900, 2000)
+
+    # Последнюю точку тянут за глобальный максимум → 3300.
+    assert chart.edit_point(3, 1100.0, 4000.0) is True
+    assert got[-1][3] == (1100, 3300)
+
+    # Последнюю точку тянут вниз за соседа слева (900) → 900 по напряжению.
+    assert chart.edit_point(3, 0.0, 3100.0) is True
+    assert got[-1][3] == (900, 3100)
+
+
+def test_vf_chart_edit_disabled(qapp) -> None:
+    """Без editable-режима программная правка запрещена."""
+    chart = VfChart()
+    chart.set_curve(_VF_STOCK)
+    assert chart.editable() is False
+    got: list[list[tuple[int, int]]] = []
+    chart.curve_edited.connect(lambda pts: got.append(pts))
+    assert chart.edit_point(0, 800.0, 500.0) is False
+    assert got == []
+
+
+def test_vf_tab_chart_edit_enables_and_applies(qapp, monkeypatch) -> None:
+    """Правка на графике → кнопка записи активна; подтверждение → apply_requested."""
+    tab = VfTab()
+    tab.set_curve(_VF_STOCK)
+    assert tab._apply_chart_btn.isEnabled() is False
+
+    emitted: list[object] = []
+    tab.apply_requested.connect(emitted.append)
+    monkeypatch.setattr("arctuner.gui.tabs.vf.confirm_write", lambda *a, **k: True)
+
+    # Точку 1 тянут ниже соседа слева (700 мВ) → кламп 700: кривая остаётся монотонной.
+    tab._chart.edit_point(1, 550.0, 1250.0)
+    assert tab._apply_chart_btn.isEnabled() is True
+
+    tab._on_apply_chart()
+    assert len(emitted) == 1
+    points = emitted[0]
+    assert [(p.voltage_mv, p.freq_mhz) for p in points] == [
+        (700.0, 400.0),
+        (700.0, 1250.0),
+        (900.0, 2000.0),
+        (1100.0, 3000.0),
+    ]
+
+
+def test_vf_tab_undo_and_edit_back_to_stock(qapp) -> None:
+    """«Отменить правку» и возврат точки в сток — кнопка записи снова неактивна."""
+    tab = VfTab()
+    tab.set_curve(_VF_STOCK)
+
+    tab._chart.edit_point(1, 600.0, 1250.0)
+    assert tab.edited_points()[1] == (700, 1250)  # кламп по соседу слева (700 мВ)
+
+    tab._on_undo()
+    assert tab.edited_points() == _VF_STOCK
+    assert tab._apply_chart_btn.isEnabled() is False
+
+    # Возврат точки к стоковому значению — правка считается отменённой.
+    tab._chart.edit_point(1, 800.0, 1200.0)
+    assert tab._apply_chart_btn.isEnabled() is False
+
+
+def test_vf_tab_apply_preview_contains_stock(qapp, monkeypatch) -> None:
+    """Предпросмотр записи пишет и новую точку, и стоковую."""
+    tab = VfTab()
+    tab.set_curve(_VF_STOCK)
+    captured: dict[str, str] = {}
+
+    def fake_confirm(parent, title, changes, detail=""):
+        captured["detail"] = detail
+        captured["changes"] = list(changes)
+        return True
+
+    monkeypatch.setattr("arctuner.gui.tabs.vf.confirm_write", fake_confirm)
+
+    tab._chart.edit_point(1, 850.0, 1250.0)
+    tab._on_apply_chart()
+    assert "сток: 800 мВ @ 1200 МГц" in captured["detail"]
+    assert captured["detail"].count("сток") >= 1
+    assert captured["changes"] == ["изменено точек: 1 из 4"]
