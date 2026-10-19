@@ -38,6 +38,7 @@ class GpuWorker(QObject):
     incident_replay = Signal(str)  # записан дамп реплея инцидента (путь к JSONL)
     autotune_progress = Signal(int, int, str)  # current, total, text
     autotune_completed = Signal(object)  # TuningResult
+    autotune_error = Signal(str)  # ошибка процесса авторазгона (не одиночная запись)
 
     #: имя пункта UI -> метод GpuContext (все проходят tuner-проверки)
     _WRITERS: ClassVar[dict[str, Callable[..., WriteReport]]] = {
@@ -249,7 +250,15 @@ class GpuWorker(QObject):
             self.autotune_completed.emit(result)
             self.reload_static()
 
-        self._guarded(run)
+        self.busy_changed.emit(True)
+        try:
+            run()
+        except SafetyLimitError as e:
+            self.autotune_error.emit(f"заблокировано проверкой: {e}")
+        except (IgclError, OSError) as e:
+            self.autotune_error.emit(f"ошибка авторазгона: {e}")
+        finally:
+            self.busy_changed.emit(False)
 
     @Slot()
     def autotune_stop(self) -> None:

@@ -289,6 +289,9 @@ class TuningEngine:
         except KeyboardInterrupt:
             reason = "прервано пользователем (Ctrl+C) — выполнен откат"
             need_restore = True
+            from arctuner.autofind import AutofindAbortError
+
+            raise AutofindAbortError(reason) from None
         finally:
             if need_restore:
                 self._restore(best)

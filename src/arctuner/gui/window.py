@@ -122,7 +122,7 @@ class MainWindow(QMainWindow):
         w.busy_changed.connect(self._on_busy)
         w.incident_replay.connect(self._on_incident)
         w.autotune_progress.connect(self._autotune.update_progress)
-        w.autotune_completed.connect(self._autotune.display_result)
+        w.autotune_error.connect(self._on_autotune_error)
 
     def _wire_tabs(self) -> None:
         o = self._overclock
@@ -270,13 +270,10 @@ class MainWindow(QMainWindow):
         self._set_pill("warn", f"⚠️ {message}")
         QMessageBox.warning(self, "ArcTune — ошибка записи", message)
 
-    def _on_incident(self, path: str) -> None:
-        """Инцидент: счётчик энергии сбросился = драйвер перезагрузился (TDR/ребут).
-
-        Не модально (модальное окно собьёт живые графики в момент самого события),
-        в пилюле danger и надолго; полный путь — в дампе.
-        """
-        self._set_pill("danger", f"🚨 Инцидент (драйвер перезагрузился?) — дамп: {path}")
+    def _on_autotune_error(self, message: str) -> None:
+        """Ошибка процесса авторазгона (не одиночная запись)."""
+        self._set_pill("warn", f"⚠️ авторазгон: {message}")
+        QMessageBox.warning(self, "ArcTune — ошибка авторазгона", message)
 
     def _on_busy(self, busy: bool) -> None:
         """Воркер занят записью: блокируем кнопки записей во вкладках."""

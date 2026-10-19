@@ -92,10 +92,10 @@ class Watchdog:
         act = (prev.activity_counter, snapshot.activity_counter)
         enj = (prev.gpu_energy_counter_j, snapshot.gpu_energy_counter_j)
         if None in act or None in enj:
-            return None  # данных мало — честно не решаем
+            return None  # данных мало — не решаем
         if act[1] > act[0]:  # активность растёт — телеметрия жива
             return None
-        if act[0] > 0 and enj[1] == enj[0]:
+        if act[0] > 0 and abs(enj[1] - enj[0]) < 1e-6:
             return WatchdogEvent(
                 type="TELEMETRY_FROZEN",
                 detail="activity_counter стоит, счётчик энергии не растёт — возможен сбой драйвера",
