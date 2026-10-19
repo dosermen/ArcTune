@@ -18,6 +18,7 @@ from PySide6.QtCore import QObject, QThread, Signal, Slot
 
 from arctuner.gui.context import GpuContext
 from arctuner.igcl.api import IgclError
+from arctuner.replay import IncidentReplay
 from arctuner.tuner import SafetyLimitError, VfPoint, WriteReport
 
 
@@ -34,6 +35,7 @@ class GpuWorker(QObject):
     error = Signal(str)  # ошибка чтения/старта для показа в UI (без диалога)
     write_error = Signal(str)  # ошибка ЗАПИСИ — показывается модально
     busy_changed = Signal(bool)
+    incident_replay = Signal(str)  # записан дамп реплея инцидента (путь к JSONL)
 
     #: имя пункта UI -> метод GpuContext (все проходят tuner-проверки)
     _WRITERS: ClassVar[dict[str, Callable[..., WriteReport]]] = {
@@ -47,6 +49,9 @@ class GpuWorker(QObject):
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._ctx = GpuContext()
+        # Реплей инцидента: буфер создаётся после открытия сессии (нужно имя
+        # устройства). Read-only: ни один звонок реплея не меняет карту.
+        self._replay: IncidentReplay | None = None
 
     # --- жизненный цикл ---
 
@@ -58,6 +63,7 @@ class GpuWorker(QObject):
         except (IgclError, SafetyLimitError, OSError) as e:
             self.error.emit(str(e))
             return
+        self._replay = IncidentReplay(device=info.name)
         self.device_ready.emit(info)
         self.reload_static()
         self.poll_telemetry()
@@ -86,6 +92,24 @@ class GpuWorker(QObject):
             self.error.emit(f"телеметрия: {e}")
             return
         self.telemetry_ready.emit(snap)
+        self._replay_telemetry(snap)
+
+    def _replay_telemetry(self, snap: object) -> None:
+        """Толкает снимок в буфер реплея; при инциденте пишет дамп и извещает UI.
+
+        Сбой дампа не останавливает опрос телеметрии (error-сигнал, без диалога).
+        """
+        if self._replay is None:
+            return
+        try:
+            trigger = self._replay.push(snap)
+            if not trigger:
+                return
+            path = self._replay.dump(trigger)
+            if path is not None:
+                self.incident_replay.emit(str(path))
+        except OSError as e:
+            self.error.emit(f"реплей инцидента: {e}")
 
     @Slot()
     def reload_static(self) -> None:

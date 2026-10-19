@@ -189,6 +189,57 @@ def test_worker_writer_map_covers_all_oc_fields() -> None:
     assert set(GpuWorker._WRITERS) == set(OverclockTab.FIELDS)
 
 
+def test_worker_replay_dumps_on_counter_reset(qapp, tmp_path) -> None:
+    """Poll-цикл воркера держит буфер реплея; сброс счётчика → сигнал с дампом.
+
+    Контекст подменяется фейком: IGCL в тестах не открывается вовсе.
+    """
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from arctuner.gui.worker import GpuWorker
+    from arctuner.igcl.api import TelemetrySnapshot
+    from arctuner.replay import IncidentReplay
+
+    def _snap(energy: float) -> TelemetrySnapshot:
+        return TelemetrySnapshot(
+            gpu_voltage_v=1.0,
+            gpu_freq_mhz=2500.0,
+            gpu_temp_c=55.0,
+            gpu_power_percent=70.0,
+            vram_voltage_v=1.35,
+            vram_eff_freq_mbps=19.75,
+            vram_temp_c=48.0,
+            power_limited=False,
+            temperature_limited=False,
+            current_limited=False,
+            voltage_limited=False,
+            utilization_limited=False,
+            activity_counter=1,
+            gpu_energy_counter_j=energy,
+        )
+
+    worker = GpuWorker()  # без start(): сессия не открывается, IGCL не грузится
+    worker._replay = IncidentReplay(directory=tmp_path, device="B580")
+    worker._ctx = SimpleNamespace(is_open=True, telemetry=lambda: _snap(1000.0))
+
+    incidents: list[str] = []
+    worker.incident_replay.connect(incidents.append)
+
+    worker.poll_telemetry()  # база — инцидента нет
+    assert worker._replay is not None and worker._replay.samples == 1
+    assert incidents == []
+
+    worker._ctx.telemetry = lambda: _snap(900.0)  # счётчик откатился = инцидент
+    worker.poll_telemetry()
+    assert len(incidents) == 1
+    dump = Path(incidents[0])
+    assert dump.exists() and dump.suffix == ".jsonl"
+
+    # Буфер после дампа пуст — счётчик продолжил падать, дамп не дублируется мгновенно.
+    assert worker._replay is not None and worker._replay.samples == 0
+
+
 def test_device_info_is_dataclass() -> None:
     """Smoke: DeviceInfo доступен для статус-бара."""
     assert DeviceInfo.__name__ == "DeviceInfo"

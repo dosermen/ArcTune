@@ -83,6 +83,7 @@ class MainWindow(QMainWindow):
         w.error.connect(self._on_error)
         w.write_error.connect(self._on_write_error)
         w.busy_changed.connect(self._on_busy)
+        w.incident_replay.connect(self._on_incident)
 
     def _wire_tabs(self) -> None:
         o = self._overclock
@@ -180,6 +181,16 @@ class MainWindow(QMainWindow):
         """Ошибка записи — модально: запись не должна пройти молча."""
         self._status.showMessage(f"⚠️ {message}", 15000)
         QMessageBox.warning(self, "ArcTune — ошибка записи", message)
+
+    def _on_incident(self, path: str) -> None:
+        """Инцидент: счётчик энергии сбросился = драйвер перезагрузился (TDR/ребут).
+
+        Не модально (модальное окно собьёт живые графики в момент самого события),
+        но долго: 30 с в статус-баре укороченным сообщением, полный путь — в дампе.
+        """
+        self._status.showMessage(
+            f"🚨 Инцидент (драйвер перезагрузился?) — дамп телеметрии: {path}", 30000
+        )
 
     def _on_busy(self, busy: bool) -> None:
         """Воркер занят записью: блокируем кнопки записей во вкладках."""
