@@ -275,6 +275,14 @@ class MainWindow(QMainWindow):
         self._set_pill("warn", f"⚠️ авторазгон: {message}")
         QMessageBox.warning(self, "ArcTune — ошибка авторазгона", message)
 
+    def _on_incident(self, path: str) -> None:
+        """Инцидент: счётчик энергии сбросился = драйвер перезагрузился (TDR/ребут).
+
+        Не модально (модальное окно собьёт живые графики в момент самого события),
+        в пилюле danger и надолго; полный путь — в дампе.
+        """
+        self._set_pill("danger", f"🚨 Инцидент (драйвер перезагрузился?) — дамп: {path}")
+
     def _on_busy(self, busy: bool) -> None:
         """Воркер занят записью: блокируем кнопки записей во вкладках."""
         self._overclock.set_busy(busy)
