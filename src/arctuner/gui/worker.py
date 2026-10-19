@@ -36,6 +36,8 @@ class GpuWorker(QObject):
     write_error = Signal(str)  # ошибка ЗАПИСИ — показывается модально
     busy_changed = Signal(bool)
     incident_replay = Signal(str)  # записан дамп реплея инцидента (путь к JSONL)
+    autotune_progress = Signal(int, int, str)  # current, total, text
+    autotune_completed = Signal(object)  # TuningResult
 
     #: имя пункта UI -> метод GpuContext (все проходят tuner-проверки)
     _WRITERS: ClassVar[dict[str, Callable[..., WriteReport]]] = {
@@ -217,6 +219,29 @@ class GpuWorker(QObject):
     def apply_vf(self, points: list[VfPoint]) -> None:
         """Пишет кривую V/F. Валидация форма/границы — в tuner.apply_vf_curve."""
         self._guarded(lambda: self._emit_write(self._ctx.apply_vf_curve(points)))
+
+    # --- авторазгон ---
+
+    @Slot(object)
+    def autotune_search(self, config: object) -> None:
+        """Запускает адаптивный поиск авторазгона.
+
+        Выполняется в рабочем потоке. На каждом шаге — прогресс-сигнал.
+        В конце — итоговый TuningResult через сигнал.
+        """
+        from arctuner.autotune.engine import TuningEngine
+
+        def run() -> None:
+            engine = TuningEngine(self._ctx.api, self._ctx.handle, config)
+
+            def _on_step(step: int, value: float, snap: object) -> None:
+                self.autotune_progress.emit(step, step, f"Шаг {step}: {value:.2f}")
+
+            result = engine.run(on_step=_on_step)
+            self.autotune_completed.emit(result)
+            self.reload_static()
+
+        self._guarded(run)
 
     # --- внутренности ---
 

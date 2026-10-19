@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from arctuner.gui.scale import SCALE_CHOICES, load_scale, restart_argv, save_scale
-from arctuner.gui.tabs import FansTab, LogTab, MonitoringTab, OverclockTab, VfTab
+from arctuner.gui.tabs import AutoTuneTab, FansTab, LogTab, MonitoringTab, OverclockTab, VfTab
 from arctuner.gui.theme import apply_theme, flame_icon, load_theme, save_theme
 from arctuner.gui.worker import GpuWorker
 from arctuner.igcl.api import DeviceInfo
@@ -40,6 +40,7 @@ class MainWindow(QMainWindow):
         self._fans = FansTab()
         self._vf = VfTab()
         self._log = LogTab()
+        self._autotune = AutoTuneTab()
         style = self.style()  # иконки вкладок и окна — стандартные Qt, без ресурсов
         self.setWindowIcon(style.standardIcon(QStyle.StandardPixmap.SP_ComputerIcon))
         for index, (widget, icon_kind, name) in enumerate(
@@ -61,6 +62,11 @@ class MainWindow(QMainWindow):
                     "V/F",
                 ),
                 (self._log, style.standardIcon(QStyle.StandardPixmap.SP_FileIcon), "Журнал"),
+                (
+                    self._autotune,
+                    style.standardIcon(QStyle.StandardPixmap.SP_ComputerIcon),
+                    "Авторазгон",
+                ),
             )
         ):
             self._tabs.addTab(widget, name)
@@ -115,6 +121,8 @@ class MainWindow(QMainWindow):
         w.write_error.connect(self._on_write_error)
         w.busy_changed.connect(self._on_busy)
         w.incident_replay.connect(self._on_incident)
+        w.autotune_progress.connect(self._autotune.update_progress)
+        w.autotune_completed.connect(self._autotune.display_result)
 
     def _wire_tabs(self) -> None:
         o = self._overclock
@@ -272,6 +280,7 @@ class MainWindow(QMainWindow):
         self._fans.set_busy(busy)
         self._vf.set_busy(busy)
         self._log.set_busy(busy)
+        self._autotune.set_busy(busy)
 
     def closeEvent(self, event) -> None:  # noqa: N802 — имя Qt API
         """Останавливает опрос и закрывает IGCL-сессию в потоке воркера.
