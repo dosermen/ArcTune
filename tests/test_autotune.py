@@ -194,6 +194,23 @@ class TestEngineFrequency:
         assert profile["passed"] is True
         assert profile["value"] == 100.0
 
+    def test_status_reports_start_and_load_wait(self) -> None:
+        """on_status: старт-статус всегда; при require_load — ожидание нагрузки."""
+        ctx = FakeCtx()
+        statuses: list[str] = []
+        TuningEngine(ctx, _cfg(require_load=True)).run(on_status=statuses.append)
+        assert statuses, "нет статусов — UI будет выглядеть зависшим"
+        assert statuses[0].startswith("старт")
+        assert any("ожидание нагрузки" in s for s in statuses)
+
+    def test_status_without_load(self) -> None:
+        """Без требования нагрузки статусы переходят к замеру телеметрии."""
+        ctx = FakeCtx()
+        statuses: list[str] = []
+        TuningEngine(ctx, _cfg(require_load=False, max_steps=1)).run(on_status=statuses.append)
+        assert statuses[0].startswith("старт")
+        assert any("замер телеметрии" in s for s in statuses)
+
 
 class TestExternalCmd:
     """Внешний нагрузчик: запуск при конфиге и остановка после поиска."""

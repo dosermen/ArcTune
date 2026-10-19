@@ -122,14 +122,19 @@ class AutoTuneTab(QWidget):
 
     def _on_start(self) -> None:
         """Отправляет конфигурацию в воркер (поиск выполняется в его потоке)."""
+        self._state.setText(
+            "Запуск: подготовка поиска… (потребуется нагрузка на GPU, см. примечание выше)"
+        )
         self.search_requested.emit(self._config)
 
     # --- сигналы от worker'а ---
 
     def update_progress(self, current: int, total: int, text: str) -> None:
-        """Живой статус текущего шага (автообновление кнопок — через set_busy)."""
-        pct = f"{current}/{total}" if total > 0 else "; текущий шаг"
-        self._state.setText(f"Поиск: шаг {pct} — {text}")
+        """Живой статус: этапы (current=0) и успешные шаги (current=номер)."""
+        if current > 0 and total > 0:
+            self._state.setText(f"Поиск: шаг {current}/{total} — {text}")
+        else:
+            self._state.setText(f"Поиск: {text}")
 
     def display_result(self, result: TuningResult) -> None:
         """Итог поиска: лучшее стабильное значение, шаги, причина остановки."""

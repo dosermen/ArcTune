@@ -246,7 +246,15 @@ class GpuWorker(QObject):
             def _on_step(step: int, value: float, snap: object) -> None:
                 self.autotune_progress.emit(step, total, f"кандидат {value:+g}")
 
-            result = engine.run(on_step=_on_step, stop_check=lambda: self._autotune_stop)
+            def _on_status(text: str) -> None:
+                # current=0: вкладка покажет статус без «шага» (этап перед шагом).
+                self.autotune_progress.emit(0, total, text)
+
+            result = engine.run(
+                on_step=_on_step,
+                stop_check=lambda: self._autotune_stop,
+                on_status=_on_status,
+            )
             self.autotune_completed.emit(result)
             self.reload_static()
 

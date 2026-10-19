@@ -667,3 +667,49 @@ def test_vf_tab_apply_preview_contains_stock(qapp, monkeypatch) -> None:
     assert "сток: 800 мВ @ 1200 МГц" in captured["detail"]
     assert captured["detail"].count("сток") >= 1
     assert captured["changes"] == ["изменено точек: 1 из 4"]
+
+
+def test_autotune_tab_start_emits_signal(qapp) -> None:
+    """Клик «Запустить» эмитит search_requested с конфигом (цепочка UI → worker)."""
+    from arctuner.autotune.engine import TuningConfig
+    from arctuner.gui.tabs import AutoTuneTab
+
+    tab = AutoTuneTab()
+    emitted: list[object] = []
+    tab.search_requested.connect(lambda cfg: emitted.append(cfg))
+    tab._on_start()
+    assert len(emitted) == 1 and isinstance(emitted[0], TuningConfig)
+
+
+def test_worker_autotune_slot_closed_session_channel(qapp) -> None:
+    """Слот жив: на закрытой сессии ошибка идёт в autotune_error, не в write_error.
+
+    Проверяет также busy-исход (True в начале, False в конце) — иначе вкладка
+    навсегда остаётся заблокированной после неудачного запуска.
+    """
+    from arctuner.autotune.engine import TuningConfig
+    from arctuner.gui.worker import GpuWorker
+
+    worker = GpuWorker()
+    errors: list[str] = []
+    write_errors: list[str] = []
+    busy: list[bool] = []
+    worker.autotune_error.connect(errors.append)
+    worker.write_error.connect(write_errors.append)
+    worker.busy_changed.connect(busy.append)
+    worker.autotune_search(TuningConfig())
+
+    assert errors, ".autotune_search не вызван или ошибка потеряна"
+    assert "не открыта" in errors[0]  # SafetyLimitError("IGCL-сессия не открыта")
+    assert write_errors == []  # поиск — не «запись»: канал разделён
+    assert busy == [True, False]  # вкладка разблокируется после неудачи
+
+
+def test_worker_autotune_stop_flag(qapp) -> None:
+    """autotune_stop ставит флаг отмены (без железа — только флаг)."""
+    from arctuner.gui.worker import GpuWorker
+
+    worker = GpuWorker()
+    assert worker._autotune_stop is False
+    worker.autotune_stop()
+    assert worker._autotune_stop is True

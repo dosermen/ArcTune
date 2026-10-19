@@ -157,6 +157,7 @@ class TuningEngine:
         *,
         on_step: Callable[[int, float, TelemetrySnapshot], None] | None = None,
         stop_check: Callable[[], bool] | None = None,
+        on_status: Callable[[str], None] | None = None,
     ) -> TuningResult:
         """Запускает адаптивный спуск. ⚠️ Меняет настройки карты.
 
@@ -165,9 +166,12 @@ class TuningEngine:
         restore выполняется только когда карта реально не на best.
 
         Args:
-            on_step: колбэк (шаг, значение, снимок) для прогресса.
+            on_step: колбэк (шаг, значение, снимок) для прогресса — вызывается
+                после СТАБИЛЬНОГО шага.
             stop_check: опциональный предикат отмены (проверяется перед шагом);
                 True → честный откат к best и завершение.
+            on_status: колбэк (текст) для «тихих» этапов (ожидание нагрузки,
+                проверка телеметрии) — иначе они выглядят как зависание UI.
 
         Returns:
             TuningResult с историей и лучшим стабильным значением.
@@ -198,6 +202,9 @@ class TuningEngine:
         reason = "достигнут лимит шагов"
         need_restore = False  # карта НЕ на best → нужен откат
         stress: Any | None = None  # внешний процесс нагрузки
+
+        if on_status:
+            on_status(f"старт: база {baseline:g}, шаг {cfg.step:g} {direction:+.0f}")
 
         try:
             if cfg.external_cmd:
@@ -238,12 +245,17 @@ class TuningEngine:
                 if cfg.settle_seconds > 0:
                     time.sleep(cfg.settle_seconds)
 
-                if cfg.require_load and not loader.verify_stress(
-                    ctx.telemetry, interval=0.5, timeout=cfg.load_timeout
-                ):
-                    reason = f"нет нагрузки на шаге {i} — стабильность не подтверждена"
-                    need_restore = True
-                    break
+                if cfg.require_load:
+                    if on_status:
+                        on_status(f"шаг {i}: кандидат {candidate:+g} — ожидание нагрузки…")
+                    if not loader.verify_stress(
+                        ctx.telemetry, interval=0.5, timeout=cfg.load_timeout
+                    ):
+                        reason = f"нет нагрузки на шаге {i} — стабильность не подтверждена"
+                        need_restore = True
+                        break
+                elif on_status:
+                    on_status(f"шаг {i}: кандидат {candidate:+g} — замер телеметрии…")
 
                 snap = ctx.telemetry()
 
