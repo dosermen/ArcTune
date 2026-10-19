@@ -411,6 +411,11 @@ class IgclApi:
             "powerLimit": conv(props.powerLimit),
             "temperatureLimit": conv(props.temperatureLimit),
             "vramMemSpeedLimit": conv(props.vramMemSpeedLimit),
+            # Границы построения кривой V/F (Version > 0). Шире жёстких рамок
+            # проекта в tuner.validate_vf_curve — сознательно: валидатор — это
+            # безопасная рамка, границы драйвера — лишь информационная оболочка.
+            "gpuVFCurveVoltageLimit": conv(props.gpuVFCurveVoltageLimit),
+            "gpuVFCurveFrequencyLimit": conv(props.gpuVFCurveFrequencyLimit),
         }
 
     # --- Запись (⚠️ меняет состояние карты). Вызывается только из tuner.py

@@ -200,9 +200,27 @@ def cmd_status(_: argparse.Namespace) -> int:
                 if key == "supported" or not getattr(val, "supported", False):
                     continue
                 print(
-                    f"  {key:<22} {val.min:>8.2f} .. {val.max:<8.2f} "
+                    f"  {key:<25} {val.min:>8.2f} .. {val.max:<8.2f} "
                     f"step {val.step:<6.2f} def {val.default:.2f}"
                 )
+            print(
+                "  ℹ️ VF-лимиты — рамки драйвера для построения кривой V/F. Запись"
+                " ограничена жёсткими рамками проекта: 600…1250 мВ / 300…3300 МГц."
+            )
+            from arctuner import tuner
+
+            current = tuner.current_values(api, handle)
+            units = {
+                "gpuFrequencyOffset": "МГц",
+                "powerLimit": "%",
+                "temperatureLimit": "°C",
+                "vramMemSpeedLimit": "Гбит/с",
+                "gpuVoltageOffset": "%",
+            }
+            print("\n=== Текущие значения (V2 GET) ===")
+            for k, v in current.items():
+                u = units.get(k, "")
+                print(f"  {k:<25} {'—' if v is None else f'{v:g} {u}'}")
     except IgclError as e:
         print(f"[FAIL] {e}")
         return 1

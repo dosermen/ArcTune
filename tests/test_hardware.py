@@ -79,6 +79,15 @@ def test_oc_properties_limits(api: IgclApi, arc) -> None:
     vram = oc["vramMemSpeedLimit"]
     assert vram.min == pytest.approx(19.0)
     assert vram.max <= 22.0
+    # Границы кривой V/F: драйвер отдает их со Version > 0 (живой B580).
+    vf_v = oc["gpuVFCurveVoltageLimit"]
+    vf_f = oc["gpuVFCurveFrequencyLimit"]
+    assert vf_v.supported and vf_v.units == 13  # VOLTAGE_MILLIVOLTS
+    assert vf_f.supported and vf_f.units == 0  # FREQUENCY_MHZ
+    # Жёсткие рамки проекта (600..1250 мВ / 300..3300 МГц) должны попадать
+    # внутрь рамок драйвера — иначе наши инвариантные проверки бессмысленны.
+    assert vf_v.min <= 600 < 1250 <= vf_v.max
+    assert vf_f.min <= 300 < 3300 <= vf_f.max
 
 
 def test_fans_read(api: IgclApi, arc) -> None:
