@@ -1,158 +1,148 @@
-"""Watchdog — мониторинг стабильности + авто-откат.
+"""Watchdog — мониторинг стабильности системы во время автопоиска.
 
-Следит за системой во время разгона:
-  1. TDR (Event ID 4101 от провайдера Arc)
-  2. Замерзающая телеметрия (counter не растёт при active GPU)
-  3. Перезагрузка драйвера (driver service restart)
-  4. Повышение температуры выше emergency-порога (85°C)
+Что видит и чего не видит:
+  - Температура выше аварийного порога (85 °C) — инцидент, откат.
+  - «Замороженная» телеметрия: activity_counter стоит (GPU был под
+    нагрузкой и должен работать), а счётчик энергии не растёт —
+    признак зависшего драйвера/сбоя.
+  - TDR: Event ID 4101 в журнале System (пишет провайдер «Display» —
+    «Видеодрайвер перестал отвечать и был успешно восстановлен»).
+    Ищутся ТОЛЬКО события после запуска watchdog, иначе найдутся
+    старые TDR недельной давности.
 
-При обнаружении проблемы — возвращает событие, а не ошибку.
-Вызывающий решает: откат, лог, уведомление.
+Чего телеметрия НЕ видит: compute-ошибки и крэши приложений — автопоиск
+опирается на watched-нагрузку из внешнего бенчмарка.
+
+При обнаружении проблемы возвращает WatchdogEvent, а не ошибку:
+решение (откат, лог, уведомление) — за движком.
 """
 
 from __future__ import annotations
 
 import subprocess
 from dataclasses import dataclass
+from datetime import datetime
 from typing import ClassVar
 
 from arctuner.igcl.api import TelemetrySnapshot
 
 
-@dataclass
+@dataclass(frozen=True)
 class WatchdogEvent:
     """Событие watchdog — что-то пошло не так."""
 
-    type: str  # "TDR", "TEMP_EMERGENCY", "TELEMETRY_FROZEN", "DRIVER_RESTART"
+    type: str  # "TEMP_EMERGENCY" | "TELEMETRY_FROZEN" | "TDR"
     detail: str
-    timestamp: str
 
 
 class Watchdog:
-    """Слепит за стабильностью системы во время авторазгона."""
+    """Следит за стабильностью системы во время авторазгона."""
 
-    TEMPERATURE_EMERGENCY: ClassVar[float] = 85.0
-    TELEMETRY_FROZEN_THRESHOLD: ClassVar[float] = 30.0  # секунд без роста
+    TEMPERATURE_EMERGENCY: ClassVar[float] = 85.0  # °C — авария, дальше искать нечего
     TDR_EVENT_ID: ClassVar[int] = 4101
+    TDR_PROVIDER: ClassVar[str] = "Display"  # источник 4101 в журнале System
 
     def __init__(self, device: str = "") -> None:
         self._device = device
-        self._last_activity: int | None = None
-        self._last_check_time: float | None = None
+        self._started_at = datetime.now()
+        self._last_snap: TelemetrySnapshot | None = None
+        self._tdr_found = False  # однажды найденный TDR не ищется повторно
 
-    def check(
-        self,
-        snapshot: TelemetrySnapshot,
-        prev_snapshot: TelemetrySnapshot | None = None,
-    ) -> WatchdogEvent | None:
+    def check(self, snapshot: TelemetrySnapshot) -> WatchdogEvent | None:
         """Проверяет снимок. Возвращает первое событие или None.
 
         Args:
-            snapshot: текущий снимок телеметрии.
-            prev_snapshot: предыдущий снимок (для сравнения).
+            snapshot: текущий снимок телеметрии (предыдущий следит сам).
 
         Returns:
-            WatchdogEvent если проблема найдена, иначе None.
+            WatchdogEvent при проблеме; None — всё в норме или данных мало.
         """
-        events: list[WatchdogEvent] = []
+        evt = self._temperature(snapshot)
+        if evt is None:
+            evt = self._frozen(snapshot)
+        if evt is None:
+            evt = self._tdr()
+        self._last_snap = snapshot
+        return evt
 
-        # 1. Температура (emergency)
-        if self._check_temperature(snapshot):
-            events.append(
-                WatchdogEvent(
-                    type="TEMP_EMERGENCY",
-                    detail=f"температура {snapshot.gpu_temp_c:.0f}°C > {self.TEMPERATURE_EMERGENCY:.0f}°C",
-                    timestamp="",
-                )
+    # --- проверки ---
+
+    def _temperature(self, snapshot: TelemetrySnapshot) -> WatchdogEvent | None:
+        """Аварийная температура (выше TEMPERATURE_EMERGENCY)."""
+        temp = snapshot.gpu_temp_c
+        if temp is not None and temp > self.TEMPERATURE_EMERGENCY:
+            return WatchdogEvent(
+                type="TEMP_EMERGENCY",
+                detail=f"температура {temp:.0f}°C > аварийного порога "
+                f"{self.TEMPERATURE_EMERGENCY:.0f}°C",
             )
-
-        # 2. Замерзающая телеметрия
-        if self._check_frozen_telemetry(snapshot, prev_snapshot):
-            events.append(
-                WatchdogEvent(
-                    type="TELEMETRY_FROZEN",
-                    detail=f"activity_counter не растёт {self.TELEMETRY_FROZEN_THRESHOLD:.0f}с",
-                    timestamp="",
-                )
-            )
-
-        # 3. TDR из Event Log
-        if self._check_tdr():
-            events.append(
-                WatchdogEvent(
-                    type="TDR",
-                    detail="Event ID 4101 — TDR detected",
-                    timestamp="",
-                )
-            )
-
-        # Возвращаем первое событие (или None)
-        if events:
-            return events[0]
         return None
 
-    def _check_temperature(self, snapshot: TelemetrySnapshot) -> bool:
-        """Проверка температуры (emergency порог)."""
-        return snapshot.gpu_temp_c is not None and snapshot.gpu_temp_c > self.TEMPERATURE_EMERGENCY
+    def _frozen(self, snapshot: TelemetrySnapshot) -> WatchdogEvent | None:
+        """«Заморозка» телеметрии: активность была, энергия не растёт.
 
-    def _check_frozen_telemetry(
-        self,
-        snapshot: TelemetrySnapshot,
-        prev_snapshot: TelemetrySnapshot | None,
-    ) -> bool:
-        """Проверка замерзающей телеметрии.
-
-        Если activity_counter > 0, но energy_counter не растёт —
-        возможно драйвер завис.
+        activity_counter стоит между замерами при ненулевой прошлой
+        активности, а счётчик энергии не изменился — драйвер, вероятно,
+        завис (TDR/перезагрузка улова счётчиков). Простой GPU даёт ту же
+        картину честно (activity==0), поэтому проверяется prev>0.
         """
-        if not prev_snapshot:
-            return False
+        prev = self._last_snap
+        if prev is None:
+            return None
+        act = (prev.activity_counter, snapshot.activity_counter)
+        enj = (prev.gpu_energy_counter_j, snapshot.gpu_energy_counter_j)
+        if None in act or None in enj:
+            return None  # данных мало — честно не решаем
+        if act[1] > act[0]:  # активность растёт — телеметрия жива
+            return None
+        if act[0] > 0 and enj[1] == enj[0]:
+            return WatchdogEvent(
+                type="TELEMETRY_FROZEN",
+                detail="activity_counter стоит, счётчик энергии не растёт — возможен сбой драйвера",
+            )
+        return None
 
-        if prev_snapshot.activity_counter is None or snapshot.activity_counter is None:
-            return False
+    def _tdr(self) -> WatchdogEvent | None:
+        """TDR после запуска watchdog: Event 4101 в System от старта поиска.
 
-        # Activity растёт — телеметрия жива
-        if snapshot.activity_counter > prev_snapshot.activity_counter:
-            return False
-
-        # Activity не растёт, но GPU должен работать
-        if prev_snapshot.activity_counter > 0:
-            # Проверяем energy counter
-            if snapshot.gpu_energy_counter_j is None or prev_snapshot.gpu_energy_counter_j is None:
-                return False
-            if snapshot.gpu_energy_counter_j == prev_snapshot.gpu_energy_counter_j:
-                return True  # energy не растёт — заморожено
-
-        return False
-
-    def _check_tdr(self) -> bool:
-        """Проверка Event Log на TDR (Event ID 4101).
-
-        Использует Get-WinEvent PowerShell для быстрого поиска.
+        Returns:
+            Событие один раз (повторных TDR-оценок на то же событие нет).
         """
+        if self._tdr_found:
+            return None
+        events = self._query_tdr_events()
+        if not events:
+            return None
+        self._tdr_found = True
+        first = events[0]
+        return WatchdogEvent(
+            type="TDR",
+            detail=f"событие {self.TDR_EVENT_ID} ({self.TDR_PROVIDER}) в {first} — "
+            "видеодрайвер перестал отвечать и был восстановлен",
+        )
+
+    def _query_tdr_events(self) -> list[str]:
+        """Ищет свежие TDR-события через Get-WinEvent (время старта = filt).
+
+        Returns:
+            Список строк-времени обнаруженных событий (пустой — эффекта нет).
+        """
+        start = self._started_at.isoformat(timespec="seconds")
+        ps = (
+            "$ErrorActionPreference='SilentlyContinue';"
+            f"$e = Get-WinEvent -FilterHashtable "
+            f"@{{LogName='System'; Id=4101; StartTime=[datetime]'{start}'}} | "
+            "Sort-Object TimeCreated; "
+            "if ($e) { $e | ForEach-Object { $_.TimeCreated.ToString('o') } }"
+        )
         try:
             result = subprocess.run(
-                [
-                    "powershell",
-                    "-NoProfile",
-                    "-Command",
-                    f"Get-WinEvent -FilterXPath \"*[System[Provider[@Name='IntelArc']]]\" "
-                    f"-MaxEvents 10 2>$null | "
-                    f"Where-Object {{ $_.Id -eq {self.TDR_EVENT_ID} }} | "
-                    f"Select-Object -First 1 | "
-                    f"Format-Table -AutoSize -Property TimeCreated, Message",
-                ],
+                ["powershell", "-NoProfile", "-Command", ps],
                 capture_output=True,
-                timeout=5.0,
+                timeout=10.0,
             )
-            output = result.stdout.decode(errors="replace")
-            return "TDR" in output or "TDREvent" in output
-        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-            return False
-
-    def record_activity(self, snapshot: TelemetrySnapshot) -> None:
-        """Записывает last_activity для сравнения."""
-        self._last_activity = snapshot.activity_counter
-        import time
-
-        self._last_check_time = time.monotonic()
+        except (OSError, subprocess.TimeoutExpired):
+            # Нет PowerShell/таймаут — TDR не проверить: молча (не наш инцидент).
+            return []
+        out = result.stdout.decode(errors="replace")
+        return [line.strip() for line in out.splitlines() if line.strip()]

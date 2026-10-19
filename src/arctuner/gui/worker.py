@@ -51,6 +51,7 @@ class GpuWorker(QObject):
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._ctx = GpuContext()
+        self._autotune_stop = False  # флаг отмены авторазгона (autotune_stop)
         # Реплей инцидента: буфер создаётся после открытия сессии (нужно имя
         # устройства). Read-only: ни один звонок реплея не меняет карту.
         self._replay: IncidentReplay | None = None
@@ -224,24 +225,36 @@ class GpuWorker(QObject):
 
     @Slot(object)
     def autotune_search(self, config: object) -> None:
-        """Запускает адаптивный поиск авторазгона.
+        """Запускает адаптивный поиск авторазгона (в этом потоке).
 
-        Выполняется в рабочем потоке. На каждом шаге — прогресс-сигнал.
-        В конце — итоговый TuningResult через сигнал.
+        Пишет через GpuContext (tuner-проверки + журнал). Прогресс —
+        autotune_progress(шаг, всего_шагов, текст); итог — autotune_completed.
+        Отмена — через autotune_stop(): движок откатит к стабильному значению.
         """
         from arctuner.autotune.engine import TuningEngine
+        from arctuner.autotune.watchdog import Watchdog
+
+        self._autotune_stop = False
 
         def run() -> None:
-            engine = TuningEngine(self._ctx.api, self._ctx.handle, config)
+            ctx = self._ctx
+            watchdog = Watchdog(device=ctx.info.name if ctx.info else "")
+            engine = TuningEngine(ctx, config, watchdog=watchdog)
+            total = getattr(config, "max_steps", 0) or 0
 
             def _on_step(step: int, value: float, snap: object) -> None:
-                self.autotune_progress.emit(step, step, f"Шаг {step}: {value:.2f}")
+                self.autotune_progress.emit(step, total, f"кандидат {value:+g}")
 
-            result = engine.run(on_step=_on_step)
+            result = engine.run(on_step=_on_step, stop_check=lambda: self._autotune_stop)
             self.autotune_completed.emit(result)
             self.reload_static()
 
         self._guarded(run)
+
+    @Slot()
+    def autotune_stop(self) -> None:
+        """Ставит флаг отмены; движок проверит его перед следующим шагом."""
+        self._autotune_stop = True
 
     # --- внутренности ---
 

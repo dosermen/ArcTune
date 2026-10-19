@@ -143,6 +143,10 @@ class MainWindow(QMainWindow):
         lg.rollback_requested.connect(self._worker.rollback)
         lg.refresh_requested.connect(self._worker.reload_static)
 
+        at = self._autotune
+        at.search_requested.connect(self._worker.autotune_search)
+        at.stop_requested.connect(self._worker.autotune_stop)
+
     # --- меню «Вид»: масштаб интерфейса ---
 
     def _build_view_menu(self) -> None:

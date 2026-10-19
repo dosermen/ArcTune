@@ -1,20 +1,15 @@
-"""Вкладка Авторазгон — визуальный интерфейс автопоиска.
+"""Вкладка «Авторазгон»: конфигуратор → поиск → результаты → профили.
 
-Четыре зоны:
-  1. Конфигуратор — параметры поиска (режим, шаг, пороги)
-  2. Поиск — кнопки старт/стоп, прогресс-бар, лог
-  3. Результаты — таблица найденных профилей
-  4. Профили — сохранение/загрузка/применение
-
-Зависит от:
-  - GpuWorker (для вызова поиска в фоне)
-  - autotune.engine (TuningEngine)
-  - autotune.profiles (ProfileStore)
+Прогресс/итоги приходят сигналами GpuWorker (autotune_progress,
+autotune_completed); старт/стоп уходят сигналами search_requested/
+stop_requested в слоты воркера (все операции с картой — только в его
+потоке). Нагрузка, дельта activity_counter, гарды и откат к стабильному
+значению — в autotune.engine.
 """
 
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, fields
 from pathlib import Path
 
 from PySide6.QtCore import Signal
@@ -22,6 +17,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -31,176 +27,188 @@ from arctuner.autofind import MODE_FREQUENCY, MODE_UNDERVOLT
 from arctuner.autotune.engine import TuningConfig, TuningResult
 from arctuner.autotune.profiles import ProfileStore
 
-# ---------------------------------------------------------------------------
+#: человеческие названия режимов (кнопка-переключатель)
+_MODE_LABELS: dict[str, str] = {
+    MODE_FREQUENCY: "Частота (+МГц)",
+    MODE_UNDERVOLT: "Undervolt (−%)",
+}
 
 
 class AutoTuneTab(QWidget):
-    """Вкладка авторазгона — конфигуратор + поиск + профили."""
+    """Конфигурация и запуск адаптивного автопоиска + профили."""
 
-    # Сигналы для связи с GpuWorker
-    search_started = Signal()
-    search_progress = Signal(int, int, str)  # current, total, text
-    search_completed = Signal(object)  # TuningResult
-    error = Signal(str)
+    search_requested = Signal(object)  # TuningConfig → worker.autotune_search
+    stop_requested = Signal()  # флаг отмены → worker.autotune_stop
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._worker: object | None = None  # GpuWorker, тип-хак
-        self._profile_store = ProfileStore()
+        self._profiles = ProfileStore()
         self._config = TuningConfig()
-        self._is_searching = False
         self._build_ui()
 
+    # --- UI ---
+
     def _build_ui(self) -> None:
-        """Строит четыре зоны: конфигуратор | поиск | результаты | профили."""
-        # --- Конфигуратор ---
-        self._mode_select = QPushButton(f"Режим: {MODE_UNDERVOLT}")
-        self._mode_select.clicked.connect(self._on_toggle_mode)
-        self._mode_select.setObjectName("infoButton")
+        """Строит четыре зоны: конфигуратор | поиск | результат | профили."""
+        note = QLabel(
+            "Поиск требует нагрузки (запустите бенчмарк/игру; либо задайте нагрузчик "
+            "в профиле). Каждый шаг проверяется активностью GPU, температурой и "
+            "Watchdog (TDR/сбой телеметрии); при любом сбое карта возвращается к "
+            "последнему СТАБИЛЬНОМУ значению. Undervolt смещением на B580 ограничен "
+            "драйвером (0…+) — для настоящего undervolt используйте вкладку «V/F»."
+        )
+        note.setObjectName("hintLabel")
+        note.setWordWrap(True)
 
-        self._step_info = QLabel("Шаг: 2.0")
-        self._step_info.setObjectName("infoLabel")
+        self._mode_btn = QPushButton(self._mode_text())
+        self._mode_btn.setObjectName("infoButton")
+        self._mode_btn.clicked.connect(self._on_toggle_mode)
+        self._mode_btn.setToolTip("Переключение режима поиска: частота вверх / undervolt вниз")
 
-        self._temp_info = QLabel("Темп. потолок: 80 °C")
-        self._temp_info.setObjectName("infoLabel")
-
-        # --- Поиск ---
-        self._start_btn = QPushButton("▶ Запустить")
-        self._start_btn.clicked.connect(self._on_start_search)
+        self._start_btn = QPushButton("▶ Запустить поиск")
+        self._start_btn.clicked.connect(self._on_start)
         self._start_btn.setObjectName("infoButton")
 
         self._stop_btn = QPushButton("■ Стоп")
-        self._stop_btn.clicked.connect(self._on_stop_search)
-        self._stop_btn.setEnabled(False)
+        # dangerButton — «жёлтохвост»: завершает поиск и откатывает к стабильному.
         self._stop_btn.setObjectName("dangerButton")
+        self._stop_btn.clicked.connect(self.stop_requested.emit)
+        self._stop_btn.setEnabled(False)
 
-        self._log_area = QLabel("Готово к поиску.")
-        self._log_area.setObjectName("logLabel")
+        top = QHBoxLayout()
+        top.addWidget(self._mode_btn)
+        top.addStretch(1)
+        top.addWidget(self._start_btn)
+        top.addWidget(self._stop_btn)
 
-        # --- Результаты ---
-        self._results_area = QLabel("Результаты: —")
-        self._results_area.setObjectName("infoLabel")
+        self._state = QLabel("Поиск не запускался.")
+        self._state.setObjectName("hintLabel")
 
-        # --- Профили ---
-        self._save_profile_btn = QPushButton("Сохранить профиль…")
-        self._save_profile_btn.clicked.connect(self._on_save_profile)
-        self._save_profile_btn.setObjectName("infoButton")
+        self._result = QLabel("Результат: —")
+        self._result.setObjectName("resultsLabel")
 
-        self._load_profile_btn = QPushButton("Загрузить профиль…")
-        self._load_profile_btn.clicked.connect(self._on_load_profile)
-        self._load_profile_btn.setObjectName("infoButton")
+        save_btn = QPushButton("💾 Сохранить профиль…")
+        save_btn.setObjectName("infoButton")
+        save_btn.clicked.connect(self._on_save_profile)
 
-        # Собираем в layout
-        config_lay = QHBoxLayout()
-        config_lay.addWidget(self._mode_select)
-        config_lay.addWidget(self._step_info)
-        config_lay.addWidget(self._temp_info)
+        load_btn = QPushButton("📂 Загрузить профиль…")
+        load_btn.setObjectName("infoButton")
+        load_btn.clicked.connect(self._on_load_profile)
 
-        search_lay = QHBoxLayout()
-        search_lay.addWidget(self._start_btn)
-        search_lay.addWidget(self._stop_btn)
+        profiles = QHBoxLayout()
+        profiles.addWidget(QLabel("Профили:"))
+        profiles.addWidget(save_btn)
+        profiles.addWidget(load_btn)
+        profiles.addStretch(1)
 
         lay = QVBoxLayout(self)
-        lay.addLayout(config_lay)
-        lay.addLayout(search_lay)
-        lay.addWidget(self._log_area)
-        lay.addWidget(self._results_area)
-        lay.addWidget(self._save_profile_btn)
-        lay.addWidget(self._load_profile_btn)
+        lay.addWidget(note)
+        lay.addLayout(top)
+        lay.addWidget(self._state)
+        lay.addWidget(self._result, stretch=1)
+        lay.addLayout(profiles)
 
-    def attach_worker(self, worker: object) -> None:
-        """Привязывает к GpuWorker. Вызывается из MainWindow."""
-        self._worker = worker
+    def _mode_text(self) -> str:
+        return f"Режим: {_MODE_LABELS.get(self._config.mode, self._config.mode)}"
+
+    # --- события UI ---
 
     def _on_toggle_mode(self) -> None:
-        """Переключает режим (undervolt / frequency)."""
-        current = self._config.mode
-        if current == MODE_UNDERVOLT:
-            self._config.mode = MODE_FREQUENCY
-            self._mode_select.setText(f"Режим: {MODE_FREQUENCY}")
-        else:
-            self._config.mode = MODE_UNDERVOLT
-            self._mode_select.setText(f"Режим: {MODE_UNDERVOLT}")
+        """Переключает режим конфигуратора (конфиг меняется ДО запуска)."""
+        self._config.mode = (
+            MODE_UNDERVOLT if self._config.mode == MODE_FREQUENCY else MODE_FREQUENCY
+        )
+        self._mode_btn.setText(self._mode_text())
 
-    def _on_start_search(self) -> None:
-        """Запускает поиск в фоне."""
-        self._is_searching = True
-        self._log_area.setText("Запуск авторазгона…")
-        self._start_btn.setEnabled(False)
-        self._stop_btn.setEnabled(True)
-        self.search_started.emit()
+    def _on_start(self) -> None:
+        """Отправляет конфигурацию в воркер (поиск выполняется в его потоке)."""
+        self.search_requested.emit(self._config)
 
-        # Запускаем через worker
-        self._worker.autotune_search(self._config)
-
-    def _on_stop_search(self) -> None:
-        """Останавливает поиск."""
-        self._is_searching = False
-        self._log_area.setText("Поиск остановлен.")
-        self._start_btn.setEnabled(True)
-        self._stop_btn.setEnabled(False)
+    # --- сигналы от worker'а ---
 
     def update_progress(self, current: int, total: int, text: str) -> None:
-        """Обновляет прогресс-бар и лог."""
-        pct = int(current / total * 100)
-        self._log_area.setText(f"{pct}% — {text}")
+        """Живой статус текущего шага (автообновление кнопок — через set_busy)."""
+        pct = f"{current}/{total}" if total > 0 else "; текущий шаг"
+        self._state.setText(f"Поиск: шаг {pct} — {text}")
 
     def display_result(self, result: TuningResult) -> None:
-        """Показывает результаты в табличке."""
-        lines: list[str] = []
-        for entry in result.history:
-            lines.append(
-                f"  Шаг {entry.get('step', 0):d}: "
-                f"value={entry.get('value', 0):.2f} "
-                f"temp={entry.get('temp_c', 0):.0f}°C "
-                f"fitness={entry.get('fitness', 0):.2f}"
-            )
-        summary = "\n".join(lines)
-        self._results_area.setText(summary)
-        self._log_area.setText(f"Готово. Лучшее: {result.best_stable:.2f}")
+        """Итог поиска: лучшее стабильное значение, шаги, причина остановки."""
+        self._state.setText(f"Итог: {result.stopped_reason}")
+        rows = [self._format_step(e) for e in result.history[-20:]]
+        skipped = len(result.history) - len(rows)
+        if skipped > 0:
+            rows.insert(0, f"… {skipped} ранних шагов не показаны")
+        self._result.setText(
+            f"Режим {result.mode}: база {result.baseline:g} → лучший стабильный "
+            f"{result.best_stable:g} (шагов: {result.steps_taken})\n"
+            + ("\n".join(rows) if rows else "шагов не было")
+        )
+
+    @staticmethod
+    def _format_step(entry: dict) -> str:
+        """Строка истории шага; None-датчики не печатаются (не падают)."""
+        parts = [f"шаг {entry.get('step', 0)}: {entry.get('value', 0.0):+g}"]
+        if entry.get("temp_c") is not None:
+            parts.append(f"{entry['temp_c']:.0f}°C")
+        if entry.get("power_percent") is not None:
+            parts.append(f"{entry['power_percent']:.0f}%")
+        if entry.get("fitness") is not None:
+            parts.append(f"fitness {entry['fitness']:.2f}")
+        return "  " + ", ".join(parts)
+
+    def set_busy(self, busy: bool) -> None:
+        """Воркер занят поиском: «Стоп» активно, остальное заблокировано."""
+        self._start_btn.setEnabled(not busy)
+        self._stop_btn.setEnabled(busy)
+        self._mode_btn.setEnabled(not busy)
+
+    # --- профили ---
 
     def _on_save_profile(self) -> None:
-        """Сохраняет текущий лучший результат как профиль."""
+        """Сохраняет текущую конфигурацию по выбранному пути (реальному)."""
         path, _ = QFileDialog.getSaveFileName(
             self,
             "Сохранить профиль авторазгона",
-            "",
+            str(self._profiles.dir / "profile.json"),
             "JSON (*.json)",
         )
         if not path:
             return
-        data = asdict(self._config)
-        self._profile_store.save("unnamed", data)
-        self._log_area.setText("Профиль сохранён.")
+        target = Path(path)
+        if target.suffix.lower() != ".json":
+            target = target.with_suffix(".json")
+        try:
+            saved = self._profiles.save(target, asdict(self._config))
+        except OSError as e:
+            self._show_error(f"Не удалось сохранить профиль: {e}")
+            return
+        self._state.setText(f"Профиль сохранён: {saved.name}")
 
     def _on_load_profile(self) -> None:
-        """Загружает профиль и применяет настройки."""
+        """Загружает профиль из выбранного файла.
+
+        Посторонние ключи JSON игнорируются (к полям TuningConfig не сводятся) —
+        чужие/старые файлы не роняют вкладку.
+        """
         path, _ = QFileDialog.getOpenFileName(
             self,
             "Загрузить профиль авторазгона",
-            "",
+            str(self._profiles.dir),
             "JSON (*.json)",
         )
         if not path:
             return
-        p = Path(path)
-        data = self._profile_store.load(p.name)
-        if not data:
-            self._show_error(f"Не удалось загрузить: {p.name}")
+        try:
+            data = self._profiles.load(Path(path))
+        except (OSError, ValueError) as e:
+            self._show_error(f"Не удалось загрузить профиль: {e}")
             return
-        self._config = TuningConfig(**data)
-        self._log_area.setText(f"Профиль загружен: {p.name}")
-
-    def set_busy(self, busy: bool) -> None:
-        """Блокирует кнопки поиска при работе воркера."""
-        self._start_btn.setEnabled(not busy)
-        self._stop_btn.setEnabled(bool(busy))
-        self._save_profile_btn.setEnabled(not busy)
-        self._load_profile_btn.setEnabled(not busy)
+        allowed = {f.name for f in fields(TuningConfig)}
+        self._config = TuningConfig(**{k: v for k, v in data.items() if k in allowed})
+        self._mode_btn.setText(self._mode_text())
+        self._state.setText(f"Профиль загружен: {Path(path).name}")
 
     def _show_error(self, text: str) -> None:
-        from PySide6.QtWidgets import QMessageBox
-
         QMessageBox.warning(self, "Авторазгон", text)
 
 
