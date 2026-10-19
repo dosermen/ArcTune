@@ -49,6 +49,7 @@ def cmd_telemetry(args: argparse.Namespace) -> int:
     from pathlib import Path
 
     from arctuner.igcl.api import IgclApi, IgclError
+    from arctuner.replay import IncidentReplay
     from arctuner.telemetry import PowerMeter, find_arc_adapter
 
     # Колонки CSV (стабильный порядок для анализа).
@@ -115,6 +116,8 @@ def cmd_telemetry(args: argparse.Namespace) -> int:
 
     watch_sec = getattr(args, "watch", None)
     csv_path = getattr(args, "csv", None)
+    replay_size = getattr(args, "replay", 0) or 0
+    replay: IncidentReplay | None = None
 
     try:
         with IgclApi() as api:
@@ -131,8 +134,22 @@ def cmd_telemetry(args: argparse.Namespace) -> int:
             if watch_sec:
                 print(f"Наблюдение каждые {watch_sec} сек (Ctrl+C для выхода)...")
             meter = PowerMeter()  # ватты из счётчиков энергии; первый тик — база
+            if replay_size:
+                replay = IncidentReplay(max_samples=replay_size, device=info.name)
+                print(
+                    f"Реплей инцидента: буфер {replay_size} снимков, дампы в "
+                    f"~/.arctune/incidents (сброс счётчика = дамп автоматически)."
+                )
             while True:
                 t = meter.enrich(api.read_power_telemetry(handle))
+                if replay is not None:
+                    trigger = replay.push(t)
+                    if trigger:
+                        dump_path = replay.dump(trigger)
+                        print(
+                            f"  [INCIDENT] Счётчик энергии сброшен ({trigger}) — "
+                            f"драйвер перезагрузился. Дамп: {dump_path}"
+                        )
                 row = snapshot_row(t)
                 print("=== Телеметрия (read-only) ===")
                 print(
@@ -175,6 +192,9 @@ def cmd_telemetry(args: argparse.Namespace) -> int:
                 print()
     except KeyboardInterrupt:
         print("\nОстановлено.")
+        if replay is not None and replay.samples:
+            path = replay.dump("manual_interrupt")
+            print(f"Реплей инцидента сохранён по Ctrl+C: {path}")
     except IgclError as e:
         print(f"[FAIL] {e}")
         return 1
@@ -735,6 +755,16 @@ def build_parser() -> argparse.ArgumentParser:
     ptelem.add_argument("--csv", metavar="FILE", help="дополнительно сохранить снимок в CSV")
     ptelem.add_argument("--once", action="store_true", help="один снимок (без -w)")
     ptelem.add_argument("-w", "--watch", type=int, metavar="SEC", help="повторять каждые N сек")
+    ptelem.add_argument(
+        "--replay",
+        nargs="?",
+        const=600,
+        default=0,
+        type=int,
+        metavar="N",
+        help="буфер последних N снимков (по умолчанию 600); сброс счётчика "
+        "энергии или Ctrl+C пишет дамп в ~/.arctune/incidents",
+    )
     ptelem.set_defaults(func=cmd_telemetry)
     sub.add_parser("status", help="диапазоны разгона (read-only)").set_defaults(func=cmd_status)
 
