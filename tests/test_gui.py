@@ -713,3 +713,53 @@ def test_worker_autotune_stop_flag(qapp) -> None:
     assert worker._autotune_stop is False
     worker.autotune_stop()
     assert worker._autotune_stop is True
+
+
+def test_autotune_completed_reaches_tab(qapp) -> None:
+    """Итог поиска доходит до вкладки (обрыв connect = «Результат: —» навсегда).
+
+    Регрессия реального бага: autotune_completed эмитился, но не был
+    подключён в MainWindow — после поиска вкладка молча оставалась
+    с последним шагом и пустым результатом.
+    """
+    from arctuner.autotune.engine import TuningResult
+    from arctuner.gui.window import MainWindow
+
+    win = MainWindow()
+    win._timer.stop()  # закрытая сессия: опрос устроил бы модальный «нет подключения»
+    win._thread.quit()
+    win._thread.wait(2000)
+    win._worker.shutdown()  # worker.start() успел открыть IGCL — закрываем (не мешать hardware-тестам)
+
+    win._autotune.update_progress(2, 30, "кандидат +54")
+    fake = TuningResult(
+        mode="frequency",
+        baseline=0.0,
+        best_stable=54.0,
+        steps_taken=2,
+        stopped_reason="тест-причина",
+    )
+    win._worker.autotune_completed.emit(fake)
+    assert "тест-причина" in win._autotune._state.text()
+    assert "54" in win._autotune._result.text()
+    win.close()
+
+
+def test_autotune_stop_is_synchronous_from_ui(qapp) -> None:
+    """«Стоп» ставит флаг немедленно: queued-стоп не дожил бы до воркера.
+
+    Воркер-поток занят синхронным engine.run — слот-очередь обрабатывается
+    только ПОСЛЕ поиска, кнопка «Стоп» была бы мертва.
+    """
+    from arctuner.gui.window import MainWindow
+
+    win = MainWindow()
+    win._timer.stop()
+    win._thread.quit()
+    win._thread.wait(2000)
+    win._worker.shutdown()  # сессия открыта воркером в thread.started — закрыть честно
+
+    assert win._worker._autotune_stop is False
+    win._autotune.stop_requested.emit()  # как клик «Стоп»
+    assert win._worker._autotune_stop is True  # без processEvents — прямая доставка
+    win.close()

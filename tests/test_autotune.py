@@ -133,7 +133,11 @@ class TestEngineFrequency:
         assert "шаг ниже минимального" in result.stopped_reason
 
     def test_limits_of_igcl_range_rollback(self) -> None:
-        """Провалившийся кандидат не записан; карта откатилась на стабильный."""
+        """Провалившийся кандидат не записан; карта осталась на стабильном.
+
+        Неудачный apply атомарен (IGCL отклоняет без записи) — откат не нужен,
+        лишней записи на карту/в журнал быть не должно.
+        """
         ctx = FakeCtx()
         engine = TuningEngine(
             ctx, _cfg(step=600.0, min_step=50.0, max_steps=8)
@@ -141,7 +145,7 @@ class TestEngineFrequency:
         result = engine.run()
         assert result.steps_taken == 1
         assert result.best_stable == 600.0
-        assert ctx.applied == [600.0, 600.0]  # успех + откат на то же
+        assert ctx.applied == [600.0]  # только успех; откат не нужен — карта на best
         assert 1080.0 not in ctx.applied
         assert "диапазон IGCL" in result.stopped_reason
 
@@ -309,6 +313,58 @@ class TestWatchdog:
         assert "LogName='System'" in cmd
         assert "StartTime" in cmd
 
+    def test_tdr_query_provider_and_culture_free_time(self, monkeypatch) -> None:
+        """ProviderName='Display' + числовой конструктор времени (culture-free).
+
+        [datetime]'ISO-строка' парсится не на всех локалях (не-Григорианские
+        календари молча убивают детектор); провайдер в фильтре отсекает 4101
+        от чужих устройств.
+        """
+        captured: dict[str, object] = {}
+
+        class FakeCompleted:
+            stdout = b""
+
+        def fake_run(cmd, **kwargs: object) -> FakeCompleted:
+            captured["cmd"] = " ".join(cmd)
+            return FakeCompleted()
+
+        monkeypatch.setattr(wd_mod.subprocess, "run", fake_run)
+        Watchdog().check(_snap())
+        cmd = str(captured["cmd"])
+        assert "ProviderName='Display'" in cmd
+        assert "[datetime]::new(" in cmd
+
+    def test_tdr_negative_cached(self, monkeypatch) -> None:
+        """Негатив кэшируется: PowerShell не спавнится на каждом шаге."""
+        w = Watchdog()
+        calls = {"n": 0}
+
+        def fake_query() -> list[str]:
+            calls["n"] += 1
+            return []
+
+        monkeypatch.setattr(w, "_query_tdr_events", fake_query)
+        assert w.check(_snap(activity=100)) is None
+        assert w.check(_snap(activity=101)) is None  # активность растёт — не заморозка
+        assert calls["n"] == 1  # повтор в интервале пропущен кэшем
+        monkeypatch.setattr(wd_mod.time, "monotonic", lambda: 1e9)
+        assert w.check(_snap(activity=102)) is None
+        assert calls["n"] == 2  # интервал прошёл — снова опрос
+
+    def test_counter_reset_is_incident(self, monkeypatch) -> None:
+        """Сброс activity_counter (рестарт драйвера) — инцидент, не «заморозка».
+
+        После TDR оба счётчика обнуляются: энергия «скачет» и ложная
+        заморозка не детектится — ловим именно уменьшение счётчика.
+        """
+        monkeypatch.setattr(Watchdog, "_query_tdr_events", lambda self: [])
+        w = Watchdog()
+        assert w.check(_snap(activity=100, energy=5000.0)) is None
+        evt = w.check(_snap(activity=40, energy=2000.0))
+        assert evt is not None and evt.type == "TELEMETRY_FROZEN"
+        assert "сброшен" in evt.detail
+
     def test_subprocess_failure_not_incident(self, monkeypatch) -> None:
         """Нет PowerShell/таймаут — не инцидент (не наш сбой)."""
 
@@ -422,3 +478,64 @@ class TestProfiles:
         content = (tmp_path / "a.json").read_text(encoding="utf-8")
         assert "бен" in content  # ensure_ascii=False: не \u-эскейпы
         json.loads(content)  # корректный JSON
+
+
+class TestConfigValidate:
+    """validate(): битый профиль (JSON) не должен трогать карту.
+
+    Профили — обычный JSON: там легко получить строку вместо числа, NaN
+    или неизвестный режим. Раньше такие значения падали TypeError'ом уже
+    в рабочем потоке, мимо каналов ошибок GUI.
+    """
+
+    @pytest.mark.parametrize(
+        "over",
+        [
+            {"mode": "turbo"},  # неизвестный режим (раньше → reset_oc, потеря OC)
+            {"step": "15"},  # строка вместо числа
+            {"step": -15.0},  # инверсия направления
+            {"step": float("nan")},  # NaN из JSON
+            {"max_steps": 0},  # пустой цикл
+            {"max_steps": "30"},  # строка вместо int
+            {"min_step": 0.0},  # бесконечный спуск
+            {"temp_ceiling_c": -5.0},  # гард выключен
+            {"load_timeout": -1.0},
+            {"external_cmd": 123},  # не строка
+        ],
+    )
+    def test_invalid_config_rejected_before_card_touch(self, over: dict) -> None:
+        ctx = FakeCtx()
+        with pytest.raises(SafetyLimitError):
+            TuningEngine(ctx, _cfg(**over)).run()
+        assert ctx.applied == []  # карта не тронута ни одной записью
+        assert ctx.reset_count == 0  # и не сброшена к дефолту
+
+
+class TestExceptionSafety:
+    """Главный инвариант: карта не остаётся на необработанном кандидате."""
+
+    def test_unexpected_exception_after_apply_rolls_back(self) -> None:
+        """IgclError из телеметрии ПОСЛЕ apply → откат к best в finally."""
+        from arctuner.igcl.api import IgclError
+
+        ctx = FakeCtx()
+
+        def boom() -> TelemetrySnapshot:
+            raise IgclError(-1, "драйвер отвалился")
+
+        ctx.telemetry = boom  # type: ignore[method-assign]
+        with pytest.raises(IgclError):
+            TuningEngine(ctx, _cfg(step=50.0, max_steps=1)).run()
+        assert ctx.applied == [50.0, 0.0]  # кандидат записан → откат к baseline
+
+    def test_stress_terminate_failure_not_fatal(self, monkeypatch) -> None:
+        """Сбой остановки нагрузки не перекрывает результат/исключение."""
+
+        def boom(proc: object) -> None:
+            raise OSError("нет taskkill")
+
+        monkeypatch.setattr(loader, "start_external", lambda cmd: object())
+        monkeypatch.setattr(loader, "terminate_stress", boom)
+        ctx = FakeCtx()
+        result = TuningEngine(ctx, _cfg(external_cmd="bench.exe", max_steps=1)).run()
+        assert result.steps_taken == 1  # результат дошёл целиком

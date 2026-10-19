@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import subprocess
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from typing import ClassVar
@@ -45,12 +46,14 @@ class Watchdog:
     TEMPERATURE_EMERGENCY: ClassVar[float] = 85.0  # °C — авария, дальше искать нечего
     TDR_EVENT_ID: ClassVar[int] = 4101
     TDR_PROVIDER: ClassVar[str] = "Display"  # источник 4101 в журнале System
+    TDR_CHECK_INTERVAL: ClassVar[float] = 10.0  # с; PowerShell на каждом шаге дорог
 
     def __init__(self, device: str = "") -> None:
         self._device = device
         self._started_at = datetime.now()
         self._last_snap: TelemetrySnapshot | None = None
         self._tdr_found = False  # однажды найденный TDR не ищется повторно
+        self._tdr_last_check: float | None = None  # кэш негатива: не чаще интервала
 
     def check(self, snapshot: TelemetrySnapshot) -> WatchdogEvent | None:
         """Проверяет снимок. Возвращает первое событие или None.
@@ -99,6 +102,14 @@ class Watchdog:
             return None  # данных мало — не решаем
         if act[1] > act[0]:  # активность растёт — телеметрия жива
             return None
+        if act[1] < act[0]:
+            # Счётчик сброшен/переполнился — после TDR или рестарта драйвера
+            # оба счётчика обнуляются (энергия при этом «скачет» — ложная
+            # заморозка не детектится, ловим именно сброс активности).
+            return WatchdogEvent(
+                type="TELEMETRY_FROZEN",
+                detail=f"activity_counter сброшен ({act[0]} → {act[1]}) — рестарт драйвера?",
+            )
         if act[0] > 0 and abs(enj[1] - enj[0]) < 1e-6:
             return WatchdogEvent(
                 type="TELEMETRY_FROZEN",
@@ -114,6 +125,13 @@ class Watchdog:
         """
         if self._tdr_found:
             return None
+        now = time.monotonic()
+        if (
+            self._tdr_last_check is not None
+            and now - self._tdr_last_check < self.TDR_CHECK_INTERVAL
+        ):
+            return None  # кэш негатива: PowerShell на каждом шаге дорог
+        self._tdr_last_check = now
         events = self._query_tdr_events()
         if not events:
             return None
@@ -131,11 +149,15 @@ class Watchdog:
         Returns:
             Список строк-времени обнаруженных событий (пустой — эффекта нет).
         """
-        start = self._started_at.isoformat(timespec="seconds")
+        # Числовой конструктор времени — culture-free: строковый ISO парсится
+        # не на всех локалях (не-Григорианские календари ломают [datetime]'…').
+        t = self._started_at
+        ctor = f"[datetime]::new({t.year},{t.month},{t.day},{t.hour},{t.minute},{t.second})"
         ps = (
             "$ErrorActionPreference='SilentlyContinue';"
             f"$e = Get-WinEvent -FilterHashtable "
-            f"@{{LogName='System'; Id=4101; StartTime=[datetime]'{start}'}} | "
+            f"@{{LogName='System'; Id={self.TDR_EVENT_ID}; "
+            f"ProviderName='{self.TDR_PROVIDER}'; StartTime={ctor}}} | "
             "Sort-Object TimeCreated; "
             "if ($e) { $e | ForEach-Object { $_.TimeCreated.ToString('o') } }"
         )

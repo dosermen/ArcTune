@@ -121,7 +121,26 @@ class AutoTuneTab(QWidget):
         self._mode_btn.setText(self._mode_text())
 
     def _on_start(self) -> None:
-        """Отправляет конфигурацию в воркер (поиск выполняется в его потоке)."""
+        """Отправляет конфигурацию в воркер (поиск выполняется в его потоке).
+
+        Кнопки гасятся ДО emit: busy_changed из воркера едет через очередь и
+        окно «клик записи» успело бы пролезть, пока поиск не начался. Команда
+        нагрузчика из профиля исполняется как есть — показываем её и просим
+        подтверждение (профиль — обычный JSON, чужой файл не должен молча
+        выполнять код).
+        """
+        if self._config.external_cmd:
+            answer = QMessageBox.question(
+                self,
+                "ArcTune — нагрузчик из профиля",
+                f"Будет запущена команда из профиля:\n{self._config.external_cmd}\n\nПродолжить?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                self._state.setText("Запуск отменён (нагрузчик из профиля не подтверждён)")
+                return
+        self.set_busy(True)  # локально и сразу; повторно воркер пришлёт тот же статус
         self._state.setText(
             "Запуск: подготовка поиска… (потребуется нагрузка на GPU, см. примечание выше)"
         )

@@ -21,6 +21,9 @@
 
 from __future__ import annotations
 
+import contextlib
+import math
+import subprocess
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -77,6 +80,41 @@ class TuningConfig:
     require_load: bool = True  # шаг засчитывается только под нагрузкой
     load_timeout: float = 6.0  # ожидание появления нагрузки, с
     external_cmd: str | None = None  # команда стресс-нагрузчика (запускается один раз)
+
+    def validate(self) -> None:
+        """Проверяет конфигурацию ДО любых обращений к карте.
+
+        Профили — JSON: там легко получить строку вместо числа, NaN или
+        неизвестный режим. Без этой проверки такие значения падают TypeError'ом
+        уже в рабочем потоке, мимо всех каналов ошибок GUI.
+
+        Raises:
+            SafetyLimitError: значение некорректно (карта не тронута).
+        """
+        if self.mode not in (MODE_FREQUENCY, MODE_UNDERVOLT):
+            raise SafetyLimitError(f"неизвестный режим автопоиска: {self.mode!r}")
+        numeric = {
+            "step": self.step,
+            "min_step": self.min_step,
+            "settle_seconds": self.settle_seconds,
+            "temp_ceiling_c": self.temp_ceiling_c,
+            "load_timeout": self.load_timeout,
+        }
+        for name, value in numeric.items():
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise SafetyLimitError(f"{name} — число ожидается, получено: {value!r}")
+            if not math.isfinite(value):
+                raise SafetyLimitError(f"{name} — бесконечность/NaN недопустимы")
+        if self.step <= 0 or self.min_step <= 0:
+            raise SafetyLimitError(f"step/min_step должны быть > 0: {self.step}/{self.min_step}")
+        if isinstance(self.max_steps, bool) or not isinstance(self.max_steps, int):
+            raise SafetyLimitError(f"max_steps — целое ожидается, получено: {self.max_steps!r}")
+        if self.max_steps <= 0:
+            raise SafetyLimitError(f"max_steps должен быть > 0: {self.max_steps}")
+        if self.load_timeout < 0 or self.settle_seconds < 0 or self.temp_ceiling_c <= 0:
+            raise SafetyLimitError("load_timeout/settle_seconds >= 0, temp_ceiling_c > 0")
+        if self.external_cmd is not None and not isinstance(self.external_cmd, str):
+            raise SafetyLimitError(f"external_cmd — строка/None: {self.external_cmd!r}")
 
 
 @dataclass
@@ -183,6 +221,7 @@ class TuningEngine:
         """
         cfg = self._cfg
         ctx = self._ctx
+        cfg.validate()  # до любых обращений к карте: битый профиль не должен её трогать
         field_name = "gpuVoltageOffset" if cfg.mode == MODE_UNDERVOLT else "gpuFrequencyOffset"
 
         baseline = ctx.current_values().get(field_name)
@@ -223,23 +262,27 @@ class TuningEngine:
             for i in range(1, cfg.max_steps + 1):
                 if stop_check is not None and stop_check():
                     reason = "остановлено пользователем — откат к стабильному"
-                    need_restore = True
-                    break
+                    break  # карта на best (need_restore=False): откат не нужен
 
                 # candidate считается ОТ BEST: стабильные шаги накапливаются,
                 # а не нанизываются мелкими от baseline.
                 candidate = round(best + direction * current_step, 6)
 
+                # Флаг ПЕРЕД записью: любое исключение между apply и засчётом
+                # шага (IgclError из телеметрии, сбой колбэка…) обязано откатить
+                # карту с необработанного кандидата к best.
+                need_restore = True
                 try:
                     self._apply(candidate)
                 except SafetyLimitError as e:
+                    # Запись не прошла — карта осталась на best, откат не нужен.
+                    need_restore = False
                     reason = f"достигнут диапазон IGCL на шаге {i}: {e}"
                     if cfg.mode == MODE_UNDERVOLT:
                         reason += (
                             " — undervolt через смещение на B580 ограничен (min=0);"
                             " используйте кривую V/F"
                         )
-                    need_restore = True
                     break
 
                 if cfg.settle_seconds > 0:
@@ -252,7 +295,6 @@ class TuningEngine:
                         ctx.telemetry, interval=0.5, timeout=cfg.load_timeout
                     ):
                         reason = f"нет нагрузки на шаге {i} — стабильность не подтверждена"
-                        need_restore = True
                         break
                 elif on_status:
                     on_status(f"шаг {i}: кандидат {candidate:+g} — замер телеметрии…")
@@ -263,14 +305,12 @@ class TuningEngine:
                     evt = self._watchdog.check(snap)
                     if evt is not None:
                         reason = f"watchdog: {evt.type} — {evt.detail}"
-                        need_restore = True
                         break
 
                 if snap.gpu_temp_c is not None and snap.gpu_temp_c > cfg.temp_ceiling_c:
                     reason = (
                         f"температура {snap.gpu_temp_c:.0f}°C > потолка {cfg.temp_ceiling_c:.0f}°C"
                     )
-                    need_restore = True
                     break
 
                 fitness = self._evaluate_fitness(snap)
@@ -288,27 +328,36 @@ class TuningEngine:
                 )
                 fitness_history.append({"step": i, "fitness": fitness, "value": candidate})
 
+                best = candidate
+                steps_taken = i
+                need_restore = False  # шаг засчитан — карта на best, откат не нужен
+
                 if on_step:
                     on_step(i, candidate, snap)
 
-                best = candidate
-                steps_taken = i
                 current_step = round(current_step * self.STEP_DECAY, 6)
                 if current_step < cfg.min_step:
                     reason = "шаг ниже минимального — граница найдена"
                     break
 
         except KeyboardInterrupt:
+            # need_restore уже корректен по фазе шага (True — если карта ушла
+            # с best и ещё не засчитана) — finally выполнит откат.
             reason = "прервано пользователем (Ctrl+C) — выполнен откат"
-            need_restore = True
             from arctuner.autofind import AutofindAbortError
 
             raise AutofindAbortError(reason) from None
         finally:
             if need_restore:
-                self._restore(best)
+                # Ошибка отката не перекрывает исходное исключение/результат:
+                # карта проверена tuner'ом, безопасное состояние обеспечит
+                # повторный запуск/сброс (об ошибке отката сообщит канал воркера).
+                with contextlib.suppress(IgclError, SafetyLimitError):
+                    self._restore(best)
             if stress is not None:
-                loader.terminate_stress(stress)
+                # Остановка нагрузки не должна перекрывать результат/исключение.
+                with contextlib.suppress(OSError, subprocess.TimeoutExpired):
+                    loader.terminate_stress(stress)
 
         return TuningResult(
             mode=cfg.mode,

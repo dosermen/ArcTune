@@ -27,6 +27,7 @@ class LogTab(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._entries: list[LogEntry] = []
+        self._busy = False  # воркер занят: устаревшие записи не снимают блок
 
         self._table = QTableWidget(0, 6)
         self._table.setHorizontalHeaderLabels(
@@ -69,7 +70,8 @@ class LogTab(QWidget):
         """Заполняет таблицу (новые сверху)."""
         self._entries = list(entries)
         self._count.setText(f"Записей: {len(self._entries)}")
-        self._rollback_btn.setEnabled(bool(self._entries))
+        # Устаревший queued-журнал (пришёл во время busy) не снимает блок отката.
+        self._rollback_btn.setEnabled(bool(self._entries) and not self._busy)
 
         rows = list(reversed(self._entries))
         self._table.setRowCount(len(rows))
@@ -126,6 +128,7 @@ class LogTab(QWidget):
 
     def set_busy(self, busy: bool) -> None:
         """Воркер занят записью: откат/обновление блокированы до его конца."""
+        self._busy = busy
         self._rollback_btn.setEnabled(bool(self._entries) and not busy)
         self._refresh_btn.setEnabled(not busy)
 

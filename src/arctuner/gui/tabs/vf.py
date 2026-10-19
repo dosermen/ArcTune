@@ -35,6 +35,7 @@ class VfTab(QWidget):
         super().__init__(parent)
         self._points: list[tuple[int, int]] = []  # сток с карты
         self._edited: list[tuple[int, int]] | None = None  # правка на графике
+        self._busy = False  # воркер занят: устаревшие данные не снимают блок
 
         self._chart = VfChart()
         self._chart.setMinimumHeight(260)
@@ -90,7 +91,8 @@ class VfTab(QWidget):
         self._chart.set_curve(self._points)
         self._chart.set_editable(bool(points))
         self._info.setText(f"Точек: {len(self._points)}" if points else "Точек: —")
-        self.set_busy(False)
+        # Устаревший queued-ответ (пришёл во время busy) не снимает блок.
+        self.set_busy(self._busy)
 
     def edited_points(self) -> list[tuple[int, int]]:
         """Текущие точки графика (с правкой или без) — для проверки курьером worker'а."""
@@ -100,7 +102,9 @@ class VfTab(QWidget):
 
     def set_busy(self, busy: bool) -> None:
         """Воркер занят записью: кнопки блокируются, после — по реальному состоянию."""
+        self._busy = busy
         has_points = bool(self._points)
+        self._chart.set_editable(not busy and has_points)  # правка точки — тоже запись
         self._refresh_btn.setEnabled(not busy)
         self._export_btn.setEnabled(has_points and not busy)
         self._import_btn.setEnabled(has_points and not busy)
@@ -131,7 +135,8 @@ class VfTab(QWidget):
             )
         else:
             self._info.setText("Правка отклонена валидацией (границы/монотонность)")
-        self.set_busy(False)
+        # Пересчёт кнопок с учётом текущего busy (во время поиска правка не пишется).
+        self.set_busy(self._busy)
 
     def _on_apply_chart(self) -> None:
         """Запись правки с графика: валидация → предпросмотр диффа → подтверждение."""
@@ -176,7 +181,7 @@ class VfTab(QWidget):
         self._edited = None
         self._chart.set_curve(self._points)
         self._info.setText(f"Точек: {len(self._points)}" if self._points else "Точек: —")
-        self.set_busy(False)
+        self.set_busy(self._busy)
 
     def _on_export(self) -> None:
         path, _ = QFileDialog.getSaveFileName(

@@ -256,7 +256,6 @@ class GpuWorker(QObject):
                 on_status=_on_status,
             )
             self.autotune_completed.emit(result)
-            self.reload_static()
 
         self.busy_changed.emit(True)
         try:
@@ -265,12 +264,22 @@ class GpuWorker(QObject):
             self.autotune_error.emit(f"заблокировано проверкой: {e}")
         except (IgclError, OSError) as e:
             self.autotune_error.emit(f"ошибка авторазгона: {e}")
+        except Exception as e:
+            # Всё «иное» (TypeError из битого профиля, сбой колбэка, …) обязано
+            # дойти до пользователя каналом ошибок, а не в невидимый stderr exe.
+            self.autotune_error.emit(f"неожиданная ошибка поиска: {e!r}")
         finally:
+            self.reload_static()  # карта могла измениться (шаг/откат) — обновить статику
             self.busy_changed.emit(False)
 
-    @Slot()
     def autotune_stop(self) -> None:
-        """Ставит флаг отмены; движок проверит его перед следующим шагом."""
+        """Ставит флаг отмены; движок проверит его перед следующим шагом.
+
+        Вызывается НАПРЯМУЯЙ из UI-потока (не через queued-слот): воркер-поток
+        занят синхронным поиском и очередь слотов не обрабатывает — queued-стоп
+        сработал бы только ПОСЛЕ завершения поиска. Присваивание bool
+        потокобезопасно под GIL.
+        """
         self._autotune_stop = True
 
     # --- внутренности ---
@@ -290,6 +299,8 @@ class GpuWorker(QObject):
             self.write_error.emit(f"ошибка драйвера: {e}")
         except OSError as e:
             self.write_error.emit(f"файл/диск: {e}")
+        except Exception as e:
+            self.write_error.emit(f"неожиданная ошибка записи: {e!r}")
         finally:
             self.busy_changed.emit(False)
 

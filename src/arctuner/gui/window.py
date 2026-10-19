@@ -122,6 +122,7 @@ class MainWindow(QMainWindow):
         w.busy_changed.connect(self._on_busy)
         w.incident_replay.connect(self._on_incident)
         w.autotune_progress.connect(self._autotune.update_progress)
+        w.autotune_completed.connect(self._autotune.display_result)
         w.autotune_error.connect(self._on_autotune_error)
 
     def _wire_tabs(self) -> None:
@@ -145,7 +146,9 @@ class MainWindow(QMainWindow):
 
         at = self._autotune
         at.search_requested.connect(self._worker.autotune_search)
-        at.stop_requested.connect(self._worker.autotune_stop)
+        # Stop — напрямой вызов: queued-слот не выполнился бы, пока воркер-поток
+        # занят синхронным поиском (флаг читается поиском без обработки очереди).
+        at.stop_requested.connect(self._worker.autotune_stop, Qt.ConnectionType.DirectConnection)
 
     # --- меню «Вид»: масштаб интерфейса ---
 
@@ -284,7 +287,16 @@ class MainWindow(QMainWindow):
         self._set_pill("danger", f"🚨 Инцидент (драйвер перезагрузился?) — дамп: {path}")
 
     def _on_busy(self, busy: bool) -> None:
-        """Воркер занят записью: блокируем кнопки записей во вкладках."""
+        """Воркер занят записью/поиском: блокируем кнопки и гасим опрос.
+
+        Опрос во время поиска мешал бы дважды: воркер-поток и так занят
+        (queued-вызовы копились и выстреляли флудом после), а мониторинг
+        всё равно не получал бы снимков.
+        """
+        if busy:
+            self._timer.stop()  # поиск/запись: опрос не нужен и вреден
+        else:
+            self._timer.start()
         self._overclock.set_busy(busy)
         self._fans.set_busy(busy)
         self._vf.set_busy(busy)
@@ -300,6 +312,9 @@ class MainWindow(QMainWindow):
         """
         self._timer.stop()
         if self._thread.isRunning():
+            # Честный стоп поиска: без него shutdown ждал бы многоминутного
+            # engine.run (воркер-поток занят), и окно висело бы «не отвечает».
+            self._worker.autotune_stop()
             QMetaObject.invokeMethod(
                 self._worker, "shutdown", Qt.ConnectionType.BlockingQueuedConnection
             )

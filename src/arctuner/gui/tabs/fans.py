@@ -34,6 +34,7 @@ class FansTab(QWidget):
         self._rows: list[tuple[int, QLabel, QLabel, QWidget]] = []
         self._controllable = 0
         self._have_fans = False
+        self._busy = False  # воркер занят: устаревший queued-список не снимает блок
 
         self._list_box = QGroupBox("Вентиляторы (read-only)")
         self._list_layout = QVBoxLayout(self._list_box)
@@ -121,10 +122,13 @@ class FansTab(QWidget):
             self._list_layout.addWidget(holder)
             self._rows.append((fan.index, speed, props, holder))
 
-        self.set_busy(False)
+        # Устаревший queued-список (пришёл во время busy) не должен снимать
+        # блокировку записей — пересчитываем кнопки по ТЕКУЩЕМУ busy.
+        self.set_busy(self._busy)
 
     def set_busy(self, busy: bool) -> None:
         """Воркер занят записью: кнопки блокируются, после — по реальному состоянию."""
+        self._busy = busy
         self._set_btn.setEnabled(self._controllable > 0 and not busy)
         self._reset_btn.setEnabled(self._have_fans and not busy)
         self._refresh_btn.setEnabled(not busy)

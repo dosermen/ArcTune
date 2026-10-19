@@ -21,8 +21,9 @@ class ProfileStore:
     """Чтение и запись профилей авторазгона (JSON)."""
 
     def __init__(self, directory: Path | None = None) -> None:
+        # mkdir НЕ здесь: сбой каталога (права/диск) не должен ронять вкладку
+        # на старте GUI — каталог создаст save() по факту записи.
         self._dir = directory or DEFAULT_PROFILE_DIR
-        self._dir.mkdir(parents=True, exist_ok=True)
 
     @property
     def dir(self) -> Path:
