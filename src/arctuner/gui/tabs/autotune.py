@@ -87,18 +87,18 @@ class AutoTuneTab(QWidget):
         self._result = QLabel("Результат: —")
         self._result.setObjectName("resultsLabel")
 
-        save_btn = QPushButton("💾 Сохранить профиль…")
-        save_btn.setObjectName("infoButton")
-        save_btn.clicked.connect(self._on_save_profile)
+        self._save_btn = QPushButton("💾 Сохранить профиль…")
+        self._save_btn.setObjectName("infoButton")
+        self._save_btn.clicked.connect(self._on_save_profile)
 
-        load_btn = QPushButton("📂 Загрузить профиль…")
-        load_btn.setObjectName("infoButton")
-        load_btn.clicked.connect(self._on_load_profile)
+        self._load_btn = QPushButton("📂 Загрузить профиль…")
+        self._load_btn.setObjectName("infoButton")
+        self._load_btn.clicked.connect(self._on_load_profile)
 
         profiles = QHBoxLayout()
         profiles.addWidget(QLabel("Профили:"))
-        profiles.addWidget(save_btn)
-        profiles.addWidget(load_btn)
+        profiles.addWidget(self._save_btn)
+        profiles.addWidget(self._load_btn)
         profiles.addStretch(1)
 
         lay = QVBoxLayout(self)
@@ -204,10 +204,17 @@ class AutoTuneTab(QWidget):
         return "  " + ", ".join(parts)
 
     def set_busy(self, busy: bool) -> None:
-        """Воркер занят поиском: «Стоп» активно, остальное заблокировано."""
+        """Воркер занят поиском: «Стоп» активно, остальное заблокировано.
+
+        Профили тоже: загрузка во время поиска подменила бы _config, пока
+        идущий поиск работает со старым объектом — пользователь видел бы
+        «применено», которого на самом деле нет.
+        """
         self._start_btn.setEnabled(not busy)
         self._stop_btn.setEnabled(busy)
         self._mode_btn.setEnabled(not busy)
+        self._save_btn.setEnabled(not busy)
+        self._load_btn.setEnabled(not busy)
 
     # --- профили ---
 

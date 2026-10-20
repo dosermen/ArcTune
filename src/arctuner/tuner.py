@@ -88,8 +88,9 @@ def set_power_limit(api: IgclApi, handle, percent: float) -> WriteReport:
     info = _oc(api, handle)["powerLimit"]
     assert isinstance(info, OcControlInfo)
     _check_igcl_range("power_limit", percent, info)
+    old = _read_current(api, handle, "powerLimit")  # фактическое «было», не default
     api.set_power_limit(handle, percent)
-    return WriteReport("powerLimit", info.default, percent)
+    return WriteReport("powerLimit", old, percent)
 
 
 def set_gpu_freq_offset(api: IgclApi, handle, mhz: float) -> WriteReport:
@@ -107,8 +108,9 @@ def set_gpu_freq_offset(api: IgclApi, handle, mhz: float) -> WriteReport:
     _check_igcl_range("gpu_freq_offset", mhz, info)
     if mhz < 0:
         _ensure_waiver(api, handle)
+    old = _read_current(api, handle, "gpuFrequencyOffset")
     api.set_gpu_freq_offset(handle, mhz)
-    return WriteReport("gpuFrequencyOffset", info.default, mhz)
+    return WriteReport("gpuFrequencyOffset", old, mhz)
 
 
 def set_gpu_voltage_offset(api: IgclApi, handle, percent: float) -> WriteReport:
@@ -130,8 +132,9 @@ def set_gpu_voltage_offset(api: IgclApi, handle, percent: float) -> WriteReport:
     assert isinstance(info, OcControlInfo)
     _check_igcl_range("gpu_voltage_offset", percent, info)
     _ensure_waiver(api, handle)
+    old = _read_current(api, handle, "gpuVoltageOffset")
     api.set_gpu_voltage_offset(handle, percent)
-    return WriteReport("gpuVoltageOffset", info.default, percent)
+    return WriteReport("gpuVoltageOffset", old, percent)
 
 
 def set_temperature_limit(api: IgclApi, handle, celsius: float) -> WriteReport:
@@ -144,8 +147,9 @@ def set_temperature_limit(api: IgclApi, handle, celsius: float) -> WriteReport:
     info = _oc(api, handle)["temperatureLimit"]
     assert isinstance(info, OcControlInfo)
     _check_igcl_range("temperature_limit", celsius, info)
+    old = _read_current(api, handle, "temperatureLimit")
     api.set_temperature_limit(handle, celsius)
-    return WriteReport("temperatureLimit", info.default, celsius)
+    return WriteReport("temperatureLimit", old, celsius)
 
 
 def set_vram_speed(
@@ -166,9 +170,10 @@ def set_vram_speed(
     info = _oc(api, handle)["vramMemSpeedLimit"]
     assert isinstance(info, OcControlInfo)
     _check_igcl_range("vram_speed", gbps, info)
+    old = _read_current(api, handle, "vramMemSpeedLimit")
     api.set_vram_mem_speed(handle, gbps)
     note = "сверх номинала SC20 (20) — явное согласие" if gbps > MAX_VRAM_SPEED_GBPS else ""
-    return WriteReport("vramMemSpeedLimit", info.default, gbps, note)
+    return WriteReport("vramMemSpeedLimit", old, gbps, note)
 
 
 def reset_to_default(api: IgclApi, handle) -> WriteReport:
@@ -184,30 +189,39 @@ def reset_to_default(api: IgclApi, handle) -> WriteReport:
     return WriteReport("all", None, None, "сброс к дефолту")
 
 
+#: OC-поле -> V2 Get-функция IGCL (чтение фактического значения).
+_CURRENT_GETTERS: dict[str, str] = {
+    "gpuFrequencyOffset": "ctlOverclockGpuFrequencyOffsetGetV2",
+    "powerLimit": "ctlOverclockPowerLimitGetV2",
+    "temperatureLimit": "ctlOverclockTemperatureLimitGetV2",
+    "vramMemSpeedLimit": "ctlOverclockVramMemSpeedLimitGetV2",
+    "gpuVoltageOffset": "ctlOverclockGpuMaxVoltageOffsetGetV2",
+}
+
+
+def _read_current(api: IgclApi, handle, field: str) -> float | None:
+    """Фактическое текущее значение поля; None — не поддерживается/не читается.
+
+    Нужно для честного «было → стало» в журнале: info.default — это ЗАВОДСКОЕ
+    значение, а карта могла быть настроена другим ПО (Intel Graphics Software).
+    """
+    func = _CURRENT_GETTERS[field]
+    if not api.loader.has(func):
+        return None
+    val = ctypes.c_double(0)
+    try:
+        _api_call(api, func, handle, ctypes.byref(val))
+    except IgclError:
+        return None
+    return val.value
+
+
 def current_values(api: IgclApi, handle) -> dict[str, float | None]:
     """Текущие (не дефолтные) значения OC-пунктов через V2 Get-функции.
 
     Нужно для лога «что было → что стало» перед записью.
     """
-    out: dict[str, float | None] = {}
-    getters = [
-        ("gpuFrequencyOffset", "ctlOverclockGpuFrequencyOffsetGetV2"),
-        ("powerLimit", "ctlOverclockPowerLimitGetV2"),
-        ("temperatureLimit", "ctlOverclockTemperatureLimitGetV2"),
-        ("vramMemSpeedLimit", "ctlOverclockVramMemSpeedLimitGetV2"),
-        ("gpuVoltageOffset", "ctlOverclockGpuMaxVoltageOffsetGetV2"),
-    ]
-    for field, func in getters:
-        if not api.loader.has(func):
-            out[field] = None
-            continue
-        val = ctypes.c_double(0)
-        try:
-            _api_call(api, func, handle, ctypes.byref(val))
-            out[field] = val.value
-        except IgclError:
-            out[field] = None
-    return out
+    return {field: _read_current(api, handle, field) for field in _CURRENT_GETTERS}
 
 
 # Небольшие хелперы, чтобы не тянуть ctypes в публичный интерфейс.

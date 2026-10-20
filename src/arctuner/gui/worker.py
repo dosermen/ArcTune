@@ -39,6 +39,9 @@ class GpuWorker(QObject):
     autotune_progress = Signal(int, int, str)  # current, total, text
     autotune_completed = Signal(object)  # TuningResult
     autotune_error = Signal(str)  # ошибка процесса авторазгона (не одиночная запись)
+    #: старт поиска: UI сначала зовёт autotune_arm() синхронно, затем эмитит это
+    #: (queued) — «Стоп», нажатый до выполнения слота, не должен теряться.
+    autotune_start = Signal(object)  # TuningConfig
 
     #: имя пункта UI -> метод GpuContext (все проходят tuner-проверки)
     _WRITERS: ClassVar[dict[str, Callable[..., WriteReport]]] = {
@@ -56,6 +59,9 @@ class GpuWorker(QObject):
         # Реплей инцидента: буфер создаётся после открытия сессии (нужно имя
         # устройства). Read-only: ни один звонок реплея не меняет карту.
         self._replay: IncidentReplay | None = None
+        # self-сигнал → слот в этом же потоке: emit из UI-потока встаёт в очередь
+        # воркера и не выполняет поиск в UI-потоке.
+        self.autotune_start.connect(self.autotune_search)
 
     # --- жизненный цикл ---
 
@@ -64,7 +70,9 @@ class GpuWorker(QObject):
         """Открывает IGCL-сессию и ищет дискретную Arc."""
         try:
             info = self._ctx.open()
-        except (IgclError, SafetyLimitError, OSError) as e:
+        except (IgclError, SafetyLimitError, OSError, RuntimeError) as e:
+            # RuntimeError — IgclNotFoundError (DLL/драйвер не найдены): без этой
+            # ветки слот падал молча, и окно навсегда оставалось на «Подключение…».
             self.error.emit(str(e))
             return
         self._replay = IncidentReplay(device=info.name)
@@ -134,7 +142,13 @@ class GpuWorker(QObject):
             self.vf_ready.emit(self._ctx.vf_curve())
         except (IgclError, SafetyLimitError) as e:
             self.error.emit(f"кривая V/F: {e}")
-        self.log_ready.emit(self._ctx.log.read_all())
+        try:
+            self.log_ready.emit(self._ctx.log.read_all())
+        except OSError as e:
+            # Журнал может быть недоступен (права/блокировка/диск). Раньше
+            # исключение летело из finally автопоиска мимо busy_changed(False) —
+            # кнопки навсегда оставались заблокированными.
+            self.error.emit(f"журнал: {e}")
 
     @Slot()
     def reload_fans(self) -> None:
@@ -231,11 +245,13 @@ class GpuWorker(QObject):
         Пишет через GpuContext (tuner-проверки + журнал). Прогресс —
         autotune_progress(шаг, всего_шагов, текст); итог — autotune_completed.
         Отмена — через autotune_stop(): движок откатит к стабильному значению.
+
+        Флаг отмены здесь НЕ сбрасывается: слот может стоять в очереди, пока
+        пользователь уже нажал «Стоп». Сброс — только autotune_arm() из UI
+        перед стартом (прямой вызов, до постановки слота в очередь).
         """
         from arctuner.autotune.engine import TuningEngine
         from arctuner.autotune.watchdog import Watchdog
-
-        self._autotune_stop = False
 
         def run() -> None:
             ctx = self._ctx
@@ -274,6 +290,14 @@ class GpuWorker(QObject):
             self.reload_static()  # карта могла измениться (шаг/откат) — обновить статику
             self.busy_changed.emit(False)
 
+    def autotune_arm(self) -> None:
+        """Сбрасывает флаг отмены перед стартом поиска (прямой вызов из UI).
+
+        Вызывается ДО постановки autotune_search в очередь: тогда «Стоп»,
+        нажатый между кликом и выполнением слота, остаётся действующим.
+        """
+        self._autotune_stop = False
+
     def autotune_stop(self) -> None:
         """Ставит флаг отмены; движок проверит его перед следующим шагом.
 
@@ -311,7 +335,10 @@ class GpuWorker(QObject):
         if report.new is None:
             line = report.field
         else:
-            line = f"{report.field}: {report.old:g} -> {report.new:g}"
+            # old может быть None (значение до записи не прочиталось) — не «?»,
+            # а честное «неизвестно»; f-string на None раньше падал TypeError.
+            old = f"{report.old:g}" if report.old is not None else "неизвестно"
+            line = f"{report.field}: {old} -> {report.new:g}"
         if report.note:
             line += f" ({report.note})"
         self.write_done.emit(line)

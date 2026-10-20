@@ -81,6 +81,31 @@ def test_igcl_range_accepts_inclusive_bounds() -> None:
 # --- Waiver: обязателен перед напряжением / отрицательной частотой / V/F ---
 
 
+class _LoaderStub:
+    """Минимальный Loader-дублёр: has/dll для V2 Get-функций."""
+
+    def __init__(self, funcs: dict | None = None) -> None:
+        from types import SimpleNamespace
+
+        self.dll = SimpleNamespace(**(funcs or {}))
+
+    def has(self, name: str) -> bool:
+        return hasattr(self.dll, name)
+
+
+class _ActualGetter:
+    """Поддельная V2 Get-функция: возвращает SUCCESS и пишет value в out."""
+
+    def __init__(self, value: float) -> None:
+        self.value = value
+        self.argtypes = None
+        self.restype = None
+
+    def __call__(self, handle, out) -> int:
+        out._obj.value = self.value  # ctypes.byref(c_double)
+        return 0  # CTL_RESULT_SUCCESS
+
+
 class _FakeApi:
     """Дублёр IgclApi: отдаёт фиксированные диапазоны и запоминает порядок вызовов."""
 
@@ -96,6 +121,7 @@ class _FakeApi:
         base.update(overrides)
         self._ranges = base
         self.calls: list[str] = []
+        self.loader = _LoaderStub()  # чтение «было» по умолчанию недоступно
 
     def read_oc_properties(self, handle) -> dict:
         return self._ranges
@@ -150,6 +176,21 @@ def test_power_limit_without_waiver() -> None:
     api = _FakeApi()
     tuner.set_power_limit(api, _HANDLE, 110.0)
     assert api.calls == ["power"]
+
+
+def test_write_report_old_is_actual_value() -> None:
+    """«Было» в WriteReport — фактическое значение с карты, а не заводской default.
+
+    Регрессия: карта была на 115% (выставлено сторонним ПО), ArcTune писал 110%,
+    а журнал/откат считали «было = 100» (info.default) — откат возвращал не то.
+    """
+    from arctuner import tuner
+
+    api = _FakeApi()
+    api.loader = _LoaderStub({"ctlOverclockPowerLimitGetV2": _ActualGetter(115.0)})
+    report = tuner.set_power_limit(api, _HANDLE, 110.0)
+    assert report.old == 115.0  # фактическое, не default=50 из _info
+    assert report.new == 110.0
 
 
 def test_vram_21_requires_beyond_nominal_flag() -> None:

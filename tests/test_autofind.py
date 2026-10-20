@@ -10,6 +10,8 @@ from __future__ import annotations
 import contextlib
 from unittest.mock import MagicMock
 
+import pytest
+
 from arctuner.autofind import (
     MODE_UNDERVOLT,
     AutofindConfig,
@@ -153,3 +155,45 @@ def test_history_records_each_step() -> None:
     assert len(res.history) == 3
     assert [h["passed"] for h in res.history] == [True, True, False]
     assert res.history[-1]["reason"] is not None
+
+
+def test_invalid_config_rejected_before_card_touch() -> None:
+    """Отрицательный шаг/пауза/лимит — SafetyLimitError ДО первой записи.
+
+    Регрессия: step < 0 разворачивал undervolt в опасную сторону (напряжение
+    вверх), а settle < 0 ронял ValueError уже ПОСЛЕ записи — без отката.
+    """
+    from arctuner.tuner import SafetyLimitError
+
+    api = _make_api(baseline=50.0, temp_at_or_below=(-999.0, 95.0))
+    for bad in (
+        AutofindConfig(step=-1.0),
+        AutofindConfig(settle_seconds=-1.0),
+        AutofindConfig(max_steps=0),
+        AutofindConfig(mode="nonsense"),
+    ):
+        with pytest.raises(SafetyLimitError):
+            autofind(api, handle=1, cfg=bad)
+    # Карта не тронута: ни одной записи напряжения.
+    api.set_gpu_voltage_offset.assert_not_called()
+
+
+def test_callback_exception_rolls_back() -> None:
+    """Исключение из on_step не оставляет карту на необработанном кандидате."""
+    api = _make_api(baseline=50.0, temp_at_or_below=(-999.0, 95.0))
+    calls = {"n": 0}
+
+    def boom(step: int, value: float, snap: TelemetrySnapshot) -> None:
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("колбэк сломался")
+
+    with pytest.raises(RuntimeError):
+        autofind(
+            api,
+            handle=1,
+            cfg=AutofindConfig(step=1.0, max_steps=5, settle_seconds=0, load_timeout_seconds=0),
+            on_step=boom,
+        )
+    # Шаг 1 (49) стабилен; шаг 2 (48) применился, колбэк упал → откат к 49.
+    assert api.state["applied"] == 49.0

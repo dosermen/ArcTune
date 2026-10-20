@@ -310,7 +310,8 @@ def cmd_set(args: argparse.Namespace) -> int:
                     report = fn(api, handle, value, allow_beyond_nominal=args.force)
                 else:
                     report = fn(api, handle, value)
-                line = f"  {report.field}: {report.old} -> {report.new}"
+                old_txt = "неизвестно" if report.old is None else f"{report.old:g}"
+                line = f"  {report.field}: {old_txt} -> {report.new:g}"
                 if report.note:
                     line += f"  ({report.note})"
                 print(line)
@@ -555,7 +556,7 @@ def cmd_info(_: argparse.Namespace) -> int:
                     note = f" (фикс {cfg.fixed_rpm} RPM)" if cfg.fixed_rpm else ""
                     print(f"  Вентилятор [{i}]: режим {cfg.mode}{note}, {speed} RPM")
                 except IgclError as e:
-                    print(f"  Вентилятор [{i}]: конфиг не читается ({e.code():#010x})")
+                    print(f"  Вентилятор [{i}]: конфиг не читается ({e.code:#010x})")
     except IgclError as e:
         print(f"[FAIL] {e}")
         return 1

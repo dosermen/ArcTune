@@ -56,6 +56,11 @@ def apply_qt_scale() -> float:
     scale = load_scale()
     if abs(scale - _DEFAULT) > 1e-6:
         os.environ["QT_SCALE_FACTOR"] = f"{scale:g}"
+    else:
+        # 100%: переменную надо УДАЛИТЬ, а не просто не выставлять. Иначе
+        # унаследованное от родителя значение (перезапуск из GUI) применится
+        # снова, и масштаб 100% не сработает.
+        os.environ.pop("QT_SCALE_FACTOR", None)
     return scale
 
 

@@ -183,6 +183,17 @@ class TuningEngine:
         self._cfg = cfg or TuningConfig()
         self._watchdog = watchdog
 
+    def _sleep(self, seconds: float, stop_check: Callable[[], bool] | None) -> None:
+        """Пауза, прерываемая stop_check (закрытие окна не ждёт settle целиком)."""
+        deadline = time.monotonic() + seconds
+        while True:
+            if stop_check is not None and stop_check():
+                return
+            left = deadline - time.monotonic()
+            if left <= 0:
+                return
+            time.sleep(min(0.1, left))
+
     def _apply(self, value: float) -> None:
         """Применяет значение через контекст (двухуровневая проверка + журнал)."""
         if self._cfg.mode == MODE_FREQUENCY:
@@ -299,9 +310,10 @@ class TuningEngine:
                 if grid is not None:
                     lo, gs = grid
                     snapped = round(lo + round((candidate - lo) / gs) * gs, 6)
-                    if snapped == best:
-                        # Шаг мельче сетки: следующее кратное значение — это
-                        # сам best, шагать больше некуда (не крутим до max_steps).
+                    # Не только равенство: baseline мог быть вне сетки (значение
+                    # выставлено сторонним ПО), и округление увело бы шаг НАЗАД
+                    # от best — в frequency это запись НИЖЕ исходного.
+                    if (direction > 0 and snapped <= best) or (direction < 0 and snapped >= best):
                         reason = "шаг мельче сетки IGCL (кратность) — граница найдена"
                         break
                     candidate = snapped
@@ -324,14 +336,27 @@ class TuningEngine:
                     break
 
                 if cfg.settle_seconds > 0:
-                    time.sleep(cfg.settle_seconds)
+                    self._sleep(cfg.settle_seconds, stop_check)
+                    # Проверяем только после реальной паузы: без settle отмена
+                    # будет замечена на следующей итерации, и лишний вызов
+                    # stop_check не сдвигает ожидания тестов/UI.
+                    if stop_check is not None and stop_check():
+                        reason = "остановлено пользователем — откат к стабильному"
+                        break
 
                 if cfg.require_load:
                     if on_status:
                         on_status(f"шаг {i}: применено {candidate:+g} — ожидание нагрузки…")
-                    if not loader.verify_stress(
-                        ctx.telemetry, interval=0.5, timeout=cfg.load_timeout
-                    ):
+                    under_load = loader.verify_stress(
+                        ctx.telemetry,
+                        interval=0.5,
+                        timeout=cfg.load_timeout,
+                        stop_check=stop_check,
+                    )
+                    if stop_check is not None and stop_check():
+                        reason = "остановлено пользователем — откат к стабильному"
+                        break
+                    if not under_load:
                         reason = f"нет нагрузки на шаге {i} — стабильность не подтверждена"
                         break
                 elif on_status:

@@ -145,7 +145,7 @@ class MainWindow(QMainWindow):
         lg.refresh_requested.connect(self._worker.reload_static)
 
         at = self._autotune
-        at.search_requested.connect(self._worker.autotune_search)
+        at.search_requested.connect(self._on_autotune_start)
         # Stop — напрямой вызов: queued-слот не выполнился бы, пока воркер-поток
         # занят синхронным поиском (флаг читается поиском без обработки очереди).
         at.stop_requested.connect(self._worker.autotune_stop, Qt.ConnectionType.DirectConnection)
@@ -277,6 +277,16 @@ class MainWindow(QMainWindow):
         """Ошибка процесса авторазгона (не одиночная запись)."""
         self._set_pill("warn", f"⚠️ авторазгон: {message}")
         QMessageBox.warning(self, "ArcTune — ошибка авторазгона", message)
+
+    def _on_autotune_start(self, config: object) -> None:
+        """Старт авторазгона: сброс флага отмены синхронно, затем queued-слот.
+
+        Разделение важно: если сброс делать внутри слота, «Стоп», нажатый пока
+        слот стоит в очереди (воркер занят другой операцией), будет молча
+        проигнорирован — слот сбросит флаг и запустит полный поиск.
+        """
+        self._worker.autotune_arm()
+        self._worker.autotune_start.emit(config)
 
     def _on_incident(self, path: str) -> None:
         """Инцидент: счётчик энергии сбросился = драйвер перезагрузился (TDR/ребут).

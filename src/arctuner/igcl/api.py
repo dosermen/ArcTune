@@ -209,6 +209,20 @@ class IgclApi:
             ]
             dll.ctlOverclockGetProperties.restype = ctypes.c_uint32
 
+        # --- Информация об устройстве: PCIe/прошивка/ECC ---
+        # Без argtypes ctypes конвертировал handle (Python int, адрес > 32 бит)
+        # в C int → OverflowError; `arctune info` падал на первом же вызове.
+        for name, ptype in (
+            ("ctlPciGetProperties", T.CtlPciProperties),
+            ("ctlPciGetState", T.CtlPciState),
+            ("ctlGetFirmwareProperties", T.CtlFirmwareProperties),
+            ("ctlEccGetProperties", T.CtlEccProperties),
+            ("ctlEccGetState", T.CtlEccStateDesc),
+        ):
+            if self.loader.has(name):
+                getattr(dll, name).argtypes = [CtlDeviceHandle, ctypes.POINTER(ptype)]
+                getattr(dll, name).restype = ctypes.c_uint32
+
         # --- Запись разгона: все set-функции принимают (handle, double) ---
         for name in (
             "ctlOverclockGpuFrequencyOffsetSetV2",
@@ -257,6 +271,9 @@ class IgclApi:
         if self.loader.has("ctlFanSetDefaultMode"):
             dll.ctlFanSetDefaultMode.argtypes = [CtlFanHandle]
             dll.ctlFanSetDefaultMode.restype = ctypes.c_uint32
+        if self.loader.has("ctlFanGetConfig"):
+            dll.ctlFanGetConfig.argtypes = [CtlFanHandle, ctypes.POINTER(T.CtlFanConfig)]
+            dll.ctlFanGetConfig.restype = ctypes.c_uint32
 
         # --- Кривая V/F ---
         if self.loader.has("ctlOverclockReadVFCurve"):
@@ -285,16 +302,22 @@ class IgclApi:
                 "ctlInit отсутствует в загруженной библиотеке — "
                 "обновите драйвер Intel Arc (32.0.101.9xxx+)",
             )
-        if self.loader.has("ctlClose"):
-            args = T.CtlInitArgs()
-            args.Size = ctypes.sizeof(T.CtlInitArgs)
-            args.Version = 0
-            args.AppVersion = T.ctl_make_version(T.CTL_IMPL_MAJOR_VERSION, T.CTL_IMPL_MINOR_VERSION)
-            args.flags = T.CTL_INIT_FLAG_USE_LEVEL_ZERO
-            args.SupportedVersion = 0
-            handle = CtlApiHandle()
-            _check(self.loader.dll.ctlInit(ctypes.byref(args), ctypes.byref(handle)), "ctlInit")
-            self._api = handle.value
+        if not self.loader.has("ctlClose"):
+            # Раньше блок инициализации молча пропускался, и следующий вызов
+            # падал с невнятным ERROR_NOT_INITIALIZED — честнее сказать сразу.
+            raise IgclError(
+                T.CtlResult.ERROR_NOT_SUPPORTED,
+                "ctlClose отсутствует в загруженной библиотеке — обновите драйвер Intel Arc",
+            )
+        args = T.CtlInitArgs()
+        args.Size = ctypes.sizeof(T.CtlInitArgs)
+        args.Version = 0
+        args.AppVersion = T.ctl_make_version(T.CTL_IMPL_MAJOR_VERSION, T.CTL_IMPL_MINOR_VERSION)
+        args.flags = T.CTL_INIT_FLAG_USE_LEVEL_ZERO
+        args.SupportedVersion = 0
+        handle = CtlApiHandle()
+        _check(self.loader.dll.ctlInit(ctypes.byref(args), ctypes.byref(handle)), "ctlInit")
+        self._api = handle.value
 
     def shutdown(self) -> None:
         """ctlClose — освобождение handle API."""

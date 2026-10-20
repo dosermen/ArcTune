@@ -85,7 +85,13 @@ class IncidentReplay:
         return trigger
 
     def _detect_reset(self, snap: TelemetrySnapshot) -> str | None:
-        """Сравнивает счётчики энергии с предыдущим снимком."""
+        """Сравнивает счётчики энергии с предыдущим снимком.
+
+        База обновляется для ВСЕХ трёх счётчиков даже после найденного сброса:
+        иначе card/vram «падают» на следующем снимке и дают ещё два пустых
+        дампа на один инцидент.
+        """
+        trigger: str | None = None
         for key, value in (
             ("gpu", snap.gpu_energy_counter_j),
             ("card", snap.card_energy_counter_j),
@@ -95,9 +101,9 @@ class IncidentReplay:
                 continue
             prev = self._prev_energy.get(key)
             self._prev_energy[key] = value
-            if prev is not None and value < prev:
-                return f"energy_counter_reset_{key}"
-        return None
+            if prev is not None and value < prev and trigger is None:
+                trigger = f"energy_counter_reset_{key}"
+        return trigger
 
     def dump(self, trigger: str) -> Path | None:
         """Пишет буфер в JSONL и очищает его. None — буфер пуст, dump нечестен.

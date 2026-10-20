@@ -399,6 +399,12 @@ def test_qt_scale_factor_applied_before_app(qapp, tmp_path, monkeypatch) -> None
     assert scale.apply_qt_scale() == 1.75
     assert os.environ["QT_SCALE_FACTOR"] == "1.75"
 
+    # Сброс на 100% обязан УДАЛИТЬ переменную: иначе перезапуск из GUI
+    # унаследует 1.75 от родительского процесса и масштаб не сбросится.
+    scale.save_scale(1.0)
+    assert scale.apply_qt_scale() == 1.0
+    assert "QT_SCALE_FACTOR" not in os.environ
+
 
 def test_restart_argv_matches_launch_mode() -> None:
     """Из исходников перезапуск идёт через -m; из exe — просто бинарник."""
@@ -732,6 +738,62 @@ def test_worker_autotune_stop_flag(qapp) -> None:
     assert worker._autotune_stop is False
     worker.autotune_stop()
     assert worker._autotune_stop is True
+
+
+def test_worker_start_missing_driver_reports_error(qapp) -> None:
+    """Нет IGCL.dll (IgclNotFoundError=RuntimeError) → ошибка в UI, не тишина.
+
+    Регрессия: слот start() падал мимо except-ов, error не эмитился, и окно
+    навсегда оставалось на «Подключение…» без единого диалога.
+    """
+    from arctuner.gui.worker import GpuWorker
+
+    worker = GpuWorker()
+    errors: list[str] = []
+    worker.error.connect(errors.append)
+
+    def boom():
+        raise RuntimeError("IGCL.dll не найден")
+
+    worker._ctx.open = boom  # type: ignore[method-assign]
+    worker.start()
+    assert errors and "не найден" in errors[0]
+
+
+def test_worker_reload_static_log_error_does_not_raise(qapp) -> None:
+    """Сбой чтения журнала не вылетает из reload_static (busy не залипает)."""
+    from types import SimpleNamespace
+
+    from arctuner.gui.worker import GpuWorker
+
+    worker = GpuWorker()
+    errors: list[str] = []
+    worker.error.connect(errors.append)
+
+    def boom() -> list:
+        raise OSError("журнал занят")
+
+    worker._ctx = SimpleNamespace(  # type: ignore[assignment]
+        oc_ranges=lambda: {},
+        current_values=lambda: {},
+        fans=lambda: [],
+        vf_curve=lambda: [],
+        log=SimpleNamespace(read_all=boom),
+    )
+    worker.reload_static()  # не должно бросить
+    assert errors and "журнал" in errors[0]
+
+
+def test_autotune_stop_not_reset_by_queued_slot(qapp) -> None:
+    """«Стоп» до выполнения queued-слота не теряется: сброс — только в arm()."""
+    from arctuner.autotune.engine import TuningConfig
+    from arctuner.gui.worker import GpuWorker
+
+    worker = GpuWorker()
+    worker.autotune_arm()  # UI нажал «Запустить»
+    worker.autotune_stop()  # UI нажал «Стоп» до выполнения слота
+    worker.autotune_search(TuningConfig())  # закрытая сессия: ошибка, но
+    assert worker._autotune_stop is True  # отмену слот не сбросил
 
 
 def test_autotune_completed_reaches_tab(qapp) -> None:

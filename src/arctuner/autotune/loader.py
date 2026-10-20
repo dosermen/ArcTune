@@ -36,6 +36,7 @@ def verify_stress(
     *,
     interval: float = 0.5,
     timeout: float = 6.0,
+    stop_check: Callable[[], bool] | None = None,
 ) -> bool:
     """Проверка: GPU под нагрузкой? (без запуска процессов, только замер).
 
@@ -44,6 +45,9 @@ def verify_stress(
         interval: пауза между замерами.
         timeout: максимум ожидания роста активности; 0 — одно чтение
             с паузой 0.1 с (activity_counter обновляется не мгновенно).
+        stop_check: необязательный предикат отмены; True — сразу вернуть False.
+            Вызывающий должен отдельно проверить флаг и поставить честную
+            причину «остановлено», а не «нет нагрузки».
 
     Returns:
         True, если activity_counter вырос хотя бы раз (GPU реально работает).
@@ -52,6 +56,8 @@ def verify_stress(
         # Одно чтение с паузой — activity_counter обновляется драйвером не мгновенно.
         t1 = read_telemetry()
         time.sleep(0.1)
+        if stop_check is not None and stop_check():
+            return False
         t2 = read_telemetry()
         return bool(
             t1.activity_counter is not None
@@ -63,6 +69,9 @@ def verify_stress(
     prev = _activity(read_telemetry)
     while time.monotonic() < deadline:
         time.sleep(max(interval, 0.05))
+        if stop_check is not None and stop_check():
+            # Отмена во время ожидания нагрузки: не досыпаем весь timeout.
+            return False
         cur = _activity(read_telemetry)
         if prev is not None and cur is not None and cur > prev:
             return True
@@ -119,6 +128,7 @@ def start_external(cmd: str) -> subprocess.Popen | None:
             shell=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            creationflags=_NO_WINDOW,  # окно консоли не должно вспыхивать из GUI
         )
     except OSError:
         return None

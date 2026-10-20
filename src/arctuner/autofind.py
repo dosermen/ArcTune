@@ -22,6 +22,7 @@ reset) — их заметит только внешняя нагрузка с �
 
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -45,6 +46,37 @@ class AutofindConfig:
     temp_ceiling_c: float = 80.0  # откат, если горячее
     require_load: bool = True  # считать шаг только при реальной нагрузке
     load_timeout_seconds: float = 3.0  # ждать появления нагрузки перед оценкой
+
+    def validate(self) -> None:
+        """Проверяет параметры ДО первой записи на карту.
+
+        Без этого отрицательный step разворачивал поиск в опасную сторону
+        (undervolt «вверх» по напряжению), а отрицательный settle ронял
+        ValueError уже ПОСЛЕ записи — без отката.
+
+        Raises:
+            SafetyLimitError: некорректный режим/шаг/пауза/лимит шагов.
+        """
+        if self.mode not in (MODE_UNDERVOLT, MODE_FREQUENCY):
+            raise SafetyLimitError(f"неизвестный режим autofind: {self.mode!r}")
+        for name, value in (
+            ("step", self.step),
+            ("settle_seconds", self.settle_seconds),
+            ("temp_ceiling_c", self.temp_ceiling_c),
+            ("load_timeout_seconds", self.load_timeout_seconds),
+        ):
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise SafetyLimitError(f"{name} — число ожидается, получено: {value!r}")
+            if not math.isfinite(value):
+                raise SafetyLimitError(f"{name} — бесконечность/NaN недопустимы")
+        if self.step <= 0:
+            raise SafetyLimitError(f"step должен быть > 0: {self.step}")
+        if self.settle_seconds < 0 or self.temp_ceiling_c <= 0:
+            raise SafetyLimitError("settle_seconds >= 0, temp_ceiling_c > 0")
+        if isinstance(self.max_steps, bool) or not isinstance(self.max_steps, int):
+            raise SafetyLimitError(f"max_steps — целое ожидается, получено: {self.max_steps!r}")
+        if self.max_steps <= 0:
+            raise SafetyLimitError(f"max_steps должен быть > 0: {self.max_steps}")
 
 
 @dataclass
@@ -151,6 +183,7 @@ def autofind(
         AutofindAbortError: пользователь прервал (Ctrl+C) — карта откатена.
     """
     cfg = cfg or AutofindConfig()
+    cfg.validate()  # до любых обращений к карте: битый конфиг не трогает карту
 
     baseline_vals = current_values(api, handle)
     field_name = "gpuVoltageOffset" if cfg.mode == MODE_UNDERVOLT else "gpuFrequencyOffset"
@@ -233,6 +266,12 @@ def autofind(
     except (IgclError, SafetyLimitError):
         # Любая ошибка драйвера — не оставляем последний кандидат.
         stopped_reason = "ошибка драйвера — выполнен откат"
+        restore(best)
+        raise
+    except Exception:
+        # Сбой пользовательского колбэка (on_step/stability_check) тоже не
+        # имеет права оставить карту на необработанном кандидате.
+        stopped_reason = "неожиданная ошибка — выполнен откат"
         restore(best)
         raise
     else:

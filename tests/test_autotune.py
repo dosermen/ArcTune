@@ -172,6 +172,28 @@ class TestEngineFrequency:
         assert result.card_value == 90.0  # итог подтверждает откат к стабильному
         assert "остановлено пользователем" in result.stopped_reason
 
+    def test_stop_during_settle_rolls_back_without_waiting(self) -> None:
+        """Стоп во время паузы шага: откат сразу, без ожидания settle целиком.
+
+        Регрессия: time.sleep(settle) не замечал отмену — закрытие окна ждало
+        паузу (в профилях бывает больше секунды), а карта оставалась на
+        непринятом кандидате.
+        """
+        ctx = FakeCtx()
+        calls = {"n": 0}
+
+        def stop() -> bool:
+            calls["n"] += 1
+            return calls["n"] > 1  # 1-й вызов — вход в цикл, 2-й — внутри паузы
+
+        engine = TuningEngine(ctx, _cfg(step=50.0, settle_seconds=5.0))
+        result = engine.run(stop_check=stop)
+        assert result.steps_taken == 0
+        assert result.best_stable == 0.0
+        assert ctx.applied == [50.0, 0.0]  # кандидат применён и сразу откачен
+        assert result.card_value == 0.0
+        assert "остановлено пользователем" in result.stopped_reason
+
     def test_temp_guard_rolls_back_to_best(self) -> None:
         """Температура выше потолка — откат best ещё до принятия шага."""
         ctx = FakeCtx(temp=90.0)
@@ -593,6 +615,20 @@ class TestGridSnapping:
         """Шаг мельче сетки → «граница найдена», а не крутка до max_steps."""
         ctx = FakeCtx()
         ctx.grid = (-300.0, 50.0)  # крупная сетка: шаг 15 не даёт нового кратного
+        result = TuningEngine(ctx, _cfg(step=15.0, max_steps=5)).run()
+        assert result.steps_taken == 0
+        assert "сетки IGCL" in result.stopped_reason
+        assert ctx.applied == []  # ни одной записи — сетка не позволила шага
+
+    def test_off_grid_baseline_never_snaps_below_best(self) -> None:
+        """База вне сетки (стороннее ПО): округление не уводит НИЖЕ best.
+
+        Регрессия: при best=10 и сетке 50 кандидат 25 округлялся к 0 — движок
+        записал бы частоту ниже исходной и назвал это «стабильно».
+        """
+        ctx = FakeCtx()
+        ctx.values["gpuFrequencyOffset"] = 10.0
+        ctx.grid = (0.0, 50.0)
         result = TuningEngine(ctx, _cfg(step=15.0, max_steps=5)).run()
         assert result.steps_taken == 0
         assert "сетки IGCL" in result.stopped_reason
