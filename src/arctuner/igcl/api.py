@@ -360,11 +360,12 @@ class IgclApi:
         self._api = handle.value
 
     def shutdown(self) -> None:
-        """ctlClose — освобождение handle API."""
-        if self._api is None:
-            return
-        _check(self.loader.dll.ctlClose(CtlApiHandle(self._api)), "ctlClose")
-        self._api = None
+        """ctlClose — освобождение handle API и выгрузка DLL."""
+        if self._api is not None:
+            _check(self.loader.dll.ctlClose(CtlApiHandle(self._api)), "ctlClose")
+            self._api = None
+        # Выгружаем DLL, чтобы её файл можно было перезаписать (тесты / hot-reload).
+        self.loader.close()
 
     def _require_api(self) -> int:
         if self._api is None:

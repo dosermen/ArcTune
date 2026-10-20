@@ -255,6 +255,7 @@ class MainWindow(QMainWindow):
         self._device_label.setText(info.name)
         self.setWindowTitle(f"ArcTune — {info.name}")
 
+    @Slot()
     def _on_device_info(
         self,
         info: DeviceInfo,

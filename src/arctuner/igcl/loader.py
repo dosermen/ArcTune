@@ -9,6 +9,7 @@ IntelControlLib.dll внутри пакета драйвера (iigd_dch_d — �
 
 from __future__ import annotations
 
+import contextlib
 import ctypes
 import glob
 import os
@@ -112,6 +113,19 @@ class IgclLoader:
     def missing(self, names: tuple[str, ...] = REQUIRED_FUNCTIONS) -> list[str]:
         """Список функций, отсутствующих в данной версии драйвера."""
         return [n for n in names if not self.has(n)]
+
+    def close(self) -> None:
+        """Выгружает DLL из процесса. Вызывать ДО удаления файла DLL."""
+        if self._dll is not None:
+            with contextlib.suppress(Exception):
+                self._dll.__del__()
+            self._dll = None
+
+    def __enter__(self) -> IgclLoader:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        self.close()
 
     def healthcheck(self) -> dict[str, object]:
         """Сводка для `arctuner doctor`: путь, доступные/отсутствующие функции."""

@@ -89,15 +89,16 @@ class GpuWorker(QObject):
     def shutdown(self) -> None:
         """Закрывает сессию. Должен вызываться в потоке воркера (queued).
 
-        shutdown_done уходит в finally: окно должно уметь остановить QThread
-        даже если ctx.close() бросил (иначе поток остался бы живым, а окно
-        висело бы на «Завершение…» до убийства процесса). Исключение при этом
-        не глотается — сбой закрытия сессии обязан быть виден.
+        shutdown_done уходит в любом случае: окно должно уметь остановить
+        QThread даже если ctx.close() бросил (иначе поток остался бы живым,
+        а окно висело бы на «Завершение…» до убийства процесса). Ошибку
+        тоже эмитим, чтобы UI показал её пользователю.
         """
         try:
             self._ctx.close()
-        finally:
-            self.shutdown_done.emit()
+        except Exception as exc:
+            self.error.emit(f"shutdown ошибка: {exc}")
+        self.shutdown_done.emit()
 
     def attach_thread(self, thread: QThread) -> None:
         """Переносит воркер в поток. Вызывать ДО thread.start()."""
@@ -139,24 +140,23 @@ class GpuWorker(QObject):
 
     @Slot()
     def poll_device_info(self) -> None:
-        """Обновляет информацию об устройстве (имя, ID, драйвер, частота, ядра)."""
+        """Обновляет информацию об устройстве (имя, ID, драйвер, частота, ядра).
+
+        Читает ``info`` и ``extended_info`` из ``GpuContext``,
+        эмитит ``device_info_ready`` при успехе.
+        """
         if not self._ctx.is_open:
             self.error.emit("poll_device_info: сессия не открыта")
             return
         try:
             info = self._ctx.info
-            if info is None:
-                self.error.emit("poll_device_info: info не найдена")
-                return
             extended = self._ctx.extended_info  # ExtendedDeviceInfo
-            if extended is None:
-                self.error.emit("poll_device_info: extended_info не найдена")
+            if info is None or extended is None:
+                self.error.emit("poll_device_info: данные не получены")
                 return
             self.device_info_ready.emit(info, extended)
         except (IgclError, SafetyLimitError) as e:
             self.error.emit(f"информация устройства: {e}")
-        except Exception as e:
-            self.error.emit(f"poll_device_info ошибка: {type(e).__name__}: {e}")
 
     @Slot()
     def reload_static(self) -> None:

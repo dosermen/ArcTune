@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import ctypes
+import math
 from dataclasses import dataclass
 
 from arctuner.igcl import types as T
@@ -280,6 +281,10 @@ def validate_vf_curve(points: list[VfPoint]) -> None:
         raise SafetyLimitError(f"V/F-кривая: нужно ≥2 точек, получено {len(points)}")
 
     for i, p in enumerate(points):
+        if not math.isfinite(p.voltage_mv):
+            raise SafetyLimitError(f"V/F[{i}]: напряжение не является числом ({p.voltage_mv})")
+        if not math.isfinite(p.freq_mhz):
+            raise SafetyLimitError(f"V/F[{i}]: частота не является числом ({p.freq_mhz})")
         if not (VF_MIN_VOLTAGE_MV <= p.voltage_mv <= VF_MAX_VOLTAGE_MV):
             raise SafetyLimitError(
                 f"V/F[{i}]: напряжение {p.voltage_mv} мВ вне жёстких границ "
