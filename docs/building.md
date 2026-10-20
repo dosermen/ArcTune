@@ -41,16 +41,18 @@ pyinstaller --clean --noconfirm packaging/arctune-gui.spec  # -> dist/arctune-gu
 
 ```powershell
 .\dist\arctune.exe --version
-.\dist\arctune.exe doctor      # находит IntelControlLib.dll
+.\dist\arctune.exe doctor      # находит IntelControlLib.dll; код 1 и [FAIL], если обязательных функций нет
 .\dist\arctune.exe telemetry   # read-only, живые датчики
 .\dist\arctune.exe vf --csv vf.csv
-.\dist\arctune-gui.exe         # окно с 5 вкладками, опрос раз в секунду
+.\dist\arctune-gui.exe         # окно с 6 вкладками, опрос раз в секунду
 ```
 
 Всё read-only проверяется сразу. Команды записи (`set`, `vf --apply`, `autofind`,
 `fans --set`, `reset`, `log --rollback`) работают одинаково в exe и в python —
-они используют тот же код и те же проверки диапазонов. GUI пишет **только** через
-`tuner.py`, то есть оба уровня проверок действуют и там.
+они используют тот же код и те же проверки диапазонов. `autofind` использует общий
+движок `autotune/engine.py` с watchdog (TDR, заморозка телеметрии, аварийная
+температура). GUI пишет **только** через `tuner.py`, то есть оба уровня проверок
+действуют и там.
 
 ## Как exe находит IGCL
 
@@ -79,4 +81,4 @@ onefile-exe, собранный PyInstaller, иногда детектится �
 ## Что дальше
 
 Сборка exe — артефакт для распространения. Дальнейшие пункты roadmap
-(Parquet-экспорт, внутренний стресс-нагрузчик) в отдельных итерациях.
+(внутренний стресс-нагрузчик, софт-кривая вентиляторов) в отдельных итерациях.
