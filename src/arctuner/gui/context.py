@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import contextlib
 from dataclasses import dataclass
+from functools import partial
 from typing import Any, ClassVar
 
 from arctuner import tuner
@@ -235,13 +236,16 @@ class GpuContext:
 
     # --- откат (та же карта полей, что в CLI `log --rollback`) ---
 
-    #: поле журнала → функция tuner, восстанавливающая значение
+    #: поле журнала → функция tuner, восстанавливающая значение.
+    #: Для памяти allow_beyond_nominal=True: значение УЖЕ было на карте (его
+    #: записал ArcTune), значит явное согласие уже было дано. Без этого откат
+    #: журнала с old > 20 Гбит/с падал SafetyLimitError.
     _ROLLBACK_MAP: ClassVar[dict[str, Any]] = {
         "powerLimit": tuner.set_power_limit,
         "gpuFrequencyOffset": tuner.set_gpu_freq_offset,
         "gpuVoltageOffset": tuner.set_gpu_voltage_offset,
         "temperatureLimit": tuner.set_temperature_limit,
-        "vramMemSpeedLimit": tuner.set_vram_speed,
+        "vramMemSpeedLimit": partial(tuner.set_vram_speed, allow_beyond_nominal=True),
     }
 
     def rollback_targets(self) -> dict[str, float | None]:

@@ -575,6 +575,29 @@ def test_logtab_rollback_targets_deduped_and_filtered(qapp) -> None:
     ]
 
 
+def test_gui_rollback_restores_vram_above_nominal(qapp) -> None:
+    """Откат памяти >20 из журнала (GUI) не требует повторного согласия.
+
+    Регрессия: _ROLLBACK_MAP звал set_vram_speed без allow_beyond_nominal —
+    журнал с old=21 невозможно было откатить (SafetyLimitError).
+    """
+    from arctuner.gui.context import GpuContext
+
+    calls: list[float] = []
+
+    class _Api:
+        loader = type("L", (), {"has": staticmethod(lambda name: False)})()
+
+        def read_oc_properties(self, handle):
+            return {"supported": True, "vramMemSpeedLimit": _info(min=19.0, max=22.0)}
+
+        def set_vram_mem_speed(self, handle, gbps):
+            calls.append(gbps)
+
+    GpuContext._ROLLBACK_MAP["vramMemSpeedLimit"](_Api(), 1, 21.0)
+    assert calls == [21.0]
+
+
 def test_livechart_axis_grows_beyond_fixed_ranges(qapp) -> None:
     """Значения выше стартовых шкал (100 / 3300) расширяют ось — не обрезаются."""
     chart = LiveChart(window_s=60)

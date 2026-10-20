@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from functools import partial
 
 
 def cmd_doctor(_: argparse.Namespace) -> int:
@@ -645,7 +646,9 @@ def _build_rollback_map() -> None:
                 "gpuFrequencyOffset": tuner.set_gpu_freq_offset,
                 "gpuVoltageOffset": tuner.set_gpu_voltage_offset,
                 "temperatureLimit": tuner.set_temperature_limit,
-                "vramMemSpeedLimit": tuner.set_vram_speed,
+                # Значение уже было на карте (записано ArcTune с --force):
+                # повторное согласие при откате не требуется.
+                "vramMemSpeedLimit": partial(tuner.set_vram_speed, allow_beyond_nominal=True),
             }
         )
 

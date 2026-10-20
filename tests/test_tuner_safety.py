@@ -138,6 +138,9 @@ class _FakeApi:
     def set_power_limit(self, handle, percent) -> None:
         self.calls.append("power")
 
+    def set_vram_mem_speed(self, handle, gbps) -> None:
+        self.calls.append(f"vram:{gbps:g}")
+
 
 _HANDLE = object()
 
@@ -221,3 +224,19 @@ def test_vram_24_rejected_even_with_flag() -> None:
 
     with pytest.raises(tuner.SafetyLimitError):
         tuner.set_vram_speed(_WithSet(), _HANDLE, 24.0, allow_beyond_nominal=True)
+
+
+def test_cli_rollback_restores_vram_above_nominal() -> None:
+    """Откат журнала к 21 Гбит/с проходит: значение уже было на карте.
+
+    Регрессия: `arctune log --rollback` звал set_vram_speed без
+    allow_beyond_nominal — SafetyLimitError обрывал весь откат.
+    """
+    from arctuner.cli import _ROLLBACK_MAP, _build_rollback_map
+
+    _ROLLBACK_MAP.clear()
+    _build_rollback_map()
+    fn = _ROLLBACK_MAP["vramMemSpeedLimit"]
+    api = _FakeApi()
+    fn(api, _HANDLE, 21.0)  # type: ignore[operator]
+    assert api.calls == ["vram:21"]
