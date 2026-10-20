@@ -6,7 +6,10 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+
+import pytest
 
 from arctuner.igcl.api import TelemetrySnapshot
 from arctuner.replay import IncidentReplay
@@ -134,3 +137,55 @@ def test_rotation_keeps_recent_files(tmp_path: Path) -> None:
     # 000001 удалён; свежий дамп (сегодня) и 000003 остаются.
     assert names[0] == "incident_20260101_000003_manual.jsonl"
     assert names[1].startswith("incident_2026")
+
+
+def test_two_dumps_in_one_second_get_unique_files(tmp_path: Path, monkeypatch) -> None:
+    """Два инцидента подряд (в одну секунду) — два файла, оба валидный JSONL."""
+    from datetime import datetime as real_datetime
+
+    class _FrozenDatetime(real_datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 1, 1, 12, 0, 0, 123456, tzinfo=tz)
+
+    # Морозим часы имени: два дампа получают одинаковые микросекунды.
+    monkeypatch.setattr("arctuner.replay.datetime", _FrozenDatetime)
+
+    replay = IncidentReplay(directory=tmp_path, device="B580")
+    replay.push(_snap(), t=0.0, wall=1700000000.0)
+    first = replay.dump("manual_interrupt")
+    replay.push(_snap(gpu_j=1010.0), t=1.0, wall=1700000001.0)
+    second = replay.dump("manual_interrupt")
+
+    assert first is not None and second is not None
+    assert first != second
+    assert first.exists() and second.exists()
+    for path in (first, second):
+        meta, rows = _read_dump(path)
+        assert meta["trigger"] == "manual_interrupt"
+        assert len(rows) == 1
+    assert replay.samples == 0
+
+
+def test_dump_failure_keeps_buffer_and_removes_tmp(tmp_path: Path, monkeypatch) -> None:
+    """Сбой os.replace: финального файла нет, буфер цел, временных *.tmp нет."""
+    replay = IncidentReplay(directory=tmp_path)
+    replay.push(_snap(), t=0.0, wall=1700000000.0)
+    real_replace = os.replace
+
+    def boom(src, dst):
+        raise OSError("os.replace упал")
+
+    monkeypatch.setattr(os, "replace", boom)
+    with pytest.raises(OSError, match="replace"):
+        replay.dump("manual_interrupt")
+
+    assert replay.samples == 1  # контекст инцидента не потерян
+    assert list(tmp_path.glob("incident_*.jsonl")) == []
+    assert list(tmp_path.glob("*.tmp")) == []
+
+    # Повторный дамп после сбоя пишет тот же буфер в новый файл.
+    monkeypatch.setattr(os, "replace", real_replace)
+    path = replay.dump("manual_interrupt")
+    assert path is not None and path.exists()
+    assert replay.samples == 0

@@ -36,6 +36,9 @@ class GpuWorker(QObject):
     write_error = Signal(str)  # ошибка ЗАПИСИ — показывается модально
     busy_changed = Signal(bool)
     incident_replay = Signal(str)  # записан дамп реплея инцидента (путь к JSONL)
+    #: ctlClose выполнен в потоке воркера (или упал — сигнал всё равно уходит).
+    #: Окно останавливает QThread только после него.
+    shutdown_done = Signal()
     autotune_progress = Signal(int, int, str)  # current, total, text
     autotune_sample = Signal(object)  # TelemetrySnapshot — живой график во время поиска
     autotune_completed = Signal(object)  # TuningResult
@@ -83,8 +86,17 @@ class GpuWorker(QObject):
 
     @Slot()
     def shutdown(self) -> None:
-        """Закрывает сессию. Должен вызываться в потоке воркера (queued)."""
-        self._ctx.close()
+        """Закрывает сессию. Должен вызываться в потоке воркера (queued).
+
+        shutdown_done уходит в finally: окно должно уметь остановить QThread
+        даже если ctx.close() бросил (иначе поток остался бы живым, а окно
+        висело бы на «Завершение…» до убийства процесса). Исключение при этом
+        не глотается — сбой закрытия сессии обязан быть виден.
+        """
+        try:
+            self._ctx.close()
+        finally:
+            self.shutdown_done.emit()
 
     def attach_thread(self, thread: QThread) -> None:
         """Переносит воркер в поток. Вызывать ДО thread.start()."""

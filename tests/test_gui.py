@@ -6,7 +6,8 @@
   - валидация/чтение CSV кривой V/F;
   - полнота карты полей записи в worker (никакое поле не потеряно).
 
-Железо здесь НЕ требуется: IGCL не вызывается вовсе.
+Железо здесь НЕ требуется: сессии IGCL подменяются фейками, а неудачное
+открытие реальной сессии (нет драйвера) обрабатывается штатно.
 """
 
 from __future__ import annotations
@@ -182,10 +183,38 @@ def test_flame_icon_painted(qapp) -> None:
 
 
 def test_monitoring_accepts_snapshot(qapp, snapshot: TelemetrySnapshot) -> None:
+    """Снимок доходит до карточек, лимитера и графика (без «пустых» проверок)."""
     tab = MonitoringTab()
     tab.on_telemetry(snapshot)
-    tab.on_telemetry(snapshot)  # второй снимок уходит в график
-    assert "55" in tab.findChildren(object).__repr__() or True
+    assert tab._freq._value.text() == "2500 МГц"
+    assert tab._voltage._value.text() == "1.000 В"
+    assert tab._temp._value.text() == "55 °C"
+    assert "Voltage" in tab._limits.text()
+    assert len(tab._chart._samples) == 1
+
+    tab.on_telemetry(snapshot)  # второй снимок добавляет точку в график
+    assert len(tab._chart._samples) == 2
+
+
+def test_monitoring_breaks_line_on_long_pause(
+    qapp, snapshot: TelemetrySnapshot, monkeypatch
+) -> None:
+    """Пауза > GAP_MAX_S обнуляет график: линия не «мостит» сон/занятый воркер."""
+    from arctuner.gui.tabs.monitoring import GAP_MAX_S
+
+    clock = [100.0]
+    monkeypatch.setattr("arctuner.gui.tabs.monitoring.time.monotonic", lambda: clock[0])
+    tab = MonitoringTab()  # t0 = 100.0
+
+    clock[0] = 101.0
+    tab.on_telemetry(snapshot)
+    clock[0] = 102.0
+    tab.on_telemetry(snapshot)
+    assert len(tab._chart._samples) == 2
+
+    clock[0] += GAP_MAX_S + 1.0  # данные не приходили дольше порога
+    tab.on_telemetry(snapshot)
+    assert len(tab._chart._samples) == 1
 
 
 def test_overclock_sets_ranges_and_disables_unsupported(qapp) -> None:
@@ -739,6 +768,149 @@ def test_autotune_tab_live_sample_chart_and_label(qapp, snapshot) -> None:
     assert "2500 МГц" in tab._now.text()
     assert "55 °C" in tab._now.text()
     assert len(tab._live._samples) == 2  # оба снимка ушли в график
+
+
+def _silence_no_device_dialog(monkeypatch) -> None:
+    """Без карты start() показывает модальное окно — в тестах гасим его."""
+    monkeypatch.setattr("arctuner.gui.window.QMessageBox.warning", lambda *a, **k: None)
+
+
+def _wait_worker_stopped(win, timeout_ms: int = 5000) -> bool:
+    """Крутит event loop, пока поток воркера не завершится (без sleep-поллинга).
+
+    Возвращает False по таймауту — тест падает с внятным сообщением, а не виснет.
+    """
+    from PySide6.QtCore import QEventLoop, QTimer
+
+    if not win._thread.isRunning():
+        return True
+    loop = QEventLoop()
+
+    def on_finished() -> None:
+        loop.quit()
+
+    timer = QTimer()
+    timer.setSingleShot(True)
+    timer.timeout.connect(on_finished)
+    win._thread.finished.connect(on_finished)
+    timer.start(timeout_ms)
+    loop.exec()
+    timer.stop()
+    win._thread.finished.disconnect(on_finished)
+    return not win._thread.isRunning()
+
+
+def test_close_stops_worker_thread_without_blocking(qapp, monkeypatch) -> None:
+    """X не вешает UI: closeEvent откладывает закрытие, поток гаснет по shutdown_done."""
+    from arctuner.gui.window import MainWindow
+
+    _silence_no_device_dialog(monkeypatch)
+    win = MainWindow()
+    win._timer.stop()
+
+    assert win.close() is False  # ctlClose ещё в очереди — окно не закрылось
+    assert win._closing is True
+    assert win._thread.isRunning()  # UI не ждал воркера
+
+    assert _wait_worker_stopped(win), "поток воркера не завершился за 5 с"
+    assert win._worker._ctx.is_open is False  # ctlClose выполнен
+    assert win.close() is True  # повторный close уже принимается
+
+
+def test_repeated_close_is_safe_and_shuts_down_once(qapp, monkeypatch) -> None:
+    """Повторное нажатие X во время завершения не падает и не дублирует shutdown."""
+    from arctuner.gui.window import MainWindow
+
+    _silence_no_device_dialog(monkeypatch)
+    win = MainWindow()
+    win._timer.stop()
+    shutdowns: list[bool] = []
+    win._worker.shutdown_done.connect(lambda: shutdowns.append(True))
+
+    assert win.close() is False
+    assert win.close() is False  # второе X: без исключений и повторной очереди
+
+    assert _wait_worker_stopped(win), "поток воркера не завершился за 5 с"
+    assert win.close() is True
+    assert len(shutdowns) == 1
+
+
+def test_close_while_worker_busy_does_not_block_ui(qapp, monkeypatch) -> None:
+    """Занятый воркер (engine.run/watchdog): closeEvent сразу возвращает управление.
+
+    Воркер держим без сна: queued reload_static висит на threading.Event, а
+    queued shutdown встаёт за ним. ctlClose обязан выполниться в потоке воркера,
+    а не в UI-потоке.
+    """
+    import threading
+    from types import SimpleNamespace
+
+    from PySide6.QtCore import QMetaObject, Qt
+
+    from arctuner.gui.window import MainWindow
+    from arctuner.gui.worker import GpuWorker
+
+    monkeypatch.setattr(GpuWorker, "start", lambda self: None)  # IGCL не трогаем
+    _silence_no_device_dialog(monkeypatch)
+
+    gate = threading.Event()
+    closed_in: list[int] = []
+
+    class _Ctx:
+        """Занят: oc_ranges висит на gate, close фиксирует поток вызова."""
+
+        is_open = False
+
+        def oc_ranges(self):
+            gate.wait(5.0)
+            return {}
+
+        def current_values(self):
+            return {}
+
+        def fans(self):
+            return []
+
+        def vf_curve(self):
+            return []
+
+        log = SimpleNamespace(read_all=lambda: [])
+
+        def close(self) -> None:
+            closed_in.append(threading.get_ident())
+
+    win = MainWindow()
+    win._timer.stop()
+    win._worker._ctx = _Ctx()
+    # Занимаем поток раньше shutdown: queued-слоты одного получателя идут FIFO.
+    QMetaObject.invokeMethod(win._worker, "reload_static", Qt.ConnectionType.QueuedConnection)
+
+    assert win.close() is False  # сразу: UI не ждёт занятый воркер
+    assert win._thread.isRunning()
+    assert closed_in == []  # shutdown ещё в очереди за занятым слотом
+
+    gate.set()
+    assert _wait_worker_stopped(win), "поток воркера не завершился за 5 с"
+    assert len(closed_in) == 1
+    assert closed_in[0] != threading.get_ident()  # ctlClose — в потоке воркера
+
+
+def test_worker_shutdown_emits_done_even_if_close_fails(qapp) -> None:
+    """Сбой ctx.close() не глотается, но shutdown_done всё равно уходит (finally)."""
+    from arctuner.gui.worker import GpuWorker
+
+    worker = GpuWorker()
+    done: list[bool] = []
+    worker.shutdown_done.connect(lambda: done.append(True))
+
+    class _Broken:
+        def close(self) -> None:
+            raise OSError("ctlClose упал")
+
+    worker._ctx = _Broken()
+    with pytest.raises(OSError, match="ctlClose"):
+        worker.shutdown()
+    assert done == [True]
 
 
 def test_autotune_sample_reaches_both_charts(qapp, snapshot) -> None:

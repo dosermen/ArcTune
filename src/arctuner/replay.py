@@ -11,7 +11,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
 import time
 from collections import deque
 from dataclasses import asdict, dataclass
@@ -110,11 +112,17 @@ class IncidentReplay:
 
         Первая строка — IncidentMeta, далее строки-снапшоты с двумя метками
         времени: t (секунды от начала буфера, monotonic) и wall (epoch).
+
+        Запись атомарна: данные идут во временный файл в том же каталоге,
+        затем os.replace. Читатель не увидит обрезанный дамп, а сбой записи
+        (диск/права/fsync) оставляет буфер нетронутым — данные не теряются и
+        дамп можно повторить. Исключение не глотается, временный файл удаляется.
         """
         if not self._buf:
             return None
         self._dir.mkdir(parents=True, exist_ok=True)
-        path = self._dir / f"incident_{time.strftime('%Y%m%d_%H%M%S')}_{trigger}.jsonl"
+        path = self._unique_path(trigger)
+        tmp = path.with_name(path.name + ".tmp")
         t0_mono = self._buf[0][0]
         started = datetime.fromtimestamp(self._buf[0][1], tz=timezone.utc).isoformat(
             timespec="seconds"
@@ -126,18 +134,43 @@ class IncidentReplay:
             samples=len(self._buf),
             device=self._device,
         )
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(json.dumps({"meta": asdict(meta)}, ensure_ascii=False) + "\n")
-            for mono, wall, snap in self._buf:
-                f.write(
-                    json.dumps(
-                        {"t": round(mono - t0_mono, 3), "wall": wall, **asdict(snap)},
-                        ensure_ascii=False,
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write(json.dumps({"meta": asdict(meta)}, ensure_ascii=False) + "\n")
+                for mono, wall, snap in self._buf:
+                    f.write(
+                        json.dumps(
+                            {"t": round(mono - t0_mono, 3), "wall": wall, **asdict(snap)},
+                            ensure_ascii=False,
+                        )
+                        + "\n"
                     )
-                    + "\n"
-                )
+                f.flush()
+                os.fsync(f.fileno())  # данные на диске до подмены имени
+            os.replace(tmp, path)
+        except BaseException:
+            # Буфер НЕ очищаем: вызывающий может повторить дамп без потери
+            # контекста инцидента. Сбой уборки не должен скрыть исходную ошибку.
+            with contextlib.suppress(OSError):
+                tmp.unlink(missing_ok=True)
+            raise
         self._buf.clear()
         self._rotate()
+        return path
+
+    def _unique_path(self, trigger: str) -> Path:
+        """Свободное имя дампа: микросекунды + pid, при совпадении — суффикс.
+
+        Секундной метки не хватало: два инцидента подряд (или повторный дамп
+        в ту же секунду) перезаписывали один и тот же файл.
+        """
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+        base = f"incident_{stamp}_{os.getpid()}_{trigger}"
+        path = self._dir / f"{base}.jsonl"
+        suffix = 1
+        while path.exists():
+            path = self._dir / f"{base}_{suffix}.jsonl"
+            suffix += 1
         return path
 
     def _rotate(self) -> None:

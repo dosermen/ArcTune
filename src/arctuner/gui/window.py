@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 
 from PySide6.QtCharts import QChartView
-from PySide6.QtCore import QMetaObject, QProcess, Qt, QThread, QTimer
+from PySide6.QtCore import QMetaObject, QProcess, Qt, QThread, QTimer, Slot
 from PySide6.QtGui import QAction, QActionGroup
 from PySide6.QtWidgets import (
     QApplication,
@@ -86,6 +86,9 @@ class MainWindow(QMainWindow):
         # Устройство ещё не подтвердилось: первый error = провал старта
         # («Подключение…» навсегда недопустим — останавливаем опрос и показываем).
         self._device_seen = False
+        # Асинхронное закрытие: окно не ждёт воркера (он может быть занят
+        # engine.run/watchdog), а завершает поток по сигналу shutdown_done.
+        self._closing = False
 
         self._build_view_menu()
 
@@ -96,6 +99,8 @@ class MainWindow(QMainWindow):
 
         self._wire_worker()
         self._wire_tabs()
+        # Поток завершился (штатно или после shutdown_done) — повторить close.
+        self._thread.finished.connect(self._on_thread_finished)
         # Кривая V/F стартует в текущей теме (график мониторинга игнорирует — no-op).
         self._apply_theme_to_charts(load_theme() == "dark")
 
@@ -121,6 +126,7 @@ class MainWindow(QMainWindow):
         w.write_error.connect(self._on_write_error)
         w.busy_changed.connect(self._on_busy)
         w.incident_replay.connect(self._on_incident)
+        w.shutdown_done.connect(self._on_shutdown_done)
         w.autotune_progress.connect(self._autotune.update_progress)
         # Живая телеметрия поиска: общий график «Мониторинга» + мини-график
         # на вкладке «Авторазгон» (иначе оба замирали на время engine.run).
@@ -307,6 +313,8 @@ class MainWindow(QMainWindow):
         копились и выстреляли флудом после). Живой график при этом не стоит —
         движок отдаёт снимки через autotune_sample на каждом чтении телеметрии.
         """
+        if self._closing:
+            return  # окно закрывается: не воскрешаем остановленный таймер
         if busy:
             self._timer.stop()  # поиск/запись: опрос не нужен и вреден
         else:
@@ -318,23 +326,44 @@ class MainWindow(QMainWindow):
         self._autotune.set_busy(busy)
 
     def closeEvent(self, event) -> None:  # noqa: N802 — имя Qt API
-        """Останавливает опрос и закрывает IGCL-сессию в потоке воркера.
+        """Закрывает IGCL-сессию в потоке воркера, не блокируя UI.
 
-        shutdown — queued-слот воркера, поэтому вызываем BlockingQueued:
-        ctlClose обязан выполниться в том же потоке, где был ctlInit, и до
-        остановки QThread (иначе сессия утекает).
+        Порядок: остановить таймер → попросить поиск остановиться → поставить
+        shutdown в очередь воркера. Закрытие окна откладывается (event.ignore):
+        ctlClose обязан выполниться в том же потоке, где был ctlInit, и ДО
+        остановки QThread. Когда воркер сообщит shutdown_done, поток
+        завершается, а _on_thread_finished повторяет close — теперь без ожидания.
+
+        UI при этом остаётся отзывчивым, даже если воркер занят engine.run или
+        watchdog (PowerShell/taskkill): queued-слот выполнится после текущей
+        операции, окно показывает «Завершение…» и не висит. Повторное нажатие
+        X безопасно: shutdown ставится в очередь один раз.
         """
         self._timer.stop()
-        if self._thread.isRunning():
-            # Честный стоп поиска: без него shutdown ждал бы многоминутного
-            # engine.run (воркер-поток занят), и окно висело бы «не отвечает».
-            self._worker.autotune_stop()
-            QMetaObject.invokeMethod(
-                self._worker, "shutdown", Qt.ConnectionType.BlockingQueuedConnection
-            )
-            self._thread.quit()
-            self._thread.wait(3000)
-        super().closeEvent(event)
+        if not self._thread.isRunning():
+            super().closeEvent(event)  # потока нет — закрываемся обычным путём
+            return
+        # Честный стоп поиска: без него queued shutdown ждал бы конца engine.run.
+        self._worker.autotune_stop()
+        if not self._closing:
+            self._closing = True
+            self._status.showMessage("Завершение: закрываем сессию IGCL…")
+            QMetaObject.invokeMethod(self._worker, "shutdown", Qt.ConnectionType.QueuedConnection)
+        event.ignore()
+
+    @Slot()
+    def _on_shutdown_done(self) -> None:
+        """ctlClose выполнен в потоке воркера — можно останавливать QThread."""
+        if not self._closing:
+            return  # ручной shutdown() (тесты/повтор) — окно не закрывается
+        self._thread.quit()
+
+    @Slot()
+    def _on_thread_finished(self) -> None:
+        """Поток воркера остановлен: повторяем close — теперь он принимается."""
+        if not self._closing:
+            return
+        self.close()
 
 
 __all__ = ["MainWindow"]
