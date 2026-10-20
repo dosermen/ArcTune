@@ -205,8 +205,13 @@ class MainWindow(QMainWindow):
         """Меню «Информация»: обновление данных об устройстве."""
         info_menu = self.menuBar().addMenu("Информация")
         self._info_refresh_action = QAction("Обновить информацию", self)
-        self._info_refresh_action.triggered.connect(self._worker.poll_device_info)
+        self._info_refresh_action.triggered.connect(self._on_info_refresh)
         info_menu.addAction(self._info_refresh_action)
+
+    @Slot()
+    def _on_info_refresh(self) -> None:
+        """Перенаправляет вызов обновления в воркер-поток через queued-слот."""
+        self._worker.poll_device_info()
 
     def _on_scale_selected(self, value: float) -> None:
         save_scale(value)
