@@ -1115,3 +1115,49 @@ def test_autotune_stop_is_synchronous_from_ui(qapp) -> None:
     win._autotune.stop_requested.emit()  # как клик «Стоп»
     assert win._worker._autotune_stop is True  # без processEvents — прямая доставка
     win.close()
+
+
+def test_gui_error_handler_install_uninstall(monkeypatch) -> None:
+    """GuiExceptionHandler устанавливает/сбрасывает sys.excepthook корректно."""
+    from arctuner.gui.errors import GuiExceptionHandler
+
+    captured_calls: list[str] = []
+
+    def fake_hook(exc_type, exc, tb):
+        captured_calls.append(f"{exc_type.__name__}: {exc}")
+
+    monkeypatch.setattr("sys.excepthook", fake_hook)
+
+    handler = GuiExceptionHandler()
+    assert handler._previous_hook is None  # не установлен
+
+    handler.install()
+    # sys.excepthook подменяется на _handle; предыдущий сохранён.
+    assert sys.excepthook is not fake_hook
+    assert handler._previous_hook is fake_hook
+
+    # Пропустим ошибку через обработчик — она уйдёт в fake_hook (через uninstall).
+    handler.uninstall()
+    assert handler._previous_hook is None
+    assert sys.excepthook is fake_hook
+
+
+def test_gui_error_handler_propagates_interrupt(monkeypatch) -> None:
+    """KeyboardInterrupt/SystemExit пробрасываются дальше, не ловятся."""
+    from arctuner.gui.errors import GuiExceptionHandler
+
+    captured: list[tuple] = []
+
+    def fake_hook(exc_type, exc, tb):
+        captured.append((exc_type, exc, tb))
+
+    monkeypatch.setattr("sys.excepthook", fake_hook)
+
+    handler = GuiExceptionHandler()
+    handler.install()
+
+    # Simulate KeyboardInterrupt — обработчик должен делегировать дальше.
+    handler._handle(KeyboardInterrupt, KeyboardInterrupt("ctrl+c"), None)
+
+    assert len(captured) == 1
+    assert captured[0][0] is KeyboardInterrupt

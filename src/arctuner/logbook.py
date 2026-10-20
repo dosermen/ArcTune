@@ -15,6 +15,7 @@ import contextlib
 import json
 import os
 import tempfile
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -61,6 +62,32 @@ class LogEntry:
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), ensure_ascii=False)
+
+
+def compute_rollback_targets(entries: Iterable[LogEntry]) -> dict[str, float | None]:
+    """Считает поля → значение «как было» по хронологии журнала.
+
+    Это единая семантика для :meth:`Logbook.rollback_targets` и предпросмотра
+    GUI: после последнего маркера сброса OC старые записи перестают быть
+    целями. Вентиляторы (``fan[*]``) и маркер ``reset_fans`` в цели не входят —
+    для них есть отдельная кнопка «Вернуть в авто».
+
+    Args:
+        entries: записи журнала в хронологическом порядке (старые → новые).
+
+    Returns:
+        Поля → самое старое известное значение ``old`` после последнего сброса.
+    """
+    targets: dict[str, float | None] = {}
+    for entry in entries:
+        if entry.field in _RESET_OC_MARKERS:
+            targets.clear()
+            continue
+        if entry.field == RESET_FANS_FIELD or _is_fan_field(entry.field):
+            continue
+        if entry.field not in targets and entry.old is not None:
+            targets[entry.field] = entry.old
+    return targets
 
 
 @dataclass
@@ -151,16 +178,7 @@ class Logbook:
         Вентиляторы журналом не откатываются (для них есть ``reset --fans``),
         поэтому ``fan[*]`` и маркер ``reset_fans`` в цели не попадают.
         """
-        targets: dict[str, float | None] = {}
-        for e in self.read_all():
-            if e.field in _RESET_OC_MARKERS:
-                targets.clear()
-                continue
-            if e.field == RESET_FANS_FIELD or _is_fan_field(e.field):
-                continue
-            if e.field not in targets and e.old is not None:
-                targets[e.field] = e.old
-        return targets
+        return compute_rollback_targets(self.read_all())
 
     def _rewrite(self, entries: list[LogEntry]) -> None:
         """Атомарно перезаписывает журнал (используется только для mark_restored).

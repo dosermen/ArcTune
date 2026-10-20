@@ -6,6 +6,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
@@ -15,7 +16,7 @@ from PySide6.QtWidgets import (
 
 from arctuner.gui.context import ROLLBACKABLE_FIELDS
 from arctuner.gui.widgets import confirm_write
-from arctuner.logbook import LogEntry
+from arctuner.logbook import LogEntry, compute_rollback_targets
 
 
 class LogTab(QWidget):
@@ -71,7 +72,11 @@ class LogTab(QWidget):
         self._entries = list(entries)
         self._count.setText(f"Записей: {len(self._entries)}")
         # Устаревший queued-журнал (пришёл во время busy) не снимает блок отката.
-        self._rollback_btn.setEnabled(bool(self._entries) and not self._busy)
+        # Кнопка активна только если есть реальные цели: записи одних
+        # вентиляторов/маркеры сброса откатывать нечего.
+        self._rollback_btn.setEnabled(
+            bool(self._rollback_targets(self._entries)) and not self._busy
+        )
 
         rows = list(reversed(self._entries))
         self._table.setRowCount(len(rows))
@@ -98,24 +103,31 @@ class LogTab(QWidget):
 
     @staticmethod
     def _rollback_targets(entries: list[LogEntry]) -> list[str]:
-        """Строки предпросмотра отбата с семантикой logbook.rollback_targets.
+        """Строки предпросмотра отката с семантикой logbook.rollback_targets.
 
-        Для каждого поля берётся самое старое известное old (хронология журнала);
-        откатываются только OC-поля (ROLLBACKABLE_FIELDS) — вентиляторы возвращаются
-        кнопкой на вкладке «Вентиляторы», fan[0] в журнале остаётся историей.
+        Расчёт общий с воркером/CLI: после последнего ``reset_oc`` записи до
+        маркера целями не являются. Откатываются только OC-поля
+        (ROLLBACKABLE_FIELDS) — вентиляторы возвращаются кнопкой на вкладке
+        «Вентиляторы», fan[*] в журнале остаётся историей.
         """
-        targets: list[str] = []
-        seen: set[str] = set()
-        for e in entries:
-            if e.field in seen or e.old is None or e.field not in ROLLBACKABLE_FIELDS:
-                continue
-            seen.add(e.field)
-            targets.append(f"{e.field}: восстановить {e.old:g}")
-        return targets
+        return [
+            f"{field}: восстановить {value:g}"
+            for field, value in compute_rollback_targets(entries).items()
+            if field in ROLLBACKABLE_FIELDS and value is not None
+        ]
 
     def _on_rollback(self) -> None:
         targets = self._rollback_targets(self._entries)
-        preview = "\n".join(targets[:8]) or "нет данных для отката"
+        if not targets:
+            # Защита от устаревшего включённого состояния: не показываем
+            # подтверждение и не отправляем воркеру заведомо пустой откат.
+            QMessageBox.information(
+                self,
+                "Журнал",
+                "Нечего откатывать: в журнале нет записей, пригодных для отката.",
+            )
+            return
+        preview = "\n".join(targets[:8])
         if len(targets) > 8:
             preview += f"\n  … и ещё {len(targets) - 8}"
         if confirm_write(
@@ -129,7 +141,7 @@ class LogTab(QWidget):
     def set_busy(self, busy: bool) -> None:
         """Воркер занят записью: откат/обновление блокированы до его конца."""
         self._busy = busy
-        self._rollback_btn.setEnabled(bool(self._entries) and not busy)
+        self._rollback_btn.setEnabled(bool(self._rollback_targets(self._entries)) and not busy)
         self._refresh_btn.setEnabled(not busy)
 
 

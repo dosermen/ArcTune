@@ -170,3 +170,61 @@ def test_journal_write_error_is_oserror() -> None:
     err = JournalWriteError("журнал недоступен")
     assert isinstance(err, OSError)
     assert str(err) == "журнал недоступен"
+
+
+def test_compute_rollback_targets_standalone(tmp_path) -> None:
+    """compute_rollback_targets работает как standalone (не требует Logbook)."""
+    from arctuner.logbook import LogEntry, compute_rollback_targets
+
+    entries = [
+        LogEntry(
+            timestamp="2026-01-01T00:00:00+00:00",
+            field="powerLimit",
+            old=100.0,
+            new=110.0,
+        ),
+        LogEntry(
+            timestamp="2026-01-01T00:01:00+00:00",
+            field="gpuFrequencyOffset",
+            old=0.0,
+            new=200.0,
+        ),
+        LogEntry(
+            timestamp="2026-01-01T00:02:00+00:00",
+            field="fan[0]",
+            old=None,
+            new=1500.0,
+        ),
+    ]
+    targets = compute_rollback_targets(entries)
+    assert targets["powerLimit"] == 100.0
+    assert targets["gpuFrequencyOffset"] == 0.0
+    assert "fan[0]" not in targets
+
+
+def test_compute_rollback_targets_respects_reset(tmp_path) -> None:
+    """Reset-маркер очищает цели: записи до него не входят."""
+    from arctuner.logbook import RESET_OC_FIELD, LogEntry, compute_rollback_targets
+
+    entries = [
+        LogEntry(
+            timestamp="2026-01-01T00:00:00+00:00",
+            field="powerLimit",
+            old=100.0,
+            new=110.0,
+        ),
+        LogEntry(
+            timestamp="2026-01-01T00:01:00+00:00",
+            field=RESET_OC_FIELD,
+            old=None,
+            new=None,
+        ),
+        LogEntry(
+            timestamp="2026-01-01T00:02:00+00:00",
+            field="powerLimit",
+            old=110.0,
+            new=105.0,
+        ),
+    ]
+    targets = compute_rollback_targets(entries)
+    assert targets == {"powerLimit": 110.0}  # после сброса

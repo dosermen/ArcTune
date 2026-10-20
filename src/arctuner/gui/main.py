@@ -14,6 +14,7 @@ def run() -> int:
     """Запускает приложение. Возвращает код выхода Qt."""
     from PySide6.QtWidgets import QApplication
 
+    from arctuner.gui.errors import GuiExceptionHandler
     from arctuner.gui.scale import apply_qt_scale
     from arctuner.gui.theme import apply_theme, load_theme
     from arctuner.gui.window import MainWindow
@@ -24,6 +25,11 @@ def run() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("ArcTune")
     app.setOrganizationName("ArcTune")
+
+    # В windowed-exe stderr нет: без этого исключение слота теряется молча.
+    # Родитель — app: обработчик живёт до конца процесса.
+    error_handler = GuiExceptionHandler(app)
+    error_handler.install()
 
     # Fusion + палитра + QSS до создания окна: вид не зависит от стиля Windows.
     apply_theme(app, load_theme() == "dark")
