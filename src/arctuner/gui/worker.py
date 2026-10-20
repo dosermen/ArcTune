@@ -26,6 +26,7 @@ class GpuWorker(QObject):
     """Владеет GpuContext и выполняет все операции с картой в своём потоке."""
 
     device_ready = Signal(object)  # DeviceInfo
+    device_info_ready = Signal(object, object)  # (DeviceInfo, ExtendedDeviceInfo)
     telemetry_ready = Signal(object)  # TelemetrySnapshot
     oc_ready = Signal(object, object)  # ranges: dict, currents: dict
     fans_ready = Signal(object)  # list[FanInfo]
@@ -138,12 +139,13 @@ class GpuWorker(QObject):
 
     @Slot()
     def poll_device_info(self) -> None:
-        """Обновляет информацию об устройстве (имя, ID, частота)."""
+        """Обновляет информацию об устройстве (имя, ID, драйвер, частота, ядра)."""
         if not self._ctx.is_open:
             return
         try:
             info = self._ctx.info
-            self.device_ready.emit(info)
+            extended = self._ctx.extended_info  # ExtendedDeviceInfo
+            self.device_info_ready.emit(info, extended)
         except (IgclError, SafetyLimitError) as e:
             self.error.emit(f"информация устройства: {e}")
 

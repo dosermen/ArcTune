@@ -20,6 +20,7 @@ from typing import Any, ClassVar
 from arctuner import tuner
 from arctuner.igcl.api import (
     DeviceInfo,
+    ExtendedDeviceInfo,
     IgclApi,
     IgclError,
     OcControlInfo,
@@ -66,6 +67,19 @@ class GpuContext:
     @property
     def info(self) -> DeviceInfo | None:
         return self._info
+
+    @property
+    def extended_info(self) -> ExtendedDeviceInfo | None:
+        """Расширенная информация об устройстве (включая драйвер и прошивку)."""
+        if not self._info:
+            return None
+        api, handle = self._require()
+        # get_device_properties уже возвращает DeviceInfo, но нам нужны ещё
+        # driver_version и firmware_version из raw CtlDeviceAdapterProperties.
+        # Перечитаем raw-свойства и соберём ExtendedDeviceInfo.
+        props_raw = api.read_raw_device_properties(handle)  # возвращает CtlDeviceAdapterProperties
+        extended = ExtendedDeviceInfo.from_properties(self._info, props_raw)  # type: ignore[return-value]
+        return extended  # type: ignore[return-value]
 
     @property
     def log(self) -> Logbook:

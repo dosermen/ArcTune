@@ -21,7 +21,7 @@ from arctuner.gui.scale import SCALE_CHOICES, load_scale, restart_argv, save_sca
 from arctuner.gui.tabs import AutoTuneTab, FansTab, LogTab, MonitoringTab, OverclockTab, VfTab
 from arctuner.gui.theme import apply_theme, flame_icon, load_theme, save_theme
 from arctuner.gui.worker import GpuWorker
-from arctuner.igcl.api import DeviceInfo
+from arctuner.igcl.api import DeviceInfo, ExtendedDeviceInfo
 
 POLL_MS = 1000  # период опроса телеметрии; запись не опрашивается вовсе
 
@@ -117,6 +117,7 @@ class MainWindow(QMainWindow):
     def _wire_worker(self) -> None:
         w = self._worker
         w.device_ready.connect(self._on_device)
+        w.device_info_ready.connect(self._on_device_info)
         w.telemetry_ready.connect(self._monitoring.on_telemetry)
         w.oc_ready.connect(self._overclock.set_ranges)
         w.fans_ready.connect(self._fans.set_fans)
@@ -248,6 +249,25 @@ class MainWindow(QMainWindow):
         self._device_seen = True
         self._device_label.setText(info.name)
         self.setWindowTitle(f"ArcTune — {info.name}")
+
+    def _on_device_info(
+        self,
+        info: DeviceInfo,
+        extended: ExtendedDeviceInfo,
+    ) -> None:
+        """Обработка расширенной информации об устройстве.
+
+        Отображает имя, ID, драйвер, прошивку, частоту и Xe-ядра в статус-баре.
+        """
+        status_text = (
+            f"📊 {info.name} | "
+            f"ID: {info.device_id:#06X} | "
+            f"Driver: {extended.driver_version_str} | "
+            f"Firmware: {extended.firmware_version_str} | "
+            f"Freq: {info.frequency_mhz} МГц | "
+            f"Xe-cores: {info.num_xe_cores}"
+        )
+        self._status_bar.showMessage(status_text, 5000)
 
     def _set_pill(self, kind: str, text: str) -> None:
         """Стилизованная пилюля состояния вместо безликого showMessage-текста.

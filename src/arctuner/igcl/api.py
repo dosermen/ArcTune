@@ -56,6 +56,46 @@ class DeviceInfo:
 
 
 @dataclass(frozen=True)
+class ExtendedDeviceInfo:
+    """Расширенные свойства устройства: DeviceInfo + driver_version + firmware."""
+
+    info: DeviceInfo
+    driver_version: int  # uint64 из CtlDeviceAdapterProperties.driver_version
+    firmware_version_major: int  # из firmware_version.major
+    firmware_version_minor: int  # из firmware_version.minor
+
+    @classmethod
+    def from_properties(
+        cls, info: DeviceInfo, props: T.CtlDeviceAdapterProperties
+    ) -> ExtendedDeviceInfo:
+        """Создаёт ExtendedDeviceInfo из DeviceInfo + raw ctypes-свойств.
+
+        Args:
+            info: уже распарсенные DeviceInfo.
+            props: raw ctypes CtlDeviceAdapterProperties.
+
+        Returns:
+            ExtendedDeviceInfo с driver_version и firmware_version.
+        """
+        drv = props.driver_version
+        fw = props.firmware_version
+        return cls(
+            info=info,
+            driver_version=drv,
+            firmware_version_major=fw.major,
+            firmware_version_minor=fw.minor,
+        )
+
+    @property
+    def driver_version_str(self) -> str:
+        return f"{(self.driver_version >> 16) & 0xFFFF}.{self.driver_version & 0xFFFF}"
+
+    @property
+    def firmware_version_str(self) -> str:
+        return f"{self.firmware_version_major}.{self.firmware_version_minor}"
+
+
+@dataclass(frozen=True)
 class OcControlInfo:
     """Описание одного регулируемого пункта (min/max/step/default)."""
 
@@ -372,6 +412,24 @@ class IgclApi:
             frequency_mhz=props.Frequency,
             num_xe_cores=props.num_xe_cores,
         )
+
+    def read_raw_device_properties(
+        self,
+        handle: CtlDeviceHandle,
+    ) -> T.CtlDeviceAdapterProperties:
+        """ctlGetDeviceProperties — возвращает сырые ctypes-свойства устройства.
+
+        Возвращает:
+            CtlDeviceAdapterProperties с полями driver_version, firmware_version и др.
+        """
+        props = T.CtlDeviceAdapterProperties()
+        props.Size = ctypes.sizeof(T.CtlDeviceAdapterProperties)
+        props.Version = 2  # >=2, чтобы получить subsys/bdf
+        _check(
+            self.loader.dll.ctlGetDeviceProperties(handle, ctypes.byref(props)),
+            "ctlGetDeviceProperties",
+        )
+        return props
 
     def read_power_telemetry(self, handle: CtlDeviceHandle) -> TelemetrySnapshot:
         """ctlPowerTelemetryGet — снимок датчиков и причин ограничения (read-only)."""
