@@ -82,8 +82,8 @@ class ExtendedDeviceInfo:
         return cls(
             info=info,
             driver_version=drv,
-            firmware_version_major=fw.major,
-            firmware_version_minor=fw.minor,
+            firmware_version_major=fw.major_version,
+            firmware_version_minor=fw.minor_version,
         )
 
     @property
