@@ -7,11 +7,47 @@ tuner.py — GUI только запрашивает и показывает п�
 
 from __future__ import annotations
 
+import logging
 import sys
+
+logger = logging.getLogger(__name__)
+
+
+def _healthcheck() -> None:
+    """Проверяет наличие IGCL.dll ДО инициализации Qt.
+
+    Если DLL нет или драйвер не установлен — показываем ошибку
+    через tkinter (лёгкая, не требует Qt) и выходим.
+    Иначе Qt может инициализироваться впустую.
+    """
+    try:
+        from arctuner.igcl.loader import IgclLoader, IgclNotFoundError
+
+        loader = IgclLoader()
+        info = loader.healthcheck()
+        logger.info("healthcheck: %s", info["path"])
+    except IgclNotFoundError as exc:
+        # tkinter — лёгкий, не требует Qt: покажет ошибку без нагрузки
+        import tkinter as tk
+        from tkinter import messagebox
+
+        root = tk.Tk()
+        root.tk.call("set", "tk_version")  # проверка, что tk жив
+        messagebox.showerror(
+            "ArcTune — драйвер Intel Arc",
+            f"IGCL.dll не найдена.\n{exc}\n\nПроверьте, что установлен драйвер Intel Arc Graphics.",
+        )
+        root.destroy()
+        sys.exit(1)
+    except Exception as exc:
+        logger.warning("healthcheck warning (non-fatal): %s", exc)
 
 
 def run() -> int:
     """Запускает приложение. Возвращает код выхода Qt."""
+    # Healthcheck до QApplication: не инициализируем Qt, если драйвер нет.
+    _healthcheck()
+
     from PySide6.QtWidgets import QApplication
 
     from arctuner.gui.errors import GuiExceptionHandler

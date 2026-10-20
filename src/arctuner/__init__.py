@@ -3,5 +3,13 @@
 Предупреждение: разгон — на ваш страх и риск. См. docs/safety.md.
 """
 
+from __future__ import annotations
+
+import logging
+
+from arctuner.gui.errors import GuiExceptionHandler
+
 __version__ = "0.1.0"
-__all__ = ["__version__"]
+__all__ = ["GuiExceptionHandler", "__version__"]
+
+logger = logging.getLogger(__name__)
