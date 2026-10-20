@@ -141,13 +141,22 @@ class GpuWorker(QObject):
     def poll_device_info(self) -> None:
         """Обновляет информацию об устройстве (имя, ID, драйвер, частота, ядра)."""
         if not self._ctx.is_open:
+            self.error.emit("poll_device_info: сессия не открыта")
             return
         try:
             info = self._ctx.info
+            if info is None:
+                self.error.emit("poll_device_info: info не найдена")
+                return
             extended = self._ctx.extended_info  # ExtendedDeviceInfo
+            if extended is None:
+                self.error.emit("poll_device_info: extended_info не найдена")
+                return
             self.device_info_ready.emit(info, extended)
         except (IgclError, SafetyLimitError) as e:
             self.error.emit(f"информация устройства: {e}")
+        except Exception as e:
+            self.error.emit(f"poll_device_info ошибка: {type(e).__name__}: {e}")
 
     @Slot()
     def reload_static(self) -> None:
