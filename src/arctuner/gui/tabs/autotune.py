@@ -9,16 +9,19 @@ stop_requested в слоты воркера (все операции с карт
 
 from __future__ import annotations
 
+import time
 from dataclasses import asdict, fields
 from pathlib import Path
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -26,12 +29,17 @@ from PySide6.QtWidgets import (
 from arctuner.autofind import MODE_FREQUENCY, MODE_UNDERVOLT
 from arctuner.autotune.engine import TuningConfig, TuningResult
 from arctuner.autotune.profiles import ProfileStore
+from arctuner.gui.charts import LiveChart
+from arctuner.igcl.api import TelemetrySnapshot
 
 #: человеческие названия режимов (кнопка-переключатель)
 _MODE_LABELS: dict[str, str] = {
     MODE_FREQUENCY: "Частота (+МГц)",
     MODE_UNDERVOLT: "Undervolt (−%)",
 }
+
+#: пауза дольше этого — пропуск данных: линию через неё не рисуем (не врём).
+_GAP_MAX_S = 5.0
 
 
 class AutoTuneTab(QWidget):
@@ -44,6 +52,8 @@ class AutoTuneTab(QWidget):
         super().__init__(parent)
         self._profiles = ProfileStore()
         self._config = TuningConfig()
+        self._t0 = time.monotonic()
+        self._t_last: float | None = None
         self._build_ui()
 
     # --- UI ---
@@ -84,8 +94,26 @@ class AutoTuneTab(QWidget):
         self._state = QLabel("Поиск не запускался.")
         self._state.setObjectName("hintLabel")
 
+        self._now = QLabel("Сейчас: —")
+        self._now.setObjectName("hintLabel")
+
         self._result = QLabel("Результат: —")
         self._result.setObjectName("resultsLabel")
+        self._result.setWordWrap(True)
+        self._result.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+
+        # История шагов может быть длинной (до 20 строк) — пусть прокручивается,
+        # а не растягивает вкладку и не обрезается.
+        result_scroll = QScrollArea()
+        result_scroll.setWidgetResizable(True)
+        result_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        result_scroll.setWidget(self._result)
+
+        self._live = LiveChart(window_s=120)
+        self._live.setMinimumHeight(200)
+        self._live.setMaximumHeight(300)
+        live_caption = QLabel("Живая телеметрия поиска (°C / % слева, МГц справа, окно 2 мин):")
+        live_caption.setObjectName("hintLabel")
 
         self._save_btn = QPushButton("💾 Сохранить профиль…")
         self._save_btn.setObjectName("infoButton")
@@ -105,7 +133,10 @@ class AutoTuneTab(QWidget):
         lay.addWidget(note)
         lay.addLayout(top)
         lay.addWidget(self._state)
-        lay.addWidget(self._result, stretch=1)
+        lay.addWidget(self._now)
+        lay.addWidget(live_caption)
+        lay.addWidget(self._live)  # высота ограничена: история под ним не задавлена
+        lay.addWidget(result_scroll, stretch=1)
         lay.addLayout(profiles)
 
     def _mode_text(self) -> str:
@@ -140,6 +171,11 @@ class AutoTuneTab(QWidget):
             if answer != QMessageBox.StandardButton.Yes:
                 self._state.setText("Запуск отменён (нагрузчик из профиля не подтверждён)")
                 return
+        # Новый поиск — новый график: старые точки к нему не относятся.
+        self._t0 = time.monotonic()
+        self._t_last = None
+        self._live.clear()
+        self._now.setText("Сейчас: ожидание первого снимка…")
         self.set_busy(True)  # локально и сразу; повторно воркер пришлёт тот же статус
         self._state.setText(
             "Запуск: подготовка поиска… (потребуется нагрузка на GPU, см. примечание выше)"
@@ -154,6 +190,44 @@ class AutoTuneTab(QWidget):
             self._state.setText(f"Поиск: шаг {current}/{total} — {text}")
         else:
             self._state.setText(f"Поиск: {text}")
+
+    def on_sample(self, snap: TelemetrySnapshot) -> None:
+        """Живой снимок поиска: мини-график и строка «сейчас».
+
+        Приходит только во время поиска (autotune_sample воркера), на каждом
+        чтении телеметрии движком — включая паузы settle и ожидание нагрузки.
+        """
+        freq = snap.gpu_freq_mhz
+        temp = snap.gpu_temp_c
+        power = snap.gpu_power_percent
+        parts: list[str] = []
+        if freq is not None:
+            parts.append(f"{freq:.0f} МГц")
+        if temp is not None:
+            parts.append(f"{temp:.0f} °C")
+        if power is not None:
+            parts.append(f"{power:.0f} %")
+        if snap.gpu_power_w is not None:
+            parts.append(f"{snap.gpu_power_w:.0f} Вт")
+        if any(
+            (
+                snap.power_limited,
+                snap.temperature_limited,
+                snap.current_limited,
+                snap.voltage_limited,
+                snap.utilization_limited,
+            )
+        ):
+            parts.append(f"лимит: {snap.limit_summary()}")
+        self._now.setText("Сейчас: " + (" · ".join(parts) if parts else "нет данных"))
+
+        # На график — только полные снимки: частичная точка соврала бы картинку.
+        if None not in (temp, power, freq):
+            t = time.monotonic() - self._t0
+            if self._t_last is not None and t - self._t_last > _GAP_MAX_S:
+                self._live.clear()  # пауза (сон/зависание) — не мостим линию
+            self._live.push(t, temp, power, freq)
+            self._t_last = t
 
     def display_result(self, result: TuningResult) -> None:
         """Итог поиска: состояние карты, лучшее стабильное значение, шаги.

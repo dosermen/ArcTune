@@ -247,6 +247,29 @@ class TestEngineFrequency:
         assert any("замер телеметрии" in s for s in statuses)
 
 
+class TestLiveSampling:
+    """on_sample: движок отдаёт каждый снимок телеметрии (живой график GUI)."""
+
+    def test_initial_and_step_snapshots(self) -> None:
+        """Старт + снимок после каждого шага; значения — те же, что у гардов."""
+        ctx = FakeCtx()
+        samples: list[TelemetrySnapshot] = []
+        result = TuningEngine(ctx, _cfg(step=50.0, max_steps=2)).run(on_sample=samples.append)
+        assert result.steps_taken == 2
+        assert len(samples) == 3  # старт + 2 шага (settle=0 — без промежуточных)
+        assert all(isinstance(s, TelemetrySnapshot) for s in samples)
+
+    def test_samples_during_settle(self) -> None:
+        """Во время паузы settle снимки продолжают идти — график не замирает."""
+        ctx = FakeCtx()
+        samples: list[TelemetrySnapshot] = []
+        result = TuningEngine(ctx, _cfg(step=50.0, max_steps=1, settle_seconds=0.3)).run(
+            on_sample=samples.append
+        )
+        assert result.steps_taken == 1
+        assert len(samples) >= 3  # старт + в паузе + после паузы
+
+
 class TestExternalCmd:
     """Внешний нагрузчик: запуск при конфиге и остановка после поиска."""
 

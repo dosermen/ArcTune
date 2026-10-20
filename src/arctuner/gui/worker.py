@@ -37,6 +37,7 @@ class GpuWorker(QObject):
     busy_changed = Signal(bool)
     incident_replay = Signal(str)  # записан дамп реплея инцидента (путь к JSONL)
     autotune_progress = Signal(int, int, str)  # current, total, text
+    autotune_sample = Signal(object)  # TelemetrySnapshot — живой график во время поиска
     autotune_completed = Signal(object)  # TuningResult
     autotune_error = Signal(str)  # ошибка процесса авторазгона (не одиночная запись)
     #: старт поиска: UI сначала зовёт autotune_arm() синхронно, затем эмитит это
@@ -272,6 +273,7 @@ class GpuWorker(QObject):
                 on_step=_on_step,
                 stop_check=lambda: self._autotune_stop,
                 on_status=_on_status,
+                on_sample=self._autotune_sample,
             )
             self.autotune_completed.emit(result)
 
@@ -289,6 +291,16 @@ class GpuWorker(QObject):
         finally:
             self.reload_static()  # карта могла измениться (шаг/откат) — обновить статику
             self.busy_changed.emit(False)
+
+    def _autotune_sample(self, snap: object) -> None:
+        """Снимок движка (в его потоке): живой график + реплей инцидентов.
+
+        Вызывается на каждое чтение телеметрии поиском (включая settle), а не
+        по таймеру: опрос в UI-потоке во время поиска остановлен, и только так
+        график получает данные без второго конкурентного доступа к IGCL.
+        """
+        self.autotune_sample.emit(snap)
+        self._replay_telemetry(snap)
 
     def autotune_arm(self) -> None:
         """Сбрасывает флаг отмены перед стартом поиска (прямой вызов из UI).

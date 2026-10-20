@@ -27,6 +27,7 @@ import subprocess
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from functools import partial
 from typing import Any, Protocol
 
 from arctuner.autofind import MODE_FREQUENCY, MODE_UNDERVOLT
@@ -183,16 +184,43 @@ class TuningEngine:
         self._cfg = cfg or TuningConfig()
         self._watchdog = watchdog
 
-    def _sleep(self, seconds: float, stop_check: Callable[[], bool] | None) -> None:
-        """Пауза, прерываемая stop_check (закрытие окна не ждёт settle целиком)."""
+    def _sleep(
+        self,
+        seconds: float,
+        stop_check: Callable[[], bool] | None,
+        sample: Callable[[], None] | None = None,
+    ) -> None:
+        """Пауза, прерываемая stop_check.
+
+        sample зовётся примерно раз в 0.5 с: живой график GUI не «замирает»
+        на время settle (раньше снимки приходили только после шага).
+        """
         deadline = time.monotonic() + seconds
+        next_sample = time.monotonic()
         while True:
             if stop_check is not None and stop_check():
                 return
-            left = deadline - time.monotonic()
+            now = time.monotonic()
+            if sample is not None and now >= next_sample:
+                sample()
+                next_sample = now + 0.5
+            left = deadline - now
             if left <= 0:
                 return
             time.sleep(min(0.1, left))
+
+    def _read_telemetry(
+        self, on_sample: Callable[[TelemetrySnapshot], None] | None
+    ) -> TelemetrySnapshot:
+        """Читает телеметрию и (если задан) отдаёт снимок живому графику.
+
+        Гарды используют ровно этот же снимок — подписчик видит те значения,
+        по которым движок принимает решение, без второго/расходящегося чтения.
+        """
+        snap = self._ctx.telemetry()
+        if on_sample is not None:
+            on_sample(snap)
+        return snap
 
     def _apply(self, value: float) -> None:
         """Применяет значение через контекст (двухуровневая проверка + журнал)."""
@@ -228,6 +256,7 @@ class TuningEngine:
         on_step: Callable[[int, float, TelemetrySnapshot], None] | None = None,
         stop_check: Callable[[], bool] | None = None,
         on_status: Callable[[str], None] | None = None,
+        on_sample: Callable[[TelemetrySnapshot], None] | None = None,
     ) -> TuningResult:
         """Запускает адаптивный спуск. ⚠️ Меняет настройки карты.
 
@@ -242,6 +271,9 @@ class TuningEngine:
                 True → честный откат к best и завершение.
             on_status: колбэк (текст) для «тихих» этапов (ожидание нагрузки,
                 проверка телеметрии) — иначе они выглядят как зависание UI.
+            on_sample: колбэк (снимок) на КАЖДОЕ чтение телеметрии движком,
+                включая settle и ожидание нагрузки: живой график GUI. Это не
+                отдельный опрос — те же значения, по которым работают гарды.
 
         Returns:
             TuningResult с историей и лучшим стабильным значением.
@@ -283,6 +315,12 @@ class TuningEngine:
 
         if on_status:
             on_status(f"старт: база {baseline:g}, шаг {cfg.step:g} {direction:+.0f}")
+
+        # Единый источник снимков: подписчик получает именно те значения, по
+        # которым движок проверяет нагрузку, температуру и watchdog.
+        sample = partial(self._read_telemetry, on_sample) if on_sample is not None else None
+        if sample is not None:
+            sample()  # первый снимок сразу — график не пустует до первого шага
 
         try:
             if cfg.external_cmd:
@@ -336,7 +374,7 @@ class TuningEngine:
                     break
 
                 if cfg.settle_seconds > 0:
-                    self._sleep(cfg.settle_seconds, stop_check)
+                    self._sleep(cfg.settle_seconds, stop_check, sample)
                     # Проверяем только после реальной паузы: без settle отмена
                     # будет замечена на следующей итерации, и лишний вызов
                     # stop_check не сдвигает ожидания тестов/UI.
@@ -348,7 +386,9 @@ class TuningEngine:
                     if on_status:
                         on_status(f"шаг {i}: применено {candidate:+g} — ожидание нагрузки…")
                     under_load = loader.verify_stress(
-                        ctx.telemetry,
+                        # sample уже отдаёт снимок графику; без подписчика —
+                        # обычное чтение контекста.
+                        sample if sample is not None else ctx.telemetry,
                         interval=0.5,
                         timeout=cfg.load_timeout,
                         stop_check=stop_check,
@@ -362,7 +402,7 @@ class TuningEngine:
                 elif on_status:
                     on_status(f"шаг {i}: применено {candidate:+g} — замер телеметрии…")
 
-                snap = ctx.telemetry()
+                snap = self._read_telemetry(on_sample)
 
                 if self._watchdog is not None:
                     evt = self._watchdog.check(snap)

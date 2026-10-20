@@ -729,6 +729,36 @@ def test_autotune_tab_start_emits_signal(qapp) -> None:
     assert len(emitted) == 1 and isinstance(emitted[0], TuningConfig)
 
 
+def test_autotune_tab_live_sample_chart_and_label(qapp, snapshot) -> None:
+    """Снимок поиска попадает в мини-график и строку «Сейчас» вкладки."""
+    from arctuner.gui.tabs import AutoTuneTab
+
+    tab = AutoTuneTab()
+    tab.on_sample(snapshot)
+    tab.on_sample(snapshot)
+    assert "2500 МГц" in tab._now.text()
+    assert "55 °C" in tab._now.text()
+    assert len(tab._live._samples) == 2  # оба снимка ушли в график
+
+
+def test_autotune_sample_reaches_both_charts(qapp, snapshot) -> None:
+    """Сигнал поиска обновляет и общий график, и мини-график авторазгона."""
+    from arctuner.gui.window import MainWindow
+
+    win = MainWindow()
+    win._timer.stop()
+    win._thread.quit()
+    win._thread.wait(2000)
+    win._worker.shutdown()
+
+    win._monitoring._chart.clear()
+    win._autotune._live.clear()
+    win._worker.autotune_sample.emit(snapshot)
+    assert len(win._monitoring._chart._samples) == 1
+    assert len(win._autotune._live._samples) == 1
+    win.close()
+
+
 def test_worker_autotune_slot_closed_session_channel(qapp) -> None:
     """Слот жив: на закрытой сессии ошибка идёт в autotune_error, не в write_error.
 

@@ -122,6 +122,10 @@ class MainWindow(QMainWindow):
         w.busy_changed.connect(self._on_busy)
         w.incident_replay.connect(self._on_incident)
         w.autotune_progress.connect(self._autotune.update_progress)
+        # Живая телеметрия поиска: общий график «Мониторинга» + мини-график
+        # на вкладке «Авторазгон» (иначе оба замирали на время engine.run).
+        w.autotune_sample.connect(self._monitoring.on_telemetry)
+        w.autotune_sample.connect(self._autotune.on_sample)
         w.autotune_completed.connect(self._autotune.display_result)
         w.autotune_error.connect(self._on_autotune_error)
 
@@ -299,9 +303,9 @@ class MainWindow(QMainWindow):
     def _on_busy(self, busy: bool) -> None:
         """Воркер занят записью/поиском: блокируем кнопки и гасим опрос.
 
-        Опрос во время поиска мешал бы дважды: воркер-поток и так занят
-        (queued-вызовы копились и выстреляли флудом после), а мониторинг
-        всё равно не получал бы снимков.
+        Опрос во время поиска мешал бы: воркер-поток и так занят (queued-вызовы
+        копились и выстреляли флудом после). Живой график при этом не стоит —
+        движок отдаёт снимки через autotune_sample на каждом чтении телеметрии.
         """
         if busy:
             self._timer.stop()  # поиск/запись: опрос не нужен и вреден
