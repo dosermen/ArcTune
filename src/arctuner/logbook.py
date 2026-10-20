@@ -11,8 +11,10 @@ Read-only операции сюда не пишутся — только фак�
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import tempfile
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -66,6 +68,8 @@ class Logbook:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("a", encoding="utf-8") as f:
             f.write(entry.to_json() + "\n")
+            f.flush()
+            os.fsync(f.fileno())  # запись переживает внезапное завершение процесса
         return entry
 
     def mark_restored(self, field_name: str) -> None:
@@ -115,11 +119,27 @@ class Logbook:
         return first_old
 
     def _rewrite(self, entries: list[LogEntry]) -> None:
-        """Перезаписывает журнал (используется только для mark_restored)."""
+        """Атомарно перезаписывает журнал (используется только для mark_restored).
+
+        Пишем во временный файл рядом и подменяем os.replace. Раньше режим "w"
+        обнулял журнал до записи: сбой/закрытие приложения посреди перезаписи
+        теряло ВСЮ историю. Теперь при ошибке старый файл остаётся целым.
+        """
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("w", encoding="utf-8") as f:
-            for e in entries:
-                f.write(e.to_json() + "\n")
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=self.path.name + ".", suffix=".tmp", dir=self.path.parent
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                for e in entries:
+                    f.write(e.to_json() + "\n")
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_name, self.path)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp_name)
+            raise
 
     def tail(self, n: int = 10) -> list[LogEntry]:
         """Последние n записей (новые → старые)."""

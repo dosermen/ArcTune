@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from arctuner.logbook import Logbook
 
 
@@ -51,6 +53,26 @@ def test_mark_restored(tmp_path) -> None:
     log.record("powerLimit", 100.0, 110.0)
     log.mark_restored("powerLimit")
     assert log.read_all()[0].restored is True
+
+
+def test_rewrite_atomic_on_failure(tmp_path, monkeypatch) -> None:
+    """Сбой подмены файла не оставляет пустой журнал: старая история цела.
+
+    Регрессия: mark_restored открывал файл в режиме "w" (обнуление до записи) —
+    сбой посреди перезаписи терял ВСЮ историю изменений.
+    """
+    log = Logbook(tmp_path / "log.jsonl")
+    log.record("powerLimit", 100.0, 110.0)
+    before = log.path.read_text(encoding="utf-8")
+
+    def boom(src, dst):
+        raise OSError("диск отвалился")
+
+    monkeypatch.setattr("arctuner.logbook.os.replace", boom)
+    with pytest.raises(OSError):
+        log.mark_restored("powerLimit")
+    assert log.path.read_text(encoding="utf-8") == before  # журнал цел
+    assert list(tmp_path.glob("*.tmp")) == []  # временный файл убран
 
 
 def test_tail_order_newest_first(tmp_path) -> None:
