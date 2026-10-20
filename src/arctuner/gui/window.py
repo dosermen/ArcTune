@@ -267,7 +267,7 @@ class MainWindow(QMainWindow):
             f"Freq: {info.frequency_mhz} МГц | "
             f"Xe-cores: {info.num_xe_cores}"
         )
-        self._status_bar.showMessage(status_text, 5000)
+        self._status.showMessage(status_text, 5000)
 
     def _set_pill(self, kind: str, text: str) -> None:
         """Стилизованная пилюля состояния вместо безликого showMessage-текста.
