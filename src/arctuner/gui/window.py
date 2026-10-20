@@ -97,6 +97,7 @@ class MainWindow(QMainWindow):
         self._worker = GpuWorker()
         self._worker.attach_thread(self._thread)
 
+        self._build_info_menu()
         self._wire_worker()
         self._wire_tabs()
         # Поток завершился (штатно или после shutdown_done) — повторить close.
@@ -198,6 +199,13 @@ class MainWindow(QMainWindow):
             theme_group.addAction(action)
             theme_menu.addAction(action)
             self._theme_actions[name] = action
+
+    def _build_info_menu(self) -> None:
+        """Меню «Информация»: обновление данных об устройстве."""
+        info_menu = self.menuBar().addMenu("Информация")
+        self._info_refresh_action = QAction("Обновить информацию", self)
+        self._info_refresh_action.triggered.connect(self._worker.poll_device_info)
+        info_menu.addAction(self._info_refresh_action)
 
     def _on_scale_selected(self, value: float) -> None:
         save_scale(value)

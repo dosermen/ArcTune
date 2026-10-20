@@ -137,6 +137,17 @@ class GpuWorker(QObject):
             self.error.emit(f"реплей инцидента: {e}")
 
     @Slot()
+    def poll_device_info(self) -> None:
+        """Обновляет информацию об устройстве (имя, ID, частота)."""
+        if not self._ctx.is_open:
+            return
+        try:
+            info = self._ctx.info
+            self.device_ready.emit(info)
+        except (IgclError, SafetyLimitError) as e:
+            self.error.emit(f"информация устройства: {e}")
+
+    @Slot()
     def reload_static(self) -> None:
         """Перечитывает диапазоны OC, текущие значения, вентиляторы, V/F и журнал.
 
