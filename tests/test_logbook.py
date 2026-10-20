@@ -8,7 +8,13 @@ from __future__ import annotations
 
 import pytest
 
-from arctuner.logbook import Logbook
+from arctuner.logbook import (
+    LEGACY_RESET_OC_FIELD,
+    RESET_FANS_FIELD,
+    RESET_OC_FIELD,
+    JournalWriteError,
+    Logbook,
+)
 
 
 def test_empty_logbook(tmp_path) -> None:
@@ -97,3 +103,70 @@ def test_skips_corrupt_lines(tmp_path) -> None:
     entries = log.read_all()
     assert len(entries) == 1  # битая строка пропущена, чтение не упало
     assert entries[0].field == "powerLimit"
+
+
+class TestResetMarkers:
+    """Сброс инвалидирует старые цели отката, но история сохраняется."""
+
+    def test_reset_oc_clears_previous_targets(self, tmp_path) -> None:
+        log = Logbook(tmp_path / "log.jsonl")
+        log.record("powerLimit", 100.0, 120.0)
+        log.record("gpuFrequencyOffset", 0.0, 50.0)
+        log.record(RESET_OC_FIELD, None, None, note="сброс")
+        assert log.rollback_targets() == {}
+        # История не потеряна: маркер виден, старые записи на месте.
+        fields = [e.field for e in log.read_all()]
+        assert fields == ["powerLimit", "gpuFrequencyOffset", RESET_OC_FIELD]
+
+    def test_new_record_after_reset_is_the_target(self, tmp_path) -> None:
+        log = Logbook(tmp_path / "log.jsonl")
+        log.record("powerLimit", 100.0, 120.0)
+        log.record(RESET_OC_FIELD, None, None)
+        log.record("powerLimit", 120.0, 110.0)
+        targets = log.rollback_targets()
+        assert targets["powerLimit"] == 120.0  # запись ПОСЛЕ сброса
+
+    def test_legacy_all_marker_cuts_history(self, tmp_path) -> None:
+        """Старые журналы писали field="all" — тоже считаем сбросом OC."""
+        log = Logbook(tmp_path / "log.jsonl")
+        log.record("powerLimit", 100.0, 120.0)
+        log.record(LEGACY_RESET_OC_FIELD, None, None)
+        assert log.rollback_targets() == {}
+        log.record("powerLimit", 120.0, 115.0)
+        assert log.rollback_targets()["powerLimit"] == 120.0
+
+    def test_latest_values_clear_oc_on_reset(self, tmp_path) -> None:
+        log = Logbook(tmp_path / "log.jsonl")
+        log.record("powerLimit", 100.0, 120.0)
+        log.record("fan[0]", 1200.0, 1800.0)
+        log.record(RESET_OC_FIELD, None, None)
+        vals = log.latest_values()
+        assert "powerLimit" not in vals
+        assert vals["fan[0]"] == 1800.0  # сброс OC не трогает вентиляторы
+
+    def test_reset_fans_marker_clears_fan_values(self, tmp_path) -> None:
+        log = Logbook(tmp_path / "log.jsonl")
+        log.record("powerLimit", 100.0, 120.0)
+        log.record("fan[0]", 1200.0, 1800.0)
+        log.record(RESET_FANS_FIELD, None, None)
+        vals = log.latest_values()
+        assert "fan[0]" not in vals
+        assert vals["powerLimit"] == 120.0
+        # Вентиляторы не цель отката ни до, ни после маркера.
+        assert "fan[0]" not in log.rollback_targets()
+
+    def test_mark_restored_still_works_with_markers(self, tmp_path) -> None:
+        log = Logbook(tmp_path / "log.jsonl")
+        log.record("powerLimit", 100.0, 120.0)
+        log.record(RESET_OC_FIELD, None, None)
+        log.record("powerLimit", 120.0, 110.0)
+        log.mark_restored("powerLimit")
+        restored = [e.restored for e in log.read_all() if e.field == "powerLimit"]
+        assert restored == [False, True]
+
+
+def test_journal_write_error_is_oserror() -> None:
+    """JournalWriteError наследуется от OSError: CLI/GUI уже умеют её показывать."""
+    err = JournalWriteError("журнал недоступен")
+    assert isinstance(err, OSError)
+    assert str(err) == "журнал недоступен"

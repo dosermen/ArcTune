@@ -236,6 +236,8 @@ class TuningEngine:
 
         Последняя попытка при невозможности шага — полный сброс к дефолту,
         чтобы не оставить полузадранное состояние (как в autofind.py).
+        Сбой журнала (``JournalWriteError`` — это ``OSError``) не должен
+        вылетать из finally и оставлять внешнюю нагрузку запущенной.
 
         Returns:
             False — карта НЕ осталась на value (сброшена к дефолту либо сброс
@@ -244,9 +246,9 @@ class TuningEngine:
         try:
             self._apply(value)
             return True
-        except (IgclError, SafetyLimitError):
+        except (IgclError, SafetyLimitError, OSError):
             pass
-        with contextlib.suppress(IgclError, SafetyLimitError):
+        with contextlib.suppress(IgclError, SafetyLimitError, OSError):
             self._ctx.reset_oc()
         return False
 
@@ -451,20 +453,29 @@ class TuningEngine:
 
             raise AutofindAbortError(reason) from None
         finally:
-            if need_restore:
-                # Ошибка отката не перекрывает исходное исключение/результат:
-                # карта проверена tuner'ом, безопасное состояние обеспечит
-                # повторный запуск/сброс (об ошибке отката сообщит канал воркера).
-                restored = False
-                with contextlib.suppress(IgclError, SafetyLimitError):
-                    restored = self._restore(best)
-                card_value = best if restored else None
-            else:
-                card_value = best  # карта штатно на последнем стабильном
-            if stress is not None:
-                # Остановка нагрузки не должна перекрывать результат/исключение.
-                with contextlib.suppress(OSError, subprocess.TimeoutExpired):
-                    loader.terminate_stress(stress)
+            # Откат и остановка нагрузчика независимы: сбой журнала/отката
+            # (в т.ч. JournalWriteError) не имеет права оставить стресс-процесс
+            # запущенным. Исходное исключение при этом не теряется.
+            try:
+                if need_restore:
+                    # Ошибка отката не перекрывает исходное исключение/результат:
+                    # _restore сам пробует полный сброс OC, а если и это не вышло —
+                    # card_value=None и честная причина в результате.
+                    restored = False
+                    try:
+                        restored = self._restore(best)
+                    except (IgclError, SafetyLimitError, OSError):
+                        restored = False
+                    card_value = best if restored else None
+                    if not restored:
+                        reason = f"{reason} (состояние карты не подтверждено: откат не удался)"
+                else:
+                    card_value = best  # карта штатно на последнем стабильном
+            finally:
+                if stress is not None:
+                    # Остановка нагрузки не должна перекрывать результат/исключение.
+                    with contextlib.suppress(OSError, subprocess.TimeoutExpired):
+                        loader.terminate_stress(stress)
 
         return TuningResult(
             mode=cfg.mode,

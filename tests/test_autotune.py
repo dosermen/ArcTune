@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -18,8 +19,10 @@ from arctuner.autotune import watchdog as wd_mod
 from arctuner.autotune.engine import TuningConfig, TuningEngine, TuningResult
 from arctuner.autotune.profiles import ProfileStore
 from arctuner.autotune.watchdog import Watchdog, WatchdogEvent
-from arctuner.igcl.api import TelemetrySnapshot
-from arctuner.tuner import SafetyLimitError
+from arctuner.context import GpuContext
+from arctuner.igcl.api import IgclError, TelemetrySnapshot
+from arctuner.logbook import RESET_OC_FIELD, JournalWriteError
+from arctuner.tuner import SafetyLimitError, VfPoint, WriteReport
 
 FREQ_MIN = -300.0
 FREQ_MAX = 1000.0
@@ -656,3 +659,252 @@ class TestGridSnapping:
         assert result.steps_taken == 0
         assert "сетки IGCL" in result.stopped_reason
         assert ctx.applied == []  # ни одной записи — сетка не позволила шага
+
+
+class _BoomLog:
+    """Журнал, который всегда падает (имитация сбоя диска/прав)."""
+
+    def record(self, *args: object, **kwargs: object) -> None:
+        raise OSError("диск переполнен")
+
+
+class TestContextJournalConsistency:
+    """Запись на карту без журнала не должна оставаться молчаливой."""
+
+    @staticmethod
+    def _ctx() -> GpuContext:
+        ctx = GpuContext()
+        ctx._api = object()  # type: ignore[assignment]
+        ctx._handle = object()
+        return ctx
+
+    def test_write_compensates_old_value_and_raises(self) -> None:
+        """Сбой record → повторный tuner-вызов со старым значением + ошибка."""
+        ctx = self._ctx()
+        calls: list[float] = []
+
+        def fake_write(api: object, handle: object, value: float) -> WriteReport:
+            calls.append(value)
+            return WriteReport("powerLimit", 100.0, value)
+
+        ctx._log = _BoomLog()  # type: ignore[assignment]
+        with pytest.raises(JournalWriteError) as exc:
+            ctx._write(fake_write, 120.0)
+        assert calls == [120.0, 100.0]  # запись и компенсация старым значением
+        assert "возвращена" in str(exc.value)
+        assert "настройка отменена" in str(exc.value)
+
+    def test_write_vram_compensation_allows_beyond_nominal(self) -> None:
+        """old > 20 Гбит/с: компенсация идёт с allow_beyond_nominal=True."""
+        ctx = self._ctx()
+        calls: list[tuple[float, bool]] = []
+
+        def fake_vram(
+            api: object,
+            handle: object,
+            gbps: float,
+            *,
+            allow_beyond_nominal: bool = False,
+        ) -> WriteReport:
+            calls.append((gbps, allow_beyond_nominal))
+            return WriteReport("vramMemSpeedLimit", 21.0, gbps)
+
+        ctx._log = _BoomLog()  # type: ignore[assignment]
+        with pytest.raises(JournalWriteError):
+            ctx._write(fake_vram, 19.0, allow_beyond_nominal=False)
+        assert calls == [(19.0, False), (21.0, True)]
+
+    def test_write_without_old_reports_unknown_state(self) -> None:
+        """old=None: вернуть нечего — ошибка честно говорит «неизвестно»."""
+        ctx = self._ctx()
+        calls: list[float] = []
+
+        def fake_write(api: object, handle: object, value: float) -> WriteReport:
+            calls.append(value)
+            return WriteReport("powerLimit", None, value)
+
+        ctx._log = _BoomLog()  # type: ignore[assignment]
+        with pytest.raises(JournalWriteError) as exc:
+            ctx._write(fake_write, 120.0)
+        assert calls == [120.0]  # компенсации не было
+        assert "неизвестно" in str(exc.value)
+
+    def test_reset_oc_writes_marker(self) -> None:
+        """reset_oc журналирует маркер, а не field='all'."""
+        ctx = self._ctx()
+
+        class ResetApi:
+            def reset_to_default(self, handle: object) -> None:
+                pass
+
+        ctx._api = ResetApi()  # type: ignore[assignment]
+        records: list[tuple[object, ...]] = []
+
+        class CaptureLog:
+            def record(self, *args: object, **kwargs: object) -> None:
+                records.append(args)
+
+        ctx._log = CaptureLog()  # type: ignore[assignment]
+        ctx.reset_oc()
+        assert records and records[0][0] == RESET_OC_FIELD
+
+    def test_reset_oc_journal_failure_raises_honest_error(self) -> None:
+        ctx = self._ctx()
+
+        class ResetApi:
+            def reset_to_default(self, handle: object) -> None:
+                pass
+
+        ctx._api = ResetApi()  # type: ignore[assignment]
+        ctx._log = _BoomLog()  # type: ignore[assignment]
+        with pytest.raises(JournalWriteError) as exc:
+            ctx.reset_oc()
+        assert "известно" in str(exc.value)  # карта точно в дефолте
+
+    def test_fan_speed_journals_old_and_new(self) -> None:
+        """fan[i]: old — фактический RPM до записи, new — заданный."""
+        ctx = self._ctx()
+        props = SimpleNamespace(canControl=True, maxRPM=3000)
+
+        class FanApi:
+            def __init__(self) -> None:
+                self.fixed: list[int] = []
+
+            def enum_fans(self, handle: object) -> list[object]:
+                return [object()]
+
+            def get_fan_properties(self, fan: object) -> object:
+                return props
+
+            def get_fan_speed(self, fan: object) -> int:
+                return 1200
+
+            def set_fan_fixed_speed(self, fan: object, rpm: int) -> None:
+                self.fixed.append(rpm)
+
+        records: list[tuple[object, ...]] = []
+
+        class CaptureLog:
+            def record(self, field: str, old: object, new: object, **kwargs: object) -> None:
+                records.append((field, old, new, kwargs.get("device")))
+
+        api = FanApi()
+        ctx._api = api  # type: ignore[assignment]
+        ctx._log = CaptureLog()  # type: ignore[assignment]
+        ctx.set_fan_speed(0, 1800)
+        assert api.fixed == [1800]
+        assert records == [("fan[0]", 1200.0, 1800.0, "")]
+
+    def test_fan_speed_blocks_unknown_max_rpm(self) -> None:
+        """maxRPM=0 — предел неизвестен: запись не выполняется (безопасность)."""
+        ctx = self._ctx()
+
+        class FanApi:
+            def enum_fans(self, handle: object) -> list[object]:
+                return [object()]
+
+            def get_fan_properties(self, fan: object) -> object:
+                return SimpleNamespace(canControl=True, maxRPM=0)
+
+            def get_fan_speed(self, fan: object) -> int:
+                raise AssertionError("чтение RPM не должно вызываться")
+
+            def set_fan_fixed_speed(self, fan: object, rpm: int) -> None:
+                raise AssertionError("запись не должна вызываться")
+
+        ctx._api = FanApi()  # type: ignore[assignment]
+        with pytest.raises(SafetyLimitError, match="maxRPM неизвестен"):
+            ctx.set_fan_speed(0, 1800)
+
+    def test_apply_vf_curve_restores_old_curve_on_journal_failure(self, monkeypatch) -> None:
+        """Сбой журнала после записи V/F → старая кривая возвращается."""
+        ctx = self._ctx()
+
+        class Pt:
+            def __init__(self, voltage: int, frequency: int) -> None:
+                self.voltage = voltage
+                self.frequency = frequency
+
+        old_curve = [Pt(700, 400), Pt(800, 1200)]
+
+        class VfApi:
+            def read_vf_curve(self, handle: object) -> list[Pt]:
+                return old_curve
+
+        ctx._api = VfApi()  # type: ignore[assignment]
+        ctx._log = _BoomLog()  # type: ignore[assignment]
+        writes: list[list[tuple[float, float]]] = []
+
+        def fake_apply(api: object, handle: object, points: list[VfPoint]) -> WriteReport:
+            writes.append([(p.voltage_mv, p.freq_mhz) for p in points])
+            return WriteReport("vfCurve", 2.0, float(len(points)))
+
+        monkeypatch.setattr("arctuner.context.tuner.apply_vf_curve", fake_apply)
+        new_points = [VfPoint(700, 400), VfPoint(900, 2000)]
+        with pytest.raises(JournalWriteError) as exc:
+            ctx.apply_vf_curve(new_points)
+        assert writes == [
+            [(700.0, 400.0), (900.0, 2000.0)],  # запись пользователя
+            [(700.0, 400.0), (800.0, 1200.0)],  # компенсация старой кривой
+        ]
+        assert "восстановлена" in str(exc.value)
+
+
+class TestStressTerminationOnRestoreFailure:
+    """finally движка: откат и остановка нагрузчика независимы."""
+
+    def test_restore_journal_failure_still_terminates_stress(self, monkeypatch) -> None:
+        terminated: list[object] = []
+        monkeypatch.setattr(loader, "start_external", lambda cmd: object())
+        monkeypatch.setattr(loader, "terminate_stress", terminated.append)
+
+        ctx = FakeCtx(temp=90.0)  # гард температуры → нужен откат к базе
+        orig = ctx.set_freq_offset
+        calls = {"n": 0}
+
+        def flaky(mhz: float) -> object:
+            calls["n"] += 1
+            if calls["n"] > 1:  # откат к базе падает на записи в журнал
+                raise JournalWriteError("журнал недоступен")
+            return orig(mhz)
+
+        def reset_boom() -> object:
+            raise JournalWriteError("журнал недоступен")
+
+        ctx.set_freq_offset = flaky  # type: ignore[method-assign]
+        ctx.reset_oc = reset_boom  # type: ignore[method-assign]
+
+        result = TuningEngine(ctx, _cfg(external_cmd="bench.exe")).run()
+        assert terminated, "нагрузчик остался запущенным после сбоя отката"
+        assert result.card_value is None
+        assert "не подтверждено" in result.stopped_reason
+
+    def test_original_error_not_lost_when_restore_fails(self, monkeypatch) -> None:
+        """Исходная ошибка IgclError доходит до вызывающего, нагрузчик снят."""
+        terminated: list[object] = []
+        monkeypatch.setattr(loader, "start_external", lambda cmd: object())
+        monkeypatch.setattr(loader, "terminate_stress", terminated.append)
+
+        ctx = FakeCtx()
+        orig = ctx.set_freq_offset
+        calls = {"n": 0}
+
+        def flaky(mhz: float) -> object:
+            calls["n"] += 1
+            if calls["n"] > 1:
+                raise JournalWriteError("журнал недоступен")
+            return orig(mhz)
+
+        def boom() -> TelemetrySnapshot:
+            raise IgclError(-1, "драйвер отвалился")
+
+        def reset_boom() -> object:
+            raise JournalWriteError("журнал недоступен")
+
+        ctx.set_freq_offset = flaky  # type: ignore[method-assign]
+        ctx.reset_oc = reset_boom  # type: ignore[method-assign]
+        ctx.telemetry = boom  # type: ignore[method-assign]
+
+        with pytest.raises(IgclError):
+            TuningEngine(ctx, _cfg(external_cmd="bench.exe", max_steps=1)).run()
+        assert terminated

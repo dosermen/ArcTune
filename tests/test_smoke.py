@@ -29,9 +29,3 @@ def test_healthcheck_reports_required_functions() -> None:
     # Ключевые функции разгона должны быть в современном драйвере.
     for fn in ("ctlPowerTelemetryGet", "ctlOverclockGetProperties"):
         assert loader.has(fn), f"{fn} отсутствует — драйвер слишком старый?"
-
-
-@pytest.mark.hardware
-def test_enumerate_b580() -> None:
-    """Требует реального Arc. Заглушка до реализации enumerate_devices."""
-    pytest.skip("Реализуется в MVP: ctlEnumerateDevices")

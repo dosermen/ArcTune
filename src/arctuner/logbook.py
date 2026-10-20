@@ -22,6 +22,30 @@ from pathlib import Path
 DEFAULT_LOG_DIR = Path.home() / ".arctune"
 DEFAULT_LOG_NAME = "logbook.jsonl"
 
+#: Явный маркер сброса OC к дефолту. Записи ДО него остаются историей, но
+#: перестают быть целями отката: карта уже не в том состоянии, куда они вели.
+RESET_OC_FIELD = "reset_oc"
+#: Явный маркер возврата вентиляторов в авто (история, не цель отката).
+RESET_FANS_FIELD = "reset_fans"
+#: Маркер сброса из старых версий (field="all"): считаем его сбросом OC.
+LEGACY_RESET_OC_FIELD = "all"
+
+#: Поля-маркеры, после которых прежние цели отката OC недействительны.
+_RESET_OC_MARKERS = frozenset({RESET_OC_FIELD, LEGACY_RESET_OC_FIELD})
+
+
+class JournalWriteError(OSError):
+    """Запись на карту прошла, но журнал не записался.
+
+    Наследуется от OSError: вызывающие (CLI/GUI) уже показывают такие ошибки
+    как проблему файла/диска, но текст сообщает, удалось ли вернуть карту.
+    """
+
+
+def _is_fan_field(name: str) -> bool:
+    """Поле журнала относится к вентилятору (`fan[0]`, …)."""
+    return name.startswith("fan[")
+
 
 @dataclass
 class LogEntry:
@@ -99,9 +123,19 @@ class Logbook:
         return out
 
     def latest_values(self) -> dict[str, float | None]:
-        """Последние известные значения полей (для понимания текущего состояния)."""
+        """Последние известные значения полей (для понимания текущего состояния).
+
+        Маркер сброса OC очищает прежние OC-значения (карта уже в дефолте),
+        маркер ``reset_fans`` — значения вентиляторов. История при этом цела.
+        """
         vals: dict[str, float | None] = {}
         for e in self.read_all():
+            if e.field in _RESET_OC_MARKERS:
+                vals = {k: v for k, v in vals.items() if _is_fan_field(k)}
+                continue
+            if e.field == RESET_FANS_FIELD:
+                vals = {k: v for k, v in vals.items() if not _is_fan_field(k)}
+                continue
             if e.new is not None:
                 vals[e.field] = e.new
         return vals
@@ -109,14 +143,24 @@ class Logbook:
     def rollback_targets(self) -> dict[str, float | None]:
         """Поля → значение «как было» для отката.
 
-        Для каждого поля возвращает самое старое известное `old` (т.е. исходное
-        состояние до всех изменений). Поля без history не попадают сюда.
+        Для каждого поля возвращает самое старое известное `old` ПОСЛЕ
+        последнего сброса OC: ``reset_oc`` (или legacy ``all``). Записи до
+        маркера остаются в истории, но целью отката не являются — иначе после
+        ``reset --oc`` журнал снова применил бы старый разгон.
+
+        Вентиляторы журналом не откатываются (для них есть ``reset --fans``),
+        поэтому ``fan[*]`` и маркер ``reset_fans`` в цели не попадают.
         """
-        first_old: dict[str, float | None] = {}
+        targets: dict[str, float | None] = {}
         for e in self.read_all():
-            if e.field not in first_old and e.old is not None:
-                first_old[e.field] = e.old
-        return first_old
+            if e.field in _RESET_OC_MARKERS:
+                targets.clear()
+                continue
+            if e.field == RESET_FANS_FIELD or _is_fan_field(e.field):
+                continue
+            if e.field not in targets and e.old is not None:
+                targets[e.field] = e.old
+        return targets
 
     def _rewrite(self, entries: list[LogEntry]) -> None:
         """Атомарно перезаписывает журнал (используется только для mark_restored).

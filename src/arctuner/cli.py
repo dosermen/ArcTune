@@ -30,9 +30,10 @@ def cmd_doctor(_: argparse.Namespace) -> int:
     print(f"[OK]   IGCL API: {info['path']}")
     missing = info["missing_required"]
     if missing:
-        print(f"[WARN] Отсутствуют функции (старый драйвер?): {', '.join(missing)}")
-    else:
-        print("[OK]   Все обязательные ctl* функции доступны")
+        print(f"[FAIL] Отсутствуют обязательные функции (старый драйвер?): {', '.join(missing)}")
+        print("Обновите драйвер Intel Arc — без этих ctl* функций работа невозможна.")
+        return 1
+    print("[OK]   Все обязательные ctl* функции доступны")
     print("\nДрайвер и IGCL в порядке. Дальше: python -m arctuner telemetry")
     return 0
 
@@ -431,26 +432,38 @@ def cmd_vf(args: argparse.Namespace) -> int:
 
 
 def cmd_autofind(args: argparse.Namespace) -> int:
-    """⚠️ Автопоиск стабильной точки (меняет настройки, требует нагрузки)."""
+    """⚠️ Автопоиск стабильной точки (меняет настройки, требует нагрузки).
+
+    Использует тот же TuningEngine + GpuContext, что и GUI: каждая запись идёт
+    через tuner-проверки и журнал (реальные gpuFrequencyOffset/gpuVoltageOffset),
+    поэтому ``log --rollback`` работает и не знает полей frequency/undervolt.
+    """
     from arctuner import autofind as af
-    from arctuner.igcl.api import IgclApi, IgclError
-    from arctuner.logbook import Logbook, default_logbook_path
-    from arctuner.telemetry import find_arc_adapter
+    from arctuner.autotune.engine import TuningConfig, TuningEngine
+    from arctuner.autotune.watchdog import Watchdog
+    from arctuner.context import GpuContext
+    from arctuner.igcl.api import IgclError
+    from arctuner.logbook import default_logbook_path
     from arctuner.tuner import SafetyLimitError
 
-    mode = af.MODE_FREQUENCY if args.mode == "frequency" else af.MODE_UNDERVOLT
-    cfg = af.AutofindConfig(
+    mode = args.mode
+    # Шаг по умолчанию зависит от режима: 15 МГц для частоты, 1 % для undervolt.
+    step = args.step if args.step is not None else (15.0 if mode == af.MODE_FREQUENCY else 1.0)
+    cfg = TuningConfig(
         mode=mode,
-        step=args.step,
+        step=step,
+        # Не даём шагу выродиться в бесконечную крутку у границы.
+        min_step=max(step * 0.2, 0.1),
         max_steps=args.max_steps,
         settle_seconds=args.settle,
         temp_ceiling_c=args.temp_ceiling,
         require_load=not args.no_load_check,
+        load_timeout=3.0,  # как в старом CLI: не ждать нагрузку минутами
     )
 
     print("⚠️  АВТОПОИСК стабильной точки — это ИЗМЕНИТ настройки карты.")
     print(f"  режим:      {mode}")
-    print(f"  шаг:        {cfg.step}  (до {cfg.max_steps} шагов)")
+    print(f"  шаг:        {cfg.step}  (до {cfg.max_steps} шагов, min {cfg.min_step})")
     print(f"  потолок t°: {cfg.temp_ceiling_c} °C")
     print(
         f"  нагрузка:   {'требуется (запустите стресс/бенчмарк!)' if cfg.require_load else 'не проверяется (--no-load-check)'}"
@@ -458,8 +471,8 @@ def cmd_autofind(args: argparse.Namespace) -> int:
     if cfg.require_load:
         print("\n  ВАЖНО: запустите стресс-тест/игру в ДРУГОМ окне и держите его")
         print("  активным. Без нагрузки autofind остановится с 'нет нагрузки'.")
-        print("  Телеметрия не видит крэши (TDR) — при сбое просто перезагрузите")
-        print("  систему, настройки вернутся к дефолту при старте драйвера.")
+    print("  Watchdog ловит TDR/зависание телеметрии и откатывает шаг, но compute-")
+    print("  ошибки приложения телеметрии не видны — следите за стресс-тестом.")
     if not args.yes:
         try:
             ans = input("\nПродолжить? [y/N]: ")
@@ -476,29 +489,40 @@ def cmd_autofind(args: argparse.Namespace) -> int:
             f"пит={snap.gpu_power_percent}%  [{snap.limit_summary()}]"
         )
 
+    def on_status(text: str) -> None:
+        print(f"  {text}")
+
     try:
-        with IgclApi() as api:
-            found = find_arc_adapter(api)
-            if not found:
-                print("[FAIL] Дискретная Intel Arc не найдена.")
-                return 1
-            handle, _ = found
-            result = af.autofind(api, handle, cfg, on_step=on_step)
+        with GpuContext() as ctx:
+            info = ctx.info
+            device = getattr(info, "name", "") if info is not None else ""
+            engine = TuningEngine(
+                ctx,
+                cfg,
+                watchdog=Watchdog(device=device),
+            )
+            result = engine.run(on_step=on_step, on_status=on_status)
 
             print("\n=== Итог ===")
+            print(f"  режим:       {result.mode}")
             print(f"  база:        {result.baseline:.2f}")
             print(f"  стабильно:   {result.best_stable:.2f}  (сдвиг {result.improvement:+.2f})")
             print(f"  шагов:       {result.steps_taken}")
             print(f"  причина:     {result.stopped_reason}")
-            Logbook(default_logbook_path()).record(
-                result.mode, result.baseline, result.best_stable, note=result.stopped_reason
-            )
             print(f"  журнал:      {default_logbook_path()}")
+            if result.card_value is None:
+                print(
+                    "  ⚠️  Состояние карты НЕ подтверждено: откат/запись не удались."
+                    " Проверьте `python -m arctuner status` и `telemetry`."
+                )
     except af.AutofindAbortError as e:
         print(f"\n[ABORT] {e}")
         return 1
     except (IgclError, SafetyLimitError) as e:
         print(f"\n[FAIL] {e} (выполнен откат)")
+        return 1
+    except OSError as e:
+        print(f"\n[FAIL] {e}")
         return 1
     except Exception as exc:
         print(f"\n[UNEXPECTED] {exc}  ({type(exc).__module__}.{type(exc).__name__})")
@@ -656,6 +680,7 @@ def _build_rollback_map() -> None:
 def cmd_fans(args: argparse.Namespace) -> int:
     """Вентиляторы: чтение (по умолчанию) / ⚠️ фиксация скорости с --set."""
     from arctuner.igcl.api import IgclApi, IgclError
+    from arctuner.logbook import JournalWriteError, Logbook, default_logbook_path
     from arctuner.telemetry import find_arc_adapter
     from arctuner.tuner import SafetyLimitError
 
@@ -665,7 +690,7 @@ def cmd_fans(args: argparse.Namespace) -> int:
             if not found:
                 print("[FAIL] Дискретная Intel Arc не найдена.")
                 return 1
-            handle, _ = found
+            handle, dev = found
             fans = api.enum_fans(handle)
             if not fans:
                 print("Вентиляторы не найдены (возможно, ноутбук/внешний кулер).")
@@ -694,18 +719,41 @@ def cmd_fans(args: argparse.Namespace) -> int:
                     if ans.strip().lower() not in ("y", "yes", "д", "да"):
                         print("Отменено.")
                         return 1
+                log = Logbook(default_logbook_path())
                 for i, f in enumerate(fans):
                     p = api.get_fan_properties(f)
                     if not p.canControl:
                         print(f"  [{i}] пропущен (не управляется)")
                         continue
-                    if args.set > p.maxRPM > 0:
+                    if p.maxRPM <= 0:
+                        print(f"  [{i}] BLOCK: maxRPM неизвестен — запись заблокирована")
+                        continue
+                    if args.set > p.maxRPM:
                         print(f"  [{i}] BLOCK: {args.set} > maxRPM {p.maxRPM}")
                         continue
+                    old_rpm = api.get_fan_speed(f)
                     api.set_fan_fixed_speed(f, args.set)
-                    print(f"  [{i}] установлено {args.set} RPM")
+                    try:
+                        log.record(
+                            f"fan[{i}]",
+                            float(old_rpm),
+                            float(args.set),
+                            device=dev.name,
+                            note="фиксация скорости",
+                        )
+                    except OSError as exc:
+                        # Карта уже изменена — возвращаем авто, затем честно падаем.
+                        try:
+                            api.set_fan_default(f)
+                            detail = "вентилятор возвращён в авто — настройка отменена"
+                        except (IgclError, OSError) as rb_exc:
+                            detail = f"вернуть авто не удалось — состояние неизвестно ({rb_exc})"
+                        raise JournalWriteError(
+                            f"fan[{i}]: журнал не записан ({exc}); {detail}"
+                        ) from exc
+                    print(f"  [{i}] установлено {args.set} RPM (было {old_rpm})")
                 print("Вернуть авто: python -m arctuner reset --fans")
-    except (IgclError, SafetyLimitError) as e:
+    except (IgclError, SafetyLimitError, OSError) as e:
         print(f"[FAIL] {e}")
         return 1
     return 0
@@ -714,6 +762,12 @@ def cmd_fans(args: argparse.Namespace) -> int:
 def cmd_reset(args: argparse.Namespace) -> int:
     """⚠️ Откат: OC-настроек к дефолту и/или вентиляторов в авто."""
     from arctuner.igcl.api import IgclApi, IgclError
+    from arctuner.logbook import (
+        RESET_FANS_FIELD,
+        RESET_OC_FIELD,
+        Logbook,
+        default_logbook_path,
+    )
     from arctuner.telemetry import find_arc_adapter
 
     if not (args.oc or args.fans):
@@ -742,30 +796,69 @@ def cmd_reset(args: argparse.Namespace) -> int:
             if not found:
                 print("[FAIL] Дискретная Intel Arc не найдена.")
                 return 1
-            handle, _ = found
+            handle, dev = found
+            log = Logbook(default_logbook_path())
             if args.oc:
                 from arctuner import tuner
 
                 tuner.reset_to_default(api, handle)
-                print("OC-настройки сброшены к дефолту.")
+                # Маркер инвалидирует прежние цели отката: карта уже в дефолте,
+                # иначе `log --rollback` снова применил бы старый разгон.
+                try:
+                    log.record(
+                        RESET_OC_FIELD,
+                        None,
+                        None,
+                        device=dev.name,
+                        note=(
+                            "сброс OC к дефолту; прежние цели отката недействительны "
+                            "(история сохранена)"
+                        ),
+                    )
+                except OSError as exc:
+                    print(
+                        "[FAIL] OC сброшены к дефолту, но журнал не записан "
+                        f"({exc}); прежние цели отката могли остаться."
+                    )
+                    return 1
+                print("OC-настройки сброшены к дефолту (журнал: reset_oc).")
             if args.fans:
                 for f in api.enum_fans(handle):
                     api.set_fan_default(f)
-                print("Вентиляторы возвращены в аппаратный режим.")
+                try:
+                    log.record(
+                        RESET_FANS_FIELD,
+                        None,
+                        None,
+                        device=dev.name,
+                        note="вентиляторы возвращены в авто (история fan[*] сохранена)",
+                    )
+                except OSError as exc:
+                    print(
+                        "[FAIL] Вентиляторы возвращены в авто, но журнал не записан "
+                        f"({exc}); история сброса не зафиксирована."
+                    )
+                    return 1
+                print("Вентиляторы возвращены в аппаратный режим (журнал: reset_fans).")
     except IgclError as e:
+        print(f"[FAIL] {e}")
+        return 1
+    except OSError as e:
         print(f"[FAIL] {e}")
         return 1
     return 0
 
 
 def _version() -> str:
-    """Версия пакета; для frozen-exe без metadata — из pyproject-фолбэка."""
+    """Версия пакета; для frozen-exe без metadata — из arctuner.__version__."""
     try:
         from importlib.metadata import PackageNotFoundError, version
 
         return version("arctune")
     except PackageNotFoundError:
-        return "0.1.0"
+        from arctuner import __version__
+
+        return __version__
 
 
 def _configure_console() -> None:
@@ -796,7 +889,6 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("doctor", help="проверка окружения").set_defaults(func=cmd_doctor)
     ptelem = sub.add_parser("telemetry", help="телеметрия (read-only)")
     ptelem.add_argument("--csv", metavar="FILE", help="дополнительно сохранить снимок в CSV")
-    ptelem.add_argument("--once", action="store_true", help="один снимок (без -w)")
     ptelem.add_argument("-w", "--watch", type=int, metavar="SEC", help="повторять каждые N сек")
     ptelem.add_argument(
         "--replay",
@@ -827,10 +919,15 @@ def build_parser() -> argparse.ArgumentParser:
     paf.add_argument(
         "--mode",
         choices=["undervolt", "frequency"],
-        default="undervolt",
-        help="что двигать (по умолчанию undervolt — безопасное направление)",
+        default="frequency",
+        help="что двигать (по умолчанию frequency: undervolt через offset на B580 ограничен)",
     )
-    paf.add_argument("--step", type=float, default=1.0, help="шаг (%% undervolt / МГц частоты)")
+    paf.add_argument(
+        "--step",
+        type=float,
+        default=None,
+        help="шаг: 15 МГц для frequency (по умолчанию), 1%% для undervolt",
+    )
     paf.add_argument("--max-steps", type=int, default=20, help="максимум шагов")
     paf.add_argument("--settle", type=float, default=1.0, help="пауза после шага, сек")
     paf.add_argument("--temp-ceiling", type=float, default=80.0, help="откат при температуре >")
