@@ -203,7 +203,7 @@ class VfTab(QWidget):
 
         try:
             validate_vf_curve(points)
-        except ValueError as e:
+        except SafetyLimitError as e:
             self._show_error(f"Кривая отклонена валидацией: {e}")
             return
 

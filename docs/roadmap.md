@@ -191,8 +191,13 @@ PCIe/firmware/ECC (5). Пять V2 Get-функций вызываются из 
       сброшено извне (драйвер обновлён?)» + детект смены версии драйвера между
       сессиями. S — чистая композиция готовых модулей, read-only
 - [ ] **Счётчики наработки (`arctune stats`)** — часы под нагрузкой, кВтч,
-      средние Вт за период: дельты `*_energy_counter_j` → `~/.arctune/stats.json`;
-      честные raw-джоули, периоды без данных помечать. S
+       средние Вт за период: дельты `*_energy_counter_j` → `~/.arctune/stats.json`;
+       честные raw-джоули, периоды без данных помечать. S
+- [ ] **State doctor: история OC-профилей** — если пользователь ранее применял
+       профиль, но текущие значения на карте не совпадают — показать список
+       применённых профилей из logbook + предпросмотр, как они были. S
+- [ ] **Сверка logbook с Event Viewer** — если драйвер перезагружался (Event
+       ID 4101/4109), флагнуть, что телеметрический буфер мог потерять данные. S
 - [ ] Экспорт телеметрии в CSV из GUI (в worker есть только `export_vf`)
 - [ ] **`telemetry --json` / `status --json`** — парсинг скриптами/мониторингом
 - [x] **`status` с текущими значениями** — V2 GET выведены всегда: диапазоны
@@ -245,6 +250,12 @@ PCIe/firmware/ECC (5). Пять V2 Get-функций вызываются из 
       (предотращает дрожание буста)
 - [ ] **`ctlEnumFrequencyDomains` / `FrequencyGetState` / `FrequencyGetThrottleTime`**
       — троттлинг-время как метрика «успевает ли карта»
+- [ ] **`ctlEnumerateFrequencyDomains`** — список всех доменов частоты
+      (PXE, PM4, Compute, Media, VFE и т.д.), текущее состояние каждого;
+      полезно для диагностики, почему кривая V/F применяется частично
+
+- [ ] **`ctlFanGetState`** — текущее состояние вентилятора (состояние,
+      макс.скорость) — для проверки, не превышены ли лимиты
 
 #### 3.3 Средняя сложность (нужна обёртка 3–4 функции)
 
@@ -271,6 +282,17 @@ PCIe/firmware/ECC (5). Пять V2 Get-функций вызываются из 
       диагностики старого драйвера)
 - [ ] GUI: вкладка об устройстве (PCIe, firmware, ECC) — функции уже обёрнуты,
       данные отдаёт `arctune info`; осталась UI-часть
+- [ ] **Расширенный инвентарь карты**: модель (`Arc B580`), архитектура
+       (`PXE`), дата кода, ID, PCIe-адрес, ReBAR, ECC, firmware version,
+       драйвер версия (через `ctlGetFirmwareProperties` + `GetSystemInfo`);
+       вывести в CLI (`arctune info --detailed`) и GUI (вкладка «Об устройстве»)
+- [ ] **Парсинг драйвер-версии**: сопоставление с последней стабильной
+       (скачивание с Intel Arc, парсинг `driver_ver.txt`); алерт, если
+       драйвер старше 3 месяцев; `arctune doctor --check-driver`
+- [ ] **Таблица памяти**: total/used (если доступно), bandwidth read/write
+       (из `vramReadBandwidth`/`vramWriteBandwidth`), ECC status,
+       модуль памяти (Samsung K4ZAF325BC-SC20, 12 ГБ, 192-бит)
+
 - [x] GUI: тёмная тема (be7dcfd: theme.py + QSS + Fusion, меню «Вид → Тема»,
       переключение на ходу; график мониторинга сохранён как был)
 - [ ] GUI: трей и горячие клавиши (масштаб UI уже есть)
@@ -295,6 +317,14 @@ PCIe/firmware/ECC (5). Пять V2 Get-функций вызываются из 
       parser/doctor/`_version()`, reset/fans, autofind→engine уже есть; не покрыты
       валидация аргументов set/vf и exit-коды main()
 - [ ] **mypy/pyright — не существует** (для ctypes-проекта со структурами — С)
+- [ ] **pytest fixtures для IGCL-мока** — заглушка `ctypes.CDLL` для `IGCL.dll`,
+       чтобы тесты проходили без драйвера; mocking `ctlEnumerateDevices`,
+       `ctlOverclockGetProperties`, `ctlPowerTelemetryGetV1`
+- [ ] **pytest-mock для health-check** — тест `arctune health` в 4 сценариях:
+       driver OK, ReBAR off, ECC broken, memory invalid; проверка exit-кодов
+- [ ] **pytest-параллель** (`pytest-xdist`) — ускорить тесты на 4 ядра;
+       pytest.ini с `--numproc=auto`
+
 - [ ] **CI нет совсем** (`.github/` отсутствует): workflow ruff + pytest
       `-m "not hardware"` + mypy на py3.10–3.12/windows-latest; job сборки exe
       артефактом и Release по тегу
@@ -308,7 +338,9 @@ PCIe/firmware/ECC (5). Пять V2 Get-функций вызываются из 
 - [ ] Lock-файл зависимостей (uv.lock) — воспроизводимая сборка exe (PySide6!)
 - [ ] app.manifest + icon + version-ресурс в spec (DPI-awareness критично для
       GUI с масштабом 100–200 %); README.dist «что за 2 exe»
-- [ ] CHANGELOG.md + semver-теги git (тегов нет) → отслеживаемые релизы
+- [x] CHANGELOG.md создан (Keep a Changelog v1.0.0), версия зафиксирована
+  в `pyproject.toml` и `arctuner/__init__.py` (0.1.0);
+  semver-правила документированы: MAJOR — API-ломы, MINOR — фичи, PATCH — фиксы
 - [ ] coverage-конфиг (pytest-cov есть в extras, конфига нет); mypy в dev-extras
 - [ ] pre-commit (ruff format/check)
 - [x] README.md: добавлены команды `info`, `--version` и `telemetry --replay`
@@ -330,6 +362,19 @@ autofind→engine, но не валидацию set/vf и не все exit-ко�
       живой карте (EXIT=0)
 - [ ] Примеры записи с safety-гардами (обещаны в examples/README.md)
 - [ ] Инсталлятор / иконка / app.manifest (DPI-aware) для Windows-сборки
+- [ ] **`arctune export --format json`** — вывод всех телеметрий в JSON
+       (freq, power, temp, energy, vram, fan) для парсинга скриптами;
+       файл `~/.arctune/snapshot.json`
+- [ ] **`arctune health`** — проверка здоровья: драйвер отвечает (ping IGCL),
+       ReBAR включён, ECC не сломан (если поддерживается), память валидна;
+       exit=0 всё ок, exit=1 предупреждение, exit=2 критично
+- [ ] **`arctune profile save/load`** — сохранение/загрузка OC-профилей
+       (freqOffset, powerLimit, tempLimit, vfCurve) в JSON;
+       профили: `safe`, `aggressive`, `custom`; комбинировать с logbook
+       — «кто как разогнал до этого»
+- [ ] **`arctune bench --target 2h`** — бенчмарк: запускает нагрузку (3DMark/
+       OCCT), замеряет стабильность, собирает телеметрию, пишет отчёт;
+       опционально: автоматический разгон + тест, выбор лучшего конфига
 
 ## Намеренно вне scope
 
@@ -350,3 +395,44 @@ autofind→engine, но не валидацию set/vf и не все exit-ко�
 - [ ] **Дисплейная подсистема / LED / I2C-AUX** (~80 функций IGCL: sharpness, EDID,
       genlock, ArcSync, RGB и т.п.) — вне профиля «мониторинг + разгон»;
       в `igcl_api.h` они разобраны, но не обёрнуты намеренно
+
+## Итоговая матрица задач
+
+### Приоритет: критично (С)
+
+- `State doctor` — С — 30 мин
+- `CSV-экспорт из GUI` — С — 20 мин
+- `Вкладка «Об устройстве»` — С — 30 мин
+- `Расширенный watchdog` — С — 1–2 часа
+
+### Приоритет: желательно (Ж)
+
+- `Профили OC-настроек` — М — 3–4 часа
+- `Тёмная тема графика` — С — 15 мин
+- `Горячие клавиши` — С — 30 мин
+
+### Приоритет: косметика (К)
+
+- `Бенч-интеграция` — М — 4–6 часов
+- `Prometheus-экспортёр` — М — 3–4 часа
+- `Toast/Discord оповещения` — М — 2–3 часа
+- `CI/CD + pre-commit` — М — 2 часа
+- `Стресс-нагрузчик` — М — 4–6 часов
+- `Планировщик правил` — Л — 1–2 дня
+- `mypy строго` — Л — 1–2 дня
+- `CHANGELOG + semver` — С — 30 мин
+
+### Сводка
+
+| Приоритет | Всего задач | Время (мин) |
+|-----------|-----------|-------------|
+| С         | 4         | ~180        |
+| Ж         | 3         | ~270        |
+| К         | 14        | ~810        |
+| **Итого** | **21**    | **~1260** (~21 чел-час) |
+
+| Сложность | Время | Описание |
+|-----------|------|---------|
+| С         | до 1 ч | малая (одна функция/вкладка) |
+| М         | 2–6 ч  | средняя (модуль/обёртка) |
+| Л         | полдень+ | крупная (новый подсистемный слой) |

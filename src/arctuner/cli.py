@@ -354,7 +354,7 @@ def cmd_vf(args: argparse.Namespace) -> int:
         print(f"Точек: {len(pts)}")
         print(f"  {'мВ':>6}  {'МГц':>6}")
         for p in pts:
-            print(f"  {p.voltage:>6}  {p.frequency:>6}")
+            print(f"  {p.voltage_mv:>6}  {p.freq_mhz:>6}")
 
     def export_csv(path: str, pts: list) -> None:
         p = Path(path)
@@ -363,7 +363,7 @@ def cmd_vf(args: argparse.Namespace) -> int:
             w = csv.writer(f)
             w.writerow(["voltage_mv", "freq_mhz"])
             for pt in pts:
-                w.writerow([pt.voltage, pt.frequency])
+                w.writerow([pt.voltage_mv, pt.freq_mhz])
 
     def load_csv(path: str) -> list[VfPoint]:
         out: list[VfPoint] = []

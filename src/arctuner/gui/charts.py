@@ -5,7 +5,13 @@ from __future__ import annotations
 import math
 from collections import deque
 
-from PySide6.QtCharts import QChart, QChartView, QLineSeries, QValueAxis
+from PySide6.QtCharts import (
+    QChart,
+    QChartView,
+    QLineSeries,
+    QScatterSeries,
+    QValueAxis,
+)
 from PySide6.QtCore import QPointF, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPen
 
@@ -151,13 +157,20 @@ class VfChart(QChartView):
         self._axis_y = QValueAxis()
         self._axis_y.setTitleText("мВ")
 
+        # Отдельный scatter-серия для отображения маркеров точек (не сливается с линией)
+        self._scatter = QScatterSeries()
+        self._scatter.setName("Точки")
+
         chart = QChart()
         chart.setAnimationOptions(QChart.AnimationOption.NoAnimation)
         chart.addSeries(self._series)
+        chart.addSeries(self._scatter)
         chart.addAxis(self._axis_x, Qt.AlignmentFlag.AlignBottom)
         chart.addAxis(self._axis_y, Qt.AlignmentFlag.AlignLeft)
         self._series.attachAxis(self._axis_x)
         self._series.attachAxis(self._axis_y)
+        self._scatter.attachAxis(self._axis_x)
+        self._scatter.attachAxis(self._axis_y)
         chart.legend().setVisible(False)
         self.setChart(chart)
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -170,7 +183,9 @@ class VfChart(QChartView):
         """Строит кривую по парам (мВ, МГц); по X идёт частота — так монотонность видна глазом."""
         ordered = sorted(points, key=lambda p: p[1])
         self._points = [(float(mv), float(freq)) for mv, freq in ordered]
+        # Линия кривой + маркеры точек
         self._series.replace([QPointF(freq, mv) for mv, freq in self._points])
+        self._scatter.replace([QPointF(freq, mv) for mv, freq in self._points])
         if ordered:
             freqs = [p[1] for p in ordered]
             mvs = [p[0] for p in ordered]
@@ -235,6 +250,7 @@ class VfChart(QChartView):
         """Обновляет точку в данных и на графике, извещает подписчиков (live)."""
         self._points[index] = (mv, freq)
         self._series.replace(index, QPointF(freq, mv))
+        self._scatter.replace(index, QPointF(freq, mv))
         self.curve_edited.emit(self._edited_pairs())
 
     # --- мышь ---
