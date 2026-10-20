@@ -1,60 +1,37 @@
 # Python
 __pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-
-# Виртуальное окружение
-.venv/
-venv/
-ENV/
-env/
-
-# Тесты / покрытие
+*.pyc
+*.pyo
 .pytest_cache/
-.coverage
-.coverage.*
-htmlcov/
-.mypy_cache/
-.ruff_cache/
-.hypothesis/
 
-# IDE / редакторы
-.idea/
+# IDE
 .vscode/
+.idea/
 *.swp
 *.swo
-*~
 
-# Локальные файлы, не для репозитория
+# Build
+dist/
+build/
+*.spec
+*.egg-info/
+*.egg
+
+# VCS
+.git/
+
+# Logs
 *.log
-logs/
-*.local
+
+# Environment
 .env
-.env.*
-!.env.example
+.venv
+venv/
 
-# ОС
-Thumbs.db
-Desktop.ini
+# PyInstaller
+*.pyc
+runtime.txt
+
+# OS
 .DS_Store
-
-# Артефакты сборки
-*.dll
-!docs/**/*.dll
+Thumbs.db
