@@ -178,8 +178,11 @@ class _FieldRow(QObject):
                 "undervolt — через вкладку «V/F»."
             )
             hard = f"{hard}\n{extra}" if hard else extra
+        # _FieldRow — QObject, а не QWidget: window() есть только у родителя.
+        parent = self.parent()
+        dialog_parent = parent.window() if isinstance(parent, QWidget) else None
         if confirm_write(
-            self.window(),
+            dialog_parent,
             "Подтверждение записи",
             [f"{label}: {current} → {value:g} {unit}"],
             detail=hard,

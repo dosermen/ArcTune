@@ -217,6 +217,23 @@ def test_monitoring_breaks_line_on_long_pause(
     assert len(tab._chart._samples) == 1
 
 
+def test_overclock_apply_button_emits_value(qapp, monkeypatch) -> None:
+    """Кнопка «Применить…» реально доходит до сигнала (а не падает на window())."""
+    from PySide6.QtTest import QTest
+
+    calls: list[tuple[str, float]] = []
+    monkeypatch.setattr("arctuner.gui.tabs.overclock.confirm_write", lambda *_a, **_k: True)
+    tab = OverclockTab()
+    tab.apply_requested.connect(lambda field, value: calls.append((field, value)))
+    row = tab._rows["powerLimit"]
+    row.set_range(_info(min=50.0, max=120.0), 100.0)
+    row._spin.setValue(110.0)
+
+    QTest.mouseClick(row._btn, Qt.MouseButton.LeftButton)
+
+    assert calls == [("powerLimit", 110.0)]
+
+
 def test_overclock_sets_ranges_and_disables_unsupported(qapp) -> None:
     tab = OverclockTab()
     ranges = {
