@@ -220,6 +220,30 @@ QMenu::item {{ padding: 5px 24px; border-radius: 4px; }}
 QMenu::item:selected {{ background: {_rgba(p["accent"], 0.35)}; }}
 QMenu::separator {{ height: 1px; background: {p["border"]}; margin: 4px 6px; }}
 
+/* --- оверлей (HUD поверх окон): полупрозрачное окно даёт фон, QSS — форму --- */
+QFrame#overlayRoot {{
+    background: {p["surface"]}; border: 1px solid {p["border"]}; border-radius: 10px;
+}}
+QFrame#overlayCell {{ background: transparent; border: none; }}
+QLabel#overlayValue {{
+    font-size: 15px; font-weight: 600; color: {p["text"]}; background: transparent;
+}}
+QLabel#overlayValue[accent="temp"]  {{ color: {ACCENT_BY_KIND["temp"]}; }}
+QLabel#overlayValue[accent="power"] {{ color: {ACCENT_BY_KIND["power"]}; }}
+QLabel#overlayValue[accent="freq"]  {{ color: {ACCENT_BY_KIND["freq"]}; }}
+QLabel#overlayTitle {{
+    font-size: 9px; color: {p["hint"]}; background: transparent;
+}}
+QLabel#overlayLimits {{
+    font-size: 10px; font-weight: 600;
+    background: {_rgba(p["warn"], 0.14)}; color: {p["warn"]};
+    border: 1px solid {_rgba(p["warn"], 0.45)};
+    border-radius: 5px; padding: 2px 6px;
+}}
+QLabel#overlayLimits[active="false"] {{
+    background: transparent; color: {p["hint"]}; border: 1px solid transparent;
+}}
+
 /* --- скроллбары тоньше --- */
 QScrollBar:vertical {{ background: transparent; width: 10px; margin: 2px; }}
 QScrollBar::handle:vertical {{

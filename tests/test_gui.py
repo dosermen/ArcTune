@@ -913,21 +913,28 @@ def test_close_while_worker_busy_does_not_block_ui(qapp, monkeypatch) -> None:
 
 
 def test_worker_shutdown_emits_done_even_if_close_fails(qapp) -> None:
-    """Сбой ctx.close() не глотается, но shutdown_done всё равно уходит (finally)."""
+    """Сбой ctx.close() не глотается (канал error), но shutdown_done уходит всегда.
+
+    Иначе окно, стоящее на «Завершение…», не смогло бы остановить QThread, а
+    причина сбоя пропала бы из UI (пилюля warn).
+    """
     from arctuner.gui.worker import GpuWorker
 
     worker = GpuWorker()
     done: list[bool] = []
+    errors: list[str] = []
     worker.shutdown_done.connect(lambda: done.append(True))
+    worker.error.connect(errors.append)
 
     class _Broken:
         def close(self) -> None:
             raise OSError("ctlClose упал")
 
     worker._ctx = _Broken()
-    with pytest.raises(OSError, match="ctlClose"):
-        worker.shutdown()
-    assert done == [True]
+    worker.shutdown()
+
+    assert len(errors) == 1 and "ctlClose" in errors[0]  # причина дошла до UI
+    assert done == [True]  # поток всё равно можно остановить
 
 
 def test_autotune_sample_reaches_both_charts(qapp, snapshot) -> None:

@@ -17,6 +17,14 @@ from PySide6.QtWidgets import (
     QTabWidget,
 )
 
+from arctuner.gui.overlay import (
+    LAYOUT_LABELS,
+    LAYOUTS,
+    OPACITIES,
+    OverlayWindow,
+    load_overlay_enabled,
+    save_overlay_enabled,
+)
 from arctuner.gui.scale import SCALE_CHOICES, load_scale, restart_argv, save_scale
 from arctuner.gui.tabs import AutoTuneTab, FansTab, LogTab, MonitoringTab, OverclockTab, VfTab
 from arctuner.gui.theme import apply_theme, flame_icon, load_theme, save_theme
@@ -90,6 +98,13 @@ class MainWindow(QMainWindow):
         # engine.run/watchdog), а завершает поток по сигналу shutdown_done.
         self._closing = False
 
+        # Оверлей (HUD поверх окон) — создаётся до меню: «Вид» о нём решает,
+        # телеметрия приходит из _wire_worker. Без родителя — чтобы Tool-окно
+        # не пряталось вместе с главным (HUD нужен при свёрнутом ArcTune).
+        self._overlay = OverlayWindow()
+        if load_overlay_enabled():
+            self._overlay.show()
+
         self._build_view_menu()
 
         # --- worker в отдельном потоке: handle не потокобезопасен ---
@@ -119,6 +134,9 @@ class MainWindow(QMainWindow):
         w.device_ready.connect(self._on_device)
         w.device_info_ready.connect(self._on_device_info)
         w.telemetry_ready.connect(self._monitoring.on_telemetry)
+        # Оверлей читает те же снимки (без второго опроса IGCL): 1 Гц в обычном
+        # режиме и ~2 Гц через autotune_sample, пока идёт поиск.
+        w.telemetry_ready.connect(self._overlay.on_telemetry)
         w.oc_ready.connect(self._overclock.set_ranges)
         w.fans_ready.connect(self._fans.set_fans)
         w.vf_ready.connect(self._vf.set_curve)
@@ -134,6 +152,7 @@ class MainWindow(QMainWindow):
         # на вкладке «Авторазгон» (иначе оба замирали на время engine.run).
         w.autotune_sample.connect(self._monitoring.on_telemetry)
         w.autotune_sample.connect(self._autotune.on_sample)
+        w.autotune_sample.connect(self._overlay.on_telemetry)
         w.autotune_completed.connect(self._autotune.display_result)
         w.autotune_error.connect(self._on_autotune_error)
 
@@ -165,8 +184,13 @@ class MainWindow(QMainWindow):
     # --- меню «Вид»: масштаб интерфейса ---
 
     def _build_view_menu(self) -> None:
-        """Меню масштаба: 100–200%. QT_SCALE_FACTOR читается при старте, поэтому
-        переключение сохраняется и применяется после перезапуска."""
+        """Меню «Вид»: масштаб (100–200%), тема и оверлей.
+
+        QT_SCALE_FACTOR читается при старте, поэтому переключение масштаба
+        сохраняется и применяется после перезапуска; тема и оверлей применяются
+        немедленно. Выбор макета/непрозрачности дублируется в контекстном меню
+        самого оверлея — обе дороги сходятся на одних настройках.
+        """
         menu = self.menuBar().addMenu("Вид")
         group = QActionGroup(self)
         group.setExclusive(True)
@@ -200,6 +224,43 @@ class MainWindow(QMainWindow):
             theme_group.addAction(action)
             theme_menu.addAction(action)
             self._theme_actions[name] = action
+
+        menu.addSeparator()
+        overlay_menu = menu.addMenu("Оверлей")
+        self._overlay_toggle = QAction("Показывать поверх окон", self, checkable=True)
+        self._overlay_toggle.setChecked(load_overlay_enabled())
+        self._overlay_toggle.triggered.connect(self._on_overlay_toggled)
+        overlay_menu.addAction(self._overlay_toggle)
+
+        layout_menu = overlay_menu.addMenu("Макет")
+        layout_group = QActionGroup(self)
+        layout_group.setExclusive(True)
+        self._overlay_layout_actions: dict[str, QAction] = {}
+        for name in LAYOUTS:
+            action = QAction(LAYOUT_LABELS[name], self, checkable=True)
+            action.setChecked(name == self._overlay.layout_name())
+            action.triggered.connect(lambda _=False, n=name: self._overlay.set_layout(n))
+            layout_group.addAction(action)
+            layout_menu.addAction(action)
+            self._overlay_layout_actions[name] = action
+
+        opacity_menu = overlay_menu.addMenu("Непрозрачность")
+        opacity_group = QActionGroup(self)
+        opacity_group.setExclusive(True)
+        self._overlay_opacity_actions: dict[float, QAction] = {}
+        for value in OPACITIES:
+            action = QAction(f"{value * 100:g} %", self, checkable=True)
+            action.setChecked(abs(value - self._overlay.current_opacity()) < 1e-3)
+            action.triggered.connect(lambda _=False, v=value: self._overlay.set_opacity(v))
+            opacity_group.addAction(action)
+            opacity_menu.addAction(action)
+            self._overlay_opacity_actions[value] = action
+
+        # Контекстное меню оверлея меняет те же настройки — галочки синхронизируем
+        # обратно (setChecked не эмитит triggered — зацикливания нет).
+        self._overlay.layout_changed.connect(self._sync_overlay_layout)
+        self._overlay.opacity_changed.connect(self._sync_overlay_opacity)
+        self._overlay.hide_requested.connect(self._on_overlay_hide_requested)
 
     def _build_info_menu(self) -> None:
         """Меню «Информация»: обновление данных об устройстве."""
@@ -238,6 +299,34 @@ class MainWindow(QMainWindow):
         """Синхронизирует темы всех графиков (мониторинг игнорирует — см. выше)."""
         for view in self.findChildren(QChartView):
             view.set_dark(dark)
+
+    # --- оверлей (HUD поверх окон) ---
+
+    def _on_overlay_toggled(self, checked: bool) -> None:
+        """Вкл/выкл оверлея из меню «Вид»; выбор переживает перезапуск."""
+        save_overlay_enabled(checked)
+        if checked:
+            self._overlay.show()
+        else:
+            self._overlay.hide()
+
+    @Slot(str)
+    def _sync_overlay_layout(self, name: str) -> None:
+        """Макет сменён из контекстного меню оверлея — ставим галочку в «Вид»."""
+        for key, action in self._overlay_layout_actions.items():
+            action.setChecked(key == name)
+
+    @Slot(float)
+    def _sync_overlay_opacity(self, value: float) -> None:
+        """Непрозрачность сменена из контекстного меню — то же для меню «Вид»."""
+        for key, action in self._overlay_opacity_actions.items():
+            action.setChecked(abs(key - value) < 1e-3)
+
+    @Slot()
+    def _on_overlay_hide_requested(self) -> None:
+        """Оверлей спрятан своим меню — эквивалент снятия галочки в «Вид»."""
+        self._overlay_toggle.setChecked(False)
+        save_overlay_enabled(False)
 
     def _on_restart(self) -> None:
         """Перезапускает приложение, чтобы применить сохранённый масштаб."""
@@ -374,6 +463,7 @@ class MainWindow(QMainWindow):
         X безопасно: shutdown ставится в очередь один раз.
         """
         self._timer.stop()
+        self._overlay.close()  # HUD — не дожидаемся конца shutdown (окно не должно пережить приложение)
         if not self._thread.isRunning():
             super().closeEvent(event)  # потока нет — закрываемся обычным путём
             return
