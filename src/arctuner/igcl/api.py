@@ -212,6 +212,8 @@ class IgclApi:
 
     def __init__(self, loader: IgclLoader | None = None) -> None:
         self.loader = loader or IgclLoader()
+        # Чужой loader (передан снаружи) нельзя закрывать в shutdown().
+        self._owns_loader = loader is None
         self._api: int | None = None
         self._configure_signatures()
 
@@ -338,7 +340,7 @@ class IgclApi:
         # Проверка: функция может отсутствовать в старых драйверах.
         if not self.loader.has("ctlInit"):
             raise IgclError(
-                T.CtlResult.ERROR_NOT_SUPPORTED,
+                T.CtlResult.ERROR_UNSUPPORTED_FEATURE,
                 "ctlInit отсутствует в загруженной библиотеке — "
                 "обновите драйвер Intel Arc (32.0.101.9xxx+)",
             )
@@ -346,7 +348,7 @@ class IgclApi:
             # Раньше блок инициализации молча пропускался, и следующий вызов
             # падал с невнятным ERROR_NOT_INITIALIZED — честнее сказать сразу.
             raise IgclError(
-                T.CtlResult.ERROR_NOT_SUPPORTED,
+                T.CtlResult.ERROR_UNSUPPORTED_FEATURE,
                 "ctlClose отсутствует в загруженной библиотеке — обновите драйвер Intel Arc",
             )
         args = T.CtlInitArgs()
@@ -360,12 +362,14 @@ class IgclApi:
         self._api = handle.value
 
     def shutdown(self) -> None:
-        """ctlClose — освобождение handle API и выгрузка DLL."""
+        """ctlClose — освобождение handle API и (если загружали сами) DLL."""
         if self._api is not None:
             _check(self.loader.dll.ctlClose(CtlApiHandle(self._api)), "ctlClose")
             self._api = None
-        # Выгружаем DLL, чтобы её файл можно было перезаписать (тесты / hot-reload).
-        self.loader.close()
+        # Закрываем только собственный loader: чужой (передан снаружи) может
+        # использоваться другими потребителями — его ресурсы не наши.
+        if self._owns_loader:
+            self.loader.close()
 
     def _require_api(self) -> int:
         if self._api is None:

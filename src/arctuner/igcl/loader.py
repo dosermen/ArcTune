@@ -9,7 +9,6 @@ IntelControlLib.dll внутри пакета драйвера (iigd_dch_d — �
 
 from __future__ import annotations
 
-import contextlib
 import ctypes
 import glob
 import os
@@ -115,11 +114,13 @@ class IgclLoader:
         return [n for n in names if not self.has(n)]
 
     def close(self) -> None:
-        """Выгружает DLL из процесса. Вызывать ДО удаления файла DLL."""
-        if self._dll is not None:
-            with contextlib.suppress(Exception):
-                self._dll.__del__()
-            self._dll = None
+        """Отпускает ссылку на DLL (процесс выгрузит её при завершении).
+
+        ctypes не позволяет выгрузить библиотеку из процесса — попытка
+        сделать это через ``__del__`` ничего не даёт и скрывала реальный
+        порядок освобождения ресурсов.
+        """
+        self._dll = None
 
     def __enter__(self) -> IgclLoader:
         return self

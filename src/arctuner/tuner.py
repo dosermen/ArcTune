@@ -68,6 +68,18 @@ def _oc(api: IgclApi, handle) -> dict[str, OcControlInfo | bool]:
     return api.read_oc_properties(handle)
 
 
+def _oc_info(api: IgclApi, handle, key: str) -> OcControlInfo:
+    """Диапазон одного пункта; отсутствие/неверный тип — SafetyLimitError.
+
+    Assert здесь недопустим: при python -O он вырезается, и проверка пропала
+    бы молча — именно такая ошибка была найдена аудитом.
+    """
+    entry = _oc(api, handle)[key]
+    if not isinstance(entry, OcControlInfo):
+        raise SafetyLimitError(f"IGCL не вернула описание пункта {key} — запись запрещена")
+    return entry
+
+
 def _ensure_waiver(api: IgclApi, handle) -> None:
     """ctlOverclockWaiverSet — обязателен перед записью напряжения, отрицательного
     смещения частоты и кривой V/F (иначе драйвер вернёт WAIVER_NOT_SET, 0x44000008).
@@ -86,8 +98,7 @@ def set_power_limit(api: IgclApi, handle, percent: float) -> WriteReport:
         IgclError: ошибка вызова драйвера.
     """
     _check_hard_limit("power_limit", percent, 50.0, MAX_POWER_LIMIT_PERCENT)
-    info = _oc(api, handle)["powerLimit"]
-    assert isinstance(info, OcControlInfo)
+    info = _oc_info(api, handle, "powerLimit")
     _check_igcl_range("power_limit", percent, info)
     old = _read_current(api, handle, "powerLimit")  # фактическое «было», не default
     api.set_power_limit(handle, percent)
@@ -104,8 +115,7 @@ def set_gpu_freq_offset(api: IgclApi, handle, mhz: float) -> WriteReport:
         SafetyLimitError: вне диапазона IGCL.
         IgclError: ошибка вызова драйвера.
     """
-    info = _oc(api, handle)["gpuFrequencyOffset"]
-    assert isinstance(info, OcControlInfo)
+    info = _oc_info(api, handle, "gpuFrequencyOffset")
     _check_igcl_range("gpu_freq_offset", mhz, info)
     if mhz < 0:
         _ensure_waiver(api, handle)
@@ -129,8 +139,7 @@ def set_gpu_voltage_offset(api: IgclApi, handle, percent: float) -> WriteReport:
         SafetyLimitError: вне диапазона IGCL.
         IgclError: ошибка вызова драйвера.
     """
-    info = _oc(api, handle)["gpuVoltageOffset"]
-    assert isinstance(info, OcControlInfo)
+    info = _oc_info(api, handle, "gpuVoltageOffset")
     _check_igcl_range("gpu_voltage_offset", percent, info)
     _ensure_waiver(api, handle)
     old = _read_current(api, handle, "gpuVoltageOffset")
@@ -145,8 +154,7 @@ def set_temperature_limit(api: IgclApi, handle, celsius: float) -> WriteReport:
         SafetyLimitError: вне диапазона IGCL.
         IgclError: ошибка вызова драйвера.
     """
-    info = _oc(api, handle)["temperatureLimit"]
-    assert isinstance(info, OcControlInfo)
+    info = _oc_info(api, handle, "temperatureLimit")
     _check_igcl_range("temperature_limit", celsius, info)
     old = _read_current(api, handle, "temperatureLimit")
     api.set_temperature_limit(handle, celsius)
@@ -168,8 +176,7 @@ def set_vram_speed(
     """
     hi = 22.0 if allow_beyond_nominal else MAX_VRAM_SPEED_GBPS
     _check_hard_limit("vram_speed", gbps, 19.0, hi)
-    info = _oc(api, handle)["vramMemSpeedLimit"]
-    assert isinstance(info, OcControlInfo)
+    info = _oc_info(api, handle, "vramMemSpeedLimit")
     _check_igcl_range("vram_speed", gbps, info)
     old = _read_current(api, handle, "vramMemSpeedLimit")
     api.set_vram_mem_speed(handle, gbps)
@@ -234,7 +241,7 @@ def _api_call(api: IgclApi, func_name: str, handle, p_out) -> None:
     """
     if not api.loader.has(func_name):
         raise IgclError(
-            T.CtlResult.ERROR_NOT_SUPPORTED,
+            T.CtlResult.ERROR_UNSUPPORTED_FEATURE,
             f"{func_name} не поддерживается в текущей версии IGCL",
         )
     fn = getattr(api.loader.dll, func_name)

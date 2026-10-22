@@ -288,8 +288,15 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _on_info_refresh(self) -> None:
-        """Перенаправляет вызов обновления в воркер-поток через queued-слот."""
-        self._worker.poll_device_info()
+        """Перенаправляет вызов обновления в воркер-поток через queued-слот.
+
+        Прямой вызов метода воркера из UI-потока выполнял бы чтение IGCL
+        прямо в GUI-потоке (заморозка интерфейса) — invokeMethod гарантирует
+        исполнение в потоке воркера.
+        """
+        QMetaObject.invokeMethod(
+            self._worker, "poll_device_info", Qt.ConnectionType.QueuedConnection
+        )
 
     def _on_scale_selected(self, value: float) -> None:
         save_scale(value)
@@ -361,7 +368,7 @@ class MainWindow(QMainWindow):
         self._device_label.setText(info.name)
         self.setWindowTitle(f"ArcTune — {info.name}")
 
-    @Slot()
+    @Slot(object, object)
     def _on_device_info(
         self,
         info: DeviceInfo,

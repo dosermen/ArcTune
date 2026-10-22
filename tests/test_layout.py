@@ -9,7 +9,10 @@
 from __future__ import annotations
 
 import ctypes
+import re
+from pathlib import Path
 
+from arctuner.igcl import types as T
 from arctuner.igcl.types import (
     CtlApplicationId,
     CtlDataValue,
@@ -18,6 +21,26 @@ from arctuner.igcl.types import (
     CtlOcTelemetryItem,
     ctl_make_version,
 )
+
+_SRC_ROOT = Path(__file__).resolve().parents[1] / "src"
+# Обращения к членам CtlResult: T.CtlResult.X / CtlResult.X в исходниках.
+_CTL_RESULT_REF = re.compile(r"\b(?:T\.)?CtlResult\.([A-Z][A-Z0-9_]*)\b")
+
+
+def test_ctl_result_references_exist() -> None:
+    """Все обращения к CtlResult.* в src/ ссылаются на существующие члены.
+
+    Регрессия: опечатка в имени члена (ERROR_NOT_SUPPORTED вместо
+    ERROR_UNSUPPORTED_FEATURE) ловится AttributeError только в рантайме —
+    этот тест находит её на CI без железа.
+    """
+    known = set(T.CtlResult.__members__)
+    missing: list[str] = []
+    for py in _SRC_ROOT.rglob("*.py"):
+        for match in _CTL_RESULT_REF.finditer(py.read_text(encoding="utf-8")):
+            if match.group(1) not in known:
+                missing.append(f"{py.relative_to(_SRC_ROOT)}: {match.group(0)}")
+    assert not missing, "несуществующие члены CtlResult:\n" + "\n".join(missing)
 
 
 def test_ctl_make_version() -> None:
