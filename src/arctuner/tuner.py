@@ -15,12 +15,21 @@ import ctypes
 import math
 from dataclasses import dataclass
 
+from arctuner.device_profile import (
+    B580_MAX_POWER_PERCENT,
+    B580_PROFILE,
+    B580_VRAM_NOMINAL_GBPS,
+    DeviceProfile,
+    profile_for_device_id,
+)
 from arctuner.igcl import types as T
 from arctuner.igcl.api import IgclApi, IgclError, OcControlInfo
 
-# Жёсткие потолки (см. docs/overclocking.md, docs/safety.md).
-MAX_POWER_LIMIT_PERCENT = 120.0  # аппаратный лимит B580 ≈226 Вт (шунт)
-MAX_VRAM_SPEED_GBPS = 20.0  # номинал чипа Samsung SC20; выше — только явным решением
+# Жёсткие потолки B580 (см. docs/overclocking.md, docs/safety.md) — переэкспорт
+# проверенного профиля. Для не-B580 карт уровнь-1 потолков нет: запись
+# ограничивается честным min/max/step из IGCL (device_profile.GENERIC_PROFILE).
+MAX_POWER_LIMIT_PERCENT = B580_MAX_POWER_PERCENT  # аппаратный лимит B580 ≈226 Вт
+MAX_VRAM_SPEED_GBPS = B580_VRAM_NOMINAL_GBPS  # номинал чипа Samsung SC20
 
 
 class SafetyLimitError(ValueError):
@@ -90,14 +99,40 @@ def _ensure_waiver(api: IgclApi, handle) -> None:
     api.set_overclock_waiver(handle)
 
 
+def _profile_for_handle(api: IgclApi, handle) -> DeviceProfile:
+    """Резолвит уровень-1 рамки (профиль) по device_id устройства.
+
+    Fallback на строгий B580-профиль, если device_id прочитать не удалось
+    (нет метода / ошибка чтения / у фейка в тестах нет свойства). Это
+    «security over convenience»: при неidentифицированном устройстве
+    применяем самые узкие проверенные рамки, а не ослабляем проверки.
+
+    Известная не-B580 карта получает GENERIC_PROFILE — уровень-1 рамок нет,
+    запись ограничивается честным min/max/step из IGCL (уровень-2).
+    """
+    try:
+        info = api.get_device_properties(handle)
+        return profile_for_device_id(info.device_id)
+    except Exception:
+        return B580_PROFILE
+
+
 def set_power_limit(api: IgclApi, handle, percent: float) -> WriteReport:
-    """Ставит лимит питания в %. Потолок B580 — 120% (аппаратный).
+    """Ставит лимит питания в %.
+
+    Для B580 действует жёсткий потолок 120% (аппаратный, шунт ≈226 Вт).
+    Для прочих карт уровень-1 потолка нет — верх определяет сам драйвер
+    (min/max из IGCL); обойти аппаратный предел невозможно в любом случае.
 
     Raises:
-        SafetyLimitError: вне [50, 120] или вне диапазона IGCL.
+        SafetyLimitError: вне рамок профиля B580 (50..120) или вне IGCL-диапазона.
         IgclError: ошибка вызова драйвера.
     """
-    _check_hard_limit("power_limit", percent, 50.0, MAX_POWER_LIMIT_PERCENT)
+    profile = _profile_for_handle(api, handle)
+    if profile.min_power_percent is not None and profile.max_power_percent is not None:
+        _check_hard_limit(
+            "power_limit", percent, profile.min_power_percent, profile.max_power_percent
+        )
     info = _oc_info(api, handle, "powerLimit")
     _check_igcl_range("power_limit", percent, info)
     old = _read_current(api, handle, "powerLimit")  # фактическое «было», не default
@@ -166,21 +201,35 @@ def set_vram_speed(
 ) -> WriteReport:
     """Ставит скорость памяти, Гбит/с.
 
-    Безопасный потолок — 20 (номинал чипа SC20). Выше 20 драйвер формально
-    разрешает до 22, но это разгон сверх номинала чипа — поэтому требует
+    Для B580 безопасный потолок — номинал чипа SC20 (20). Выше 20 драйвер
+    формально разрешает до 22, но это разгон сверх номинала чипа — требует
     явного флага allow_beyond_nominal=True (согласованное решение пользователя).
 
+    Для прочих карт уровень-1 рамок нет (профиль GENERIC) — границу задаёт
+    сам драйвер (min/max из IGCL); концепция «сверх номинала» отсутствует,
+    флаг allow_beyond_nominal игнорируется.
+
     Raises:
-        SafetyLimitError: вне [19, 20] (или [19, 22] с флагом), либо вне IGCL.
+        SafetyLimitError: вне рамок профиля B580 (19..20, либо 19..22 с флагом)
+            или вне IGCL-диапазона.
         IgclError: ошибка вызова драйвера.
     """
-    hi = 22.0 if allow_beyond_nominal else MAX_VRAM_SPEED_GBPS
-    _check_hard_limit("vram_speed", gbps, 19.0, hi)
+    profile = _profile_for_handle(api, handle)
+    if profile.vram_min_gbps is not None:
+        nominal = profile.vram_nominal_gbps
+        hard_max = profile.vram_max_gbps
+        hi = hard_max if allow_beyond_nominal else (nominal if nominal is not None else hard_max)
+        _check_hard_limit("vram_speed", gbps, profile.vram_min_gbps, hi)
     info = _oc_info(api, handle, "vramMemSpeedLimit")
     _check_igcl_range("vram_speed", gbps, info)
     old = _read_current(api, handle, "vramMemSpeedLimit")
     api.set_vram_mem_speed(handle, gbps)
-    note = "сверх номинала SC20 (20) — явное согласие" if gbps > MAX_VRAM_SPEED_GBPS else ""
+    nominal = profile.vram_nominal_gbps
+    note = (
+        f"сверх номинала ({nominal:g}) — явное согласие"
+        if nominal is not None and gbps > nominal
+        else ""
+    )
     return WriteReport("vramMemSpeedLimit", old, gbps, note)
 
 

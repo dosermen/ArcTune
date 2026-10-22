@@ -50,6 +50,7 @@ def cmd_telemetry(args: argparse.Namespace) -> int:
     import time
     from pathlib import Path
 
+    from arctuner.device_profile import profile_status_note
     from arctuner.igcl.api import IgclApi
     from arctuner.replay import IncidentReplay
     from arctuner.telemetry import PowerMeter, find_arc_adapter
@@ -130,8 +131,12 @@ def cmd_telemetry(args: argparse.Namespace) -> int:
             handle, info = found
             print(
                 f"Устройство: {info.name} (0x{info.device_id:04X}, {info.frequency_mhz} МГц, "
-                f"{info.num_xe_cores} Xe-cores)\n"
+                f"{info.num_xe_cores} Xe-cores)"
             )
+            note = profile_status_note(info.device_id)
+            if note:
+                print(f"  ⚠️  {note}")
+            print()
 
             if watch_sec:
                 print(f"Наблюдение каждые {watch_sec} сек (Ctrl+C для выхода)...")
@@ -205,6 +210,7 @@ def cmd_telemetry(args: argparse.Namespace) -> int:
 
 def cmd_status(_: argparse.Namespace) -> int:
     """Диапазоны пунктов разгона (read-only)."""
+    from arctuner.device_profile import profile_status_note
     from arctuner.igcl.api import IgclApi, IgclError
     from arctuner.telemetry import find_arc_adapter
 
@@ -214,10 +220,13 @@ def cmd_status(_: argparse.Namespace) -> int:
             if not found:
                 print("[FAIL] Дискретная Intel Arc не найдена.")
                 return 1
-            handle, _ = found
+            handle, dev = found
             oc = api.read_oc_properties(handle)
             print("=== Пункты разгона (min / max / step / default) ===")
             print(f"  Разгон поддерживается: {oc['supported']}")
+            note = profile_status_note(dev.device_id)
+            if note:
+                print(f"  ⚠️  {dev.name}: {note}")
             for key, val in oc.items():
                 if key == "supported" or not getattr(val, "supported", False):
                     continue
@@ -580,6 +589,7 @@ def cmd_autofind(args: argparse.Namespace) -> int:
 
 def cmd_info(_: argparse.Namespace) -> int:
     """PCIe/ReBAR, ECC, прошивка, режимы вентиляторов (read-only)."""
+    from arctuner.device_profile import profile_status_note
     from arctuner.igcl.api import IgclApi, IgclError
     from arctuner.telemetry import find_arc_adapter
 
@@ -591,6 +601,9 @@ def cmd_info(_: argparse.Namespace) -> int:
                 return 1
             handle, dev = found
             print(f"Устройство: {dev.name} (0x{dev.device_id:04X})")
+            note = profile_status_note(dev.device_id)
+            if note:
+                print(f"  ⚠️  {note}")
 
             # PCIe — первопричина «разгон не помогает» (x8 вместо x16, ReBAR off).
             try:

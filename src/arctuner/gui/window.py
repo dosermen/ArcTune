@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QTabWidget,
 )
 
+from arctuner.device_profile import profile_status_note
 from arctuner.gui.overlay import (
     LAYOUT_LABELS,
     LAYOUTS,
@@ -365,7 +366,10 @@ class MainWindow(QMainWindow):
 
     def _on_device(self, info: DeviceInfo) -> None:
         self._device_seen = True
-        self._device_label.setText(info.name)
+        note = profile_status_note(info.device_id)
+        label = f"{info.name} ⚠️" if note else info.name
+        self._device_label.setText(label)
+        self._device_label.setToolTip(note)
         self.setWindowTitle(f"ArcTune — {info.name}")
 
     @Slot(object, object)
@@ -386,6 +390,9 @@ class MainWindow(QMainWindow):
             f"Freq: {info.frequency_mhz} МГц | "
             f"Xe-cores: {info.num_xe_cores}"
         )
+        note = profile_status_note(info.device_id)
+        if note:
+            status_text += f" | ⚠️ {note}"
         self._status.showMessage(status_text, 5000)
 
     def _set_pill(self, kind: str, text: str) -> None:
