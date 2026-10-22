@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
@@ -15,7 +16,8 @@ from PySide6.QtWidgets import QApplication
 from arctuner.gui.theme import apply_theme, load_theme
 from arctuner.gui.window import MainWindow
 
-OUT = r"C:\Users\000\AppData\Local\Temp\opencode"
+# Снимки — в системный temp (персональные пути в публичном репозитории не нужны).
+OUT = tempfile.gettempdir()
 SHOTS: list[tuple[str, int]] = [
     ("tune_monitoring.png", 0),
     ("tune_overclock.png", 1),

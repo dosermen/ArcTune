@@ -1,5 +1,7 @@
 # ArcTune
 
+Русский | [English](README.en.md)
+
 Python-обёртка над **IGCL (Intel Graphics Control Library)** для мониторинга и разгона
 дискретных видеокарт **Intel Arc** (проверено на **Arc B580 / Battlemage**).
 
@@ -36,11 +38,27 @@ Intel Graphics Software, но из кода: лимит питания, напр
   значению, watchdog во время поиска (TDR, заморозка телеметрии, аварийная температура)
 - ✅ **Журнал + откат**, экспорт телеметрии в CSV. После `reset --oc` старые цели
   отката недействительны: история остаётся, но прежний разгон не возвращается
-- ✅ **GUI (PySide6)** — 6 вкладок (мониторинг, разгон, вентиляторы, V/F, журнал,
-  авторазгон) с графиками и подтверждениями записи; отдельный `arctune-gui.exe`
+- ✅ **GUI (PySide6)** — 7 вкладок (мониторинг, разгон, вентиляторы, V/F, журнал,
+  авторазгон, оверлей) с графиками и подтверждениями записи; отдельный `arctune-gui.exe`
+- ✅ **Оверлей поверх окон** — HUD с телеметрией поверх игр/бенчмарков: 3 макета,
+  свой набор метрик, непрозрачность; настройки — во вкладке «Оверлей», меню «Вид»
+  и правом клике по HUD
 
-Дальше — внутренний стресс-нагрузчик и софт-кривая вентиляторов (см.
+Дальше — внутренний стресс-нагрузчик и софт-кривая вентилятора (см.
 [ROADMAP](docs/roadmap.md)).
+
+---
+
+## Превью
+
+<p align="center">
+  <img src="assets/preview-monitoring.png" width="420" alt="Вкладка «Мониторинг»">
+  <img src="assets/preview-overclock.png" width="420" alt="Вкладка «Разгон»">
+</p>
+<p align="center">
+  <img src="assets/preview-overlay-settings.png" width="420" alt="Вкладка «Оверлей»">
+  <img src="assets/preview-overlay-hud.png" width="420" alt="HUD оверлея">
+</p>
 
 ---
 
@@ -70,7 +88,8 @@ Intel Graphics Software управляет разгоном Arc через на�
 
 ```powershell
 # 1. Клонируйте и войдите в папку
-cd F:\AI\INTEL
+git clone https://github.com/dosermen/arctune.git
+cd arctune
 
 # 2. Создайте виртуальное окружение
 python -m venv .venv

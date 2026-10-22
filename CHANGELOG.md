@@ -23,17 +23,17 @@
 ### Добавлено
 
 - **Ядро (читай/пиши)**
-  - [ctlInit](ctlClose](enumerateDevices/ctlGetDeviceProperties — инициализация сессии, перечисление GPU, свойства
-  - [ctlOverclockGetProperties](ctlOverclockWaiverSet) — свойства OC, waiver
-  - [ctlOverclockResetToDefault) — сброс к дефолту
-  - [ctlOverclockReadVFCurve]([ctlOverclockWriteCustomVFCurve) — кривая V/F (чтение и запись)
-  - [ctlOverclockGpuFrequencyOffsetSetV2](ctlOverclockGpuMaxVoltageOffsetSetV2) — частота и напряжение ядра
-  - [ctlOverclockPowerLimitSetV2](ctlOverclockTemperatureLimitSetV2) — лимит питания и температура
-  - [ctlOverclockVramMemSpeedLimitSetV2] — лимит памяти (Гбит/с)
+  - `ctlInit` / `ctlClose` / `ctlEnumerateDevices` / `ctlGetDeviceProperties` — инициализация сессии, перечисление GPU, свойства
+  - `ctlOverclockGetProperties`, `ctlOverclockWaiverSet` — свойства OC, waiver
+  - `ctlOverclockResetToDefault` — сброс к дефолту
+  - `ctlOverclockReadVFCurve`, `ctlOverclockWriteCustomVFCurve` — кривая V/F (чтение и запись)
+  - `ctlOverclockGpuFrequencyOffsetSetV2`, `ctlOverclockGpuMaxVoltageOffsetSetV2` — частота и напряжение ядра
+  - `ctlOverclockPowerLimitSetV2`, `ctlOverclockTemperatureLimitSetV2` — лимит питания и температура
+  - `ctlOverclockVramMemSpeedLimitSetV2` — лимит памяти (Гбит/с)
   - V2 Get-функции (dynamic load через `loader`) — чтение текущих значений OC
 
 - **Телеметрия**
-  - [ctlPowerTelemetryGet](arctuner.igcl.api.IgclApi) — снимок датчиков: температура, ватты, активность
+  - `ctlPowerTelemetryGet` — снимок датчиков: температура, ватты, активность
   - Ватты из энергосчётчиков (`gpuEnergyCounter`/`totalCardEnergyCounter`), ΔE/Δt
   - Ватты памяти (`vramEnergyCounter`)
   - VR-фазы (gpuVrTemp, vramVrTemp, saVrTemp)
@@ -41,15 +41,15 @@
   - Надбавка напряжения (gpuOverVoltagePercent)
 
 - **Вентиляторы**
-  - [ctlEnumFans](ctlFanGetProperties) — свойства вентиляторов (RPM, maxRPM, canControl)
-  - [ctlFanGetState]([ctlFanSetFixedSpeedMode] — чтение/запись RPM
-  - [ctlFanSetDefaultMode]([ctlFanGetConfig] — режим авто/фикс
+  - `ctlEnumFans`, `ctlFanGetProperties` — свойства вентиляторов (RPM, maxRPM, canControl)
+  - `ctlFanGetState`, `ctlFanSetFixedSpeedMode` — чтение/запись RPM
+  - `ctlFanSetDefaultMode`, `ctlFanGetConfig` — режим авто/фикс
   - На B580: только FIXED (supportedModes=0x2), таблица temp/speed недоступна
 
 - **PCIe / Прошивка / ECC**
-  - [ctlPciGetProperties](ctlPciGetState) — PCIe Gen, ReBAR
-  - [ctlGetFirmwareProperties] — версия firmware (UNKNOWN на B580)
-  - [ctlEccGetProperties](ctlEccGetState) — ECC (UNSUPPORTED_FEATURE на B580)
+  - `ctlPciGetProperties`, `ctlPciGetState` — PCIe Gen, ReBAR
+  - `ctlGetFirmwareProperties` — версия firmware (UNKNOWN на B580)
+  - `ctlEccGetProperties`, `ctlEccGetState` — ECC (UNSUPPORTED_FEATURE на B580)
 
 ### CLI
 
@@ -77,6 +77,7 @@
 | V/F | Кривая напряжение/частота (drag-редактор на графике, CSV импорт/экспорт, запись) |
 | Журнал | История изменений (что было → что стало), откат к исходным значениям |
 | Авторазгон | Конфигуратор поиска (шаг, min_step, max_steps, temp ceiling, external_cmd), живой график, JSON-профили |
+| Оверлей | HUD поверх окон: 3 макета, выбор метрик, непрозрачность, положение (read-only) |
 
 ### Безопасность
 

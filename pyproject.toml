@@ -45,11 +45,15 @@ arctune = "arctuner.cli:main"
 arctune-gui = "arctuner.gui.main:run"
 
 [project.urls]
-Repository = "https://github.com/your-user/arctune"
-Documentation = "https://github.com/your-user/arctune/tree/main/docs"
+Repository = "https://github.com/dosermen/arctune"
+Documentation = "https://github.com/dosermen/arctune/tree/main/docs"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+# PEP 561: потребителям пакета доступны аннотации типов (модуль arctuner — py.typed).
+[tool.setuptools.package-data]
+arctuner = ["py.typed"]
 
 [tool.ruff]
 line-length = 100

@@ -3,6 +3,8 @@ __pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
 # IDE
 .vscode/
@@ -13,7 +15,10 @@ __pycache__/
 # Build
 dist/
 build/
-*.spec
+# spec-файлы сборки намеренно отслеживаются в packaging/ — игнорируем только
+# случайно созданные в корне (PyInstaller кладёт .spec рядом с .spec-файлом
+# при запуске без указания каталога).
+/*.spec
 *.egg-info/
 *.egg
 
@@ -23,13 +28,22 @@ build/
 # Logs
 *.log
 
+# Артефакты локальных запусков (пустые логи из консоли/редиректа)
+err.txt
+error.txt
+out.txt
+gui-stdout.txt
+gui-stderr.txt
+
+# Собранные exe в корне (штатные сборки лежат в ignored-каталоге dist/)
+/*.exe
+
 # Environment
 .env
 .venv
 venv/
 
 # PyInstaller
-*.pyc
 runtime.txt
 
 # OS

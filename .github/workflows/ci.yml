@@ -13,7 +13,7 @@ jobs:
       fail-fast: false
       max-parallel: 1
       matrix:
-        python-version: ["3.10"]
+        python-version: ["3.10", "3.11", "3.12"]
 
     steps:
       - name: Клони репозиторий
@@ -26,24 +26,20 @@ jobs:
           cache: pip
 
       - name: Установить зависимости
+        # Кавычки обязательны: без них PowerShell трактует `>` как редирект
+        # и pip установил бы PySide6 без ограничения версии.
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev]"
-          pip install PySide6>=6.5
+          pip install -e ".[dev,gui]"
 
-      - name: Линтинг — ruff format
-        run: ruff format .
+      - name: Линтинг — ruff format (без правок: CI только проверяет)
+        run: ruff format --check .
 
-      - name: Линтинг — ruff check
-        run: ruff check --fix .
+      - name: Линтинг — ruff check (без --fix: CI только проверяет)
+        run: ruff check .
 
       - name: Тесты — pytest (без железа)
-        run: python -m pytest -q --ignore=tests/test_hardware.py
-
-      - name: Тесты — pytest (железо)
-        if: github.ref == 'refs/heads/main'
-        run: python -m pytest -q tests/test_hardware.py
-        continue-on-error: true
+        run: python -m pytest -m "not hardware" -q
 
       - name: Сборка GUI — pyinstaller
         run: |
@@ -51,6 +47,10 @@ jobs:
           pyinstaller --clean --noconfirm packaging/arctune-gui.spec
 
       - name: Smoke-чек собранных файлов
+        # Test-Path печатает True/False, но не выставляет $LASTEXITCODE —
+        # поэтому проверяем результат выражением, иначе потеря exe CI не заметит.
         run: |
-          Test-Path "dist/arctune-gui.exe"
-          if ($LASTEXITCODE -eq 1) { exit 1 }
+          if (-not (Test-Path "dist/arctune-gui.exe")) {
+            Write-Host "dist/arctune-gui.exe не собран"
+            exit 1
+          }
