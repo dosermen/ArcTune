@@ -9,8 +9,24 @@ from __future__ import annotations
 
 import pytest
 
-from arctuner.igcl.api import TelemetrySnapshot
+from arctuner.igcl.api import ExtendedDeviceInfo, TelemetrySnapshot
 from arctuner.telemetry import PowerMeter
+
+
+def test_driver_version_str_decodes_all_four_parts() -> None:
+    """Кодировка IGCL: (major<<48)|(minor<<32)|(build<<16)|revision.
+
+    Регрессия: прежняя формула теряла major/minor и показывала «101.9150»
+    вместо реальной версии драйвера 32.0.101.9150 (сырое 0x00200000006523BE,
+    сверено с Win32_PnPSignedDriver на живой системе).
+    """
+    ext = ExtendedDeviceInfo(
+        info=None,  # type: ignore[arg-type]  # для свойства версии info не нужен
+        driver_version=0x00200000006523BE,
+        firmware_version_major=1,
+        firmware_version_minor=0,
+    )
+    assert ext.driver_version_str == "32.0.101.9150"
 
 
 def _snap(

@@ -88,7 +88,13 @@ class ExtendedDeviceInfo:
 
     @property
     def driver_version_str(self) -> str:
-        return f"{(self.driver_version >> 16) & 0xFFFF}.{self.driver_version & 0xFFFF}"
+        """Версия драйвера как «major.minor.build.revision» (как в PnP Windows).
+
+        Кодировка IGCL: (major << 48) | (minor << 32) | (build << 16) | revision.
+        Проверено на живом драйвере 32.0.101.9150 (raw 0x00200000006523BE).
+        """
+        v = self.driver_version
+        return f"{(v >> 48) & 0xFFFF}.{(v >> 32) & 0xFFFF}.{(v >> 16) & 0xFFFF}.{v & 0xFFFF}"
 
     @property
     def firmware_version_str(self) -> str:

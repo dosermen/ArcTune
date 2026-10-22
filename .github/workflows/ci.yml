@@ -41,16 +41,27 @@ jobs:
       - name: Тесты — pytest (без железа)
         run: python -m pytest -m "not hardware" -q
 
-      - name: Сборка GUI — pyinstaller
+      - name: Сборка CLI и GUI — pyinstaller
         run: |
           pip install -e ".[build]"
+          pyinstaller --clean --noconfirm packaging/arctune.spec
           pyinstaller --clean --noconfirm packaging/arctune-gui.spec
 
       - name: Smoke-чек собранных файлов
         # Test-Path печатает True/False, но не выставляет $LASTEXITCODE —
         # поэтому проверяем результат выражением, иначе потеря exe CI не заметит.
+        # CLI-exe дополнительно реально запускаем: --version не трогает карту.
         run: |
+          if (-not (Test-Path "dist/arctune.exe")) {
+            Write-Host "dist/arctune.exe не собран"
+            exit 1
+          }
           if (-not (Test-Path "dist/arctune-gui.exe")) {
             Write-Host "dist/arctune-gui.exe не собран"
+            exit 1
+          }
+          ./dist/arctune.exe --version
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "dist/arctune.exe --version завершился с кодом $LASTEXITCODE"
             exit 1
           }

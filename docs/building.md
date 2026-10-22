@@ -44,7 +44,7 @@ pyinstaller --clean --noconfirm packaging/arctune-gui.spec  # -> dist/arctune-gu
 .\dist\arctune.exe doctor      # находит IntelControlLib.dll; код 1 и [FAIL], если обязательных функций нет
 .\dist\arctune.exe telemetry   # read-only, живые датчики
 .\dist\arctune.exe vf --csv vf.csv
-.\dist\arctune-gui.exe         # окно с 6 вкладками, опрос раз в секунду
+.\dist\arctune-gui.exe         # окно с 7 вкладками, опрос раз в секунду
 ```
 
 Всё read-only проверяется сразу. Команды записи (`set`, `vf --apply`, `autofind`,
