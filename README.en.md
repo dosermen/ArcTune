@@ -48,6 +48,23 @@ Next up: an internal stress loader and a software fan curve (see
 
 ---
 
+## Supported devices
+
+An honest account of what is verified and what is not (a project invariant is
+never to present the unverified as confirmed):
+
+| Device | Status |
+|---|---|
+| **Intel Arc B580** (0xE20B) | ✅ Verified on live hardware: caps are fixed (power 50…120%, memory 19…22 Gbps at a 20 Gbps nominal, V/F curve 600…1250 mV / 300…3300 MHz) |
+| **Other discrete Arc** (A770/A750, etc.) | ⚠️ Writes work through the driver's honest min/max/step (IGCL), but are **not verified** by this project — marked "not verified" in CLI/GUI. Use at your own risk; the driver will not let you exceed the hardware limit |
+| **Integrated graphics (iGPU)** | ❌ Not supported: IGCL does not expose it at all — both shipped DLLs (iigd_dch and iigd_dch_d) see only the discrete card |
+
+Verified on a B580 with driver 32.0.101.9150. For non-B580 cards there is no
+project level-1 cap — the upper bound is set by the driver; rollback and
+journaling behave identically for all cards.
+
+---
+
 ## Preview
 
 <p align="center">
