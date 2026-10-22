@@ -49,3 +49,8 @@ runtime.txt
 # OS
 .DS_Store
 Thumbs.db
+
+# coverage
+.coverage
+htmlcov/
+coverage.xml
