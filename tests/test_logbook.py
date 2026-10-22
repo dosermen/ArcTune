@@ -164,6 +164,24 @@ class TestResetMarkers:
         restored = [e.restored for e in log.read_all() if e.field == "powerLimit"]
         assert restored == [False, True]
 
+    def test_restored_field_is_not_a_rollback_target(self, tmp_path) -> None:
+        """После log --rollback поле не цель: повторный откат откатывал бы откат."""
+        log = Logbook(tmp_path / "log.jsonl")
+        log.record("powerLimit", 100.0, 120.0)
+        log.record("powerLimit", 120.0, 110.0)
+        assert log.rollback_targets() == {"powerLimit": 100.0}
+        log.mark_restored("powerLimit")  # как cmd_log после успешного отката
+        assert log.rollback_targets() == {}
+
+    def test_new_change_after_restore_is_target_again(self, tmp_path) -> None:
+        """Новое изменение после восстановления снова создаёт цель отката."""
+        log = Logbook(tmp_path / "log.jsonl")
+        log.record("powerLimit", 100.0, 120.0)
+        log.mark_restored("powerLimit")
+        assert log.rollback_targets() == {}
+        log.record("powerLimit", 100.0, 115.0)
+        assert log.rollback_targets() == {"powerLimit": 100.0}
+
 
 def test_journal_write_error_is_oserror() -> None:
     """JournalWriteError наследуется от OSError: CLI/GUI уже умеют её показывать."""

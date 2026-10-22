@@ -307,11 +307,20 @@ def cmd_set(args: argparse.Namespace) -> int:
             before = tuner.current_values(api, handle)
             print(f"\nБыло: {before}")
             log = Logbook(default_logbook_path())
+            applied: list[tuple[str, float | None]] = []  # (field, old) для отката
             for _, value, fn in changes:
-                if fn is tuner.set_vram_speed:
-                    report = fn(api, handle, value, allow_beyond_nominal=args.force)
-                else:
-                    report = fn(api, handle, value)
+                try:
+                    if fn is tuner.set_vram_speed:
+                        report = fn(api, handle, value, allow_beyond_nominal=args.force)
+                    else:
+                        report = fn(api, handle, value)
+                except (SafetyLimitError, IgclError) as exc:
+                    # Частичная запись: возвращаем уже применённые изменения,
+                    # иначе карта остаётся в смешанном неподтверждённом состоянии.
+                    _revert_partial(api, handle, log, device_name, applied)
+                    print(f"[BLOCK] {exc}")
+                    return 1
+                applied.append((report.field, report.old))  # old=None → откат невозможен
                 old_txt = "неизвестно" if report.old is None else f"{report.old:g}"
                 line = f"  {report.field}: {old_txt} -> {report.new:g}"
                 if report.note:
@@ -336,6 +345,45 @@ def cmd_set(args: argparse.Namespace) -> int:
         print(f"[UNEXPECTED] {exc}  ({type(exc).__module__}.{type(exc).__name__})")
         return 1
     return 0
+
+
+def _revert_partial(
+    api, handle, log, device_name: str, applied: list[tuple[str, float | None]]
+) -> None:
+    """Откатывает уже применённые изменения cmd_set при сбое на одном из пунктов.
+
+    Без этого карта оставалась в смешанном состоянии: часть параметров новая,
+    часть старая, а команда завершилась ошибкой — пользователь не знал, что
+    реально записано. Откат идёт в обратном порядке; каждый возврат журналируется.
+    Поля с неизвестным «было» (old=None) откатить нечем — честно сообщаем.
+    """
+    from arctuner.igcl.api import IgclError
+    from arctuner.tuner import SafetyLimitError
+
+    if not applied:
+        return
+    print("Частичная запись — возвращаю уже применённые изменения…")
+    _build_rollback_map()
+    for field, old in reversed(applied):
+        fn = _ROLLBACK_MAP.get(field)
+        if old is None:
+            print(f"  [!] {field}: «было» неизвестно — откат невозможен, проверьте вручную")
+            continue
+        if fn is None:
+            print(f"  [!] {field}: нет функции отката — проверьте вручную (arctune status)")
+            continue
+        try:
+            report = fn(api, handle, old)
+            log.record(
+                report.field,
+                report.old,
+                report.new,
+                device=device_name,
+                note="откат частичной записи (пункт не применился целиком)",
+            )
+            print(f"  {field} <- {old:g}  (возвращено)")
+        except (SafetyLimitError, IgclError) as rb_exc:
+            print(f"  [!] {field} <- {old:g}: откат не удался ({rb_exc})")
 
 
 def cmd_vf(args: argparse.Namespace) -> int:
@@ -596,6 +644,7 @@ def cmd_log(args: argparse.Namespace) -> int:
     from arctuner.igcl.api import IgclApi, IgclError
     from arctuner.logbook import Logbook, default_logbook_path
     from arctuner.telemetry import find_arc_adapter
+    from arctuner.tuner import SafetyLimitError
 
     log = Logbook(default_logbook_path())
 
@@ -629,9 +678,18 @@ def cmd_log(args: argparse.Namespace) -> int:
                     if fn is None or value is None:
                         print(f"  {name}: нет функции отката, пропущено")
                         continue
-                    fn(api, handle, value)
+                    try:
+                        fn(api, handle, value)
+                    except SafetyLimitError as e:
+                        # Диапазоны IGCL могли смениться драйвером/прошивкой:
+                        # один заблокированный пункт не должен ронять остальные.
+                        print(f"  {name} <- {value}: [BLOCK] {e}")
+                        continue
                     print(f"  {name} <- {value}  (восстановлено)")
                     log.mark_restored(name)
+        except SafetyLimitError as e:
+            print(f"[BLOCK] {e}")
+            return 1
         except IgclError as e:
             print(f"[FAIL] {e}")
             return 1
@@ -709,6 +767,15 @@ def cmd_fans(args: argparse.Namespace) -> int:
                 )
 
             if args.set is not None:
+                from arctuner.context import MIN_FAN_RPM
+
+                if args.set < MIN_FAN_RPM:
+                    print(
+                        f"[BLOCK] {args.set} RPM < {MIN_FAN_RPM} — фиксация ниже "
+                        f"минимума запрещена (вентилятор может не стартовать). "
+                        f"Для автоуправления: python -m arctuner reset --fans"
+                    )
+                    return 1
                 if not args.yes:
                     print(f"\n⚠️  Зафиксировать скорость ВСЕХ вентиляторов на {args.set} RPM?")
                     try:
@@ -975,10 +1042,20 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Точка входа CLI. Необработанные исключения → понятный код, не traceback."""
     _configure_console()
     parser = build_parser()
     args = parser.parse_args(argv)
-    return int(args.func(args))
+    try:
+        return int(args.func(args))
+    except KeyboardInterrupt:
+        print("\nПрервано пользователем.")
+        return 130
+    except SystemExit:
+        raise  # argparse --help/--version и т.п. — штатный путь
+    except Exception as exc:
+        print(f"[UNEXPECTED] {exc}  ({type(exc).__module__}.{type(exc).__name__})")
+        return 1
 
 
 if __name__ == "__main__":

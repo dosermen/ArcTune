@@ -18,7 +18,16 @@ from arctuner import __version__
 from arctuner.autotune import engine as engine_mod
 from arctuner.autotune import watchdog as watchdog_mod
 from arctuner.autotune.engine import TuningResult
-from arctuner.cli import _version, build_parser, cmd_autofind, cmd_doctor, cmd_fans, cmd_reset
+from arctuner.cli import (
+    _version,
+    build_parser,
+    cmd_autofind,
+    cmd_doctor,
+    cmd_fans,
+    cmd_reset,
+    cmd_set,
+    main,
+)
 from arctuner.logbook import RESET_FANS_FIELD, RESET_OC_FIELD, Logbook, default_logbook_path
 
 
@@ -267,6 +276,111 @@ def test_fans_set_blocks_unknown_max_rpm(monkeypatch, tmp_path, capsys) -> None:
     assert api.fixed == []
     assert "maxRPM неизвестен" in capsys.readouterr().out
     assert Logbook(default_logbook_path()).read_all() == []
+
+
+def test_fans_set_blocks_below_min_rpm(monkeypatch, tmp_path, capsys) -> None:
+    """Фиксация ниже MIN_FAN_RPM блокируется до подтверждения и записи."""
+    from arctuner.context import MIN_FAN_RPM
+
+    monkeypatch.setenv("ARCTUNE_LOG", str(tmp_path / "logbook.jsonl"))
+    api = _FakeFanApi()
+    _fake_igcl(monkeypatch, api)
+    args = argparse.Namespace(set=MIN_FAN_RPM - 1, yes=True)
+    assert cmd_fans(args) == 1
+    assert api.fixed == []
+    out = capsys.readouterr().out
+    assert "[BLOCK]" in out and str(MIN_FAN_RPM) in out
+    assert Logbook(default_logbook_path()).read_all() == []
+
+
+# --- cmd_set: откат частичной записи ---
+
+
+class _PartialApi(_FakeFanApi):
+    """OC-API: powerLimit пишется, freq_offset всегда падает (сбой 2-го пункта)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.set_values: list[float] = []
+
+    def set_power_limit(self, handle: object, value: float) -> None:
+        self.set_values.append(value)
+
+    def set_gpu_freq_offset(self, handle: object, value: float) -> None:
+        from arctuner.igcl.api import IgclError
+
+        raise IgclError(0x44000001, "ctlOverclockFrequencyOffsetSetV2")
+
+    # --- всё ниже — read-only заглушки, чтобы cmd_set дошёл до записи ---
+
+    def __enter__(self) -> _PartialApi:
+        return self
+
+    def enumerate_devices(self) -> list[object]:
+        return [object()]
+
+    def get_device_properties(self, handle: object) -> SimpleNamespace:
+        return SimpleNamespace(name="Intel Arc B580")
+
+    def read_oc_properties(self, handle: object) -> dict:
+        from arctuner.igcl.api import OcControlInfo
+
+        info = OcControlInfo(
+            supported=True, relative=False, units=0, min=50.0, max=120.0, step=1.0, default=100.0
+        )
+        freq = OcControlInfo(
+            supported=True, relative=True, units=0, min=-300.0, max=1000.0, step=1.0, default=0.0
+        )
+        return {"powerLimit": info, "gpuFrequencyOffset": freq}
+
+    def read_v2_value(self, handle: object, name: str) -> float | None:
+        return None
+
+
+def test_cmd_set_reverts_applied_on_partial_failure(monkeypatch, tmp_path, capsys) -> None:
+    """Сбой на втором пункте: первый возвращается к «было», код 1, журнал честен."""
+    monkeypatch.setenv("ARCTUNE_LOG", str(tmp_path / "logbook.jsonl"))
+    api = _PartialApi()
+    _fake_igcl(monkeypatch, api)
+
+    # _read_current идёт через V2 Get-функции — их нет, old=None, но откат
+    # в _revert_partial использует «новое→старое» из applied — подставим old
+    # через tuner._read_current, чтобы откат имел значение.
+    from arctuner import tuner
+
+    monkeypatch.setattr(tuner, "_read_current", lambda _api, _h, field: 100.0)
+
+    args = argparse.Namespace(
+        power_limit=115.0,
+        freq_offset=100.0,
+        voltage_offset=None,
+        temp_limit=None,
+        vram_speed=None,
+        yes=True,
+        force=False,
+    )
+    assert cmd_set(args) == 1
+    out = capsys.readouterr().out
+    # Первая запись прошла (115), второй вызов упал → возврат первой к 100.
+    assert api.set_values == [115.0, 100.0]
+    assert "возвращаю" in out
+    # Журнал: применение + откат — обе записи с полем powerLimit.
+    fields = [e.field for e in Logbook(default_logbook_path()).read_all()]
+    assert fields == ["powerLimit", "powerLimit"]
+
+
+# --- main(): последний рубеж ---
+
+
+def test_main_catch_all_returns_one(monkeypatch, capsys) -> None:
+    """Необработанное исключение команды → код 1 и [UNEXPECTED], не traceback."""
+
+    def boom(_args: argparse.Namespace) -> int:
+        raise RuntimeError("тестовый сбой")
+
+    monkeypatch.setattr("arctuner.cli.cmd_doctor", boom)
+    assert main(["doctor"]) == 1
+    assert "[UNEXPECTED]" in capsys.readouterr().out
 
 
 # --- autofind: паритет с GUI ---

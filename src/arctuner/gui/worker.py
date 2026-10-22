@@ -209,15 +209,36 @@ class GpuWorker(QObject):
 
     @Slot(int)
     def set_fan(self, rpm: int) -> None:
-        """Фиксирует ВСЕ управляемые вентиляторы на rpm (как CLI fans --set)."""
+        """Фиксирует ВСЕ управляемые вентиляторы на rpm (как CLI fans --set).
+
+        При сбое на N-м вентиляторе уже зафиксированные возвращаются в авто:
+        частичная фиксация (часть в фиксе, часть в авто) неравномерно охлаждает
+        карту и оставляет пользователя в неведении.
+        """
 
         def run() -> None:
-            applied = 0
-            for fan in self._ctx.fans():
-                if not fan.props.canControl:
-                    continue
-                self._ctx.set_fan_speed(fan.index, rpm)
-                applied += 1
+            applied: list[int] = []
+            try:
+                for fan in self._ctx.fans():
+                    if not fan.props.canControl:
+                        continue
+                    self._ctx.set_fan_speed(fan.index, rpm)
+                    applied.append(fan.index)
+            except Exception as exc:
+                if applied:
+                    # Все в авто: reset_fans журналирует маркер — история честная.
+                    try:
+                        self._ctx.reset_fans()
+                    except Exception as rb_exc:
+                        self.write_error.emit(
+                            f"вентиляторы: {exc}; откат в авто не удался "
+                            f"({rb_exc}) — состояние неизвестно, проверьте вкладку"
+                        )
+                        return
+                    self.write_error.emit(f"вентиляторы: {exc} — все возвращены в авто")
+                else:
+                    self.write_error.emit(f"вентиляторы: {exc}")
+                return
             self.write_done.emit(f"вентиляторы: {applied} шт. зафиксированы на {rpm} RPM")
             # Перечитываем RPM: иначе вкладка покажет старую скорость до окна опроса.
             self.reload_fans()

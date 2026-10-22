@@ -13,11 +13,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from arctuner.context import MIN_FAN_RPM
 from arctuner.gui.context import FanInfo
 from arctuner.gui.widgets import confirm_write
-
-#: ниже этого порога фиксация опасна при нагрузке — добавляем предупреждение.
-_LOW_RPM = 200
 
 
 class FansTab(QWidget):
@@ -40,7 +38,9 @@ class FansTab(QWidget):
         self._list_layout = QVBoxLayout(self._list_box)
 
         self._rpm = QSpinBox()
-        self._rpm.setRange(0, 3000)  # maxRPM уточняется при каждом обновлении
+        # Минимум — жёсткий пол проекта (MIN_FAN_RPM): ниже вентилятор может
+        # не стартовать. maxRPM уточняется при каждом обновлении.
+        self._rpm.setRange(int(MIN_FAN_RPM), 3000)
         self._rpm.setSingleStep(100)
         self._rpm.setSuffix(" RPM")
         self._rpm.setValue(1500)
@@ -89,7 +89,7 @@ class FansTab(QWidget):
         self._have_fans = bool(fans)
         self._controllable = sum(1 for f in fans if f.props.canControl)
         max_rpm = max((f.props.maxRPM for f in fans if f.props.maxRPM > 0), default=3000)
-        self._rpm.setRange(0, int(max_rpm))
+        self._rpm.setRange(int(MIN_FAN_RPM), int(max_rpm))
 
         if not fans:
             empty = QLabel("Вентиляторы не найдены (внешний кулер / ноутбук?).")
@@ -136,9 +136,10 @@ class FansTab(QWidget):
     def _on_set(self) -> None:
         rpm = self._rpm.value()
         detail = "Вернуть автоуправление: вкладка «Вентиляторы» → «Вернуть в авто»."
-        if rpm < _LOW_RPM:
+        if rpm <= MIN_FAN_RPM:
             detail += (
-                f"\n⚠️ {rpm} RPM < {_LOW_RPM}: под нагрузкой возможен перегрев — "
+                f"\n⚠️ {rpm} RPM — минимально допустимая фиксация: "
+                "под нагрузкой возможен перегрев — "
                 "следите за температурой в «Мониторинге»."
             )
         if confirm_write(

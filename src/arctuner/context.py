@@ -47,6 +47,12 @@ class FanInfo:
     props: CtlFanProperties
 
 
+#: Жёсткий пол фиксации: ниже лопасти могут не стартовать или встать под
+#: нагрузкой — карта остаётся без охлаждения. Инвариант проекта (читается
+#: из IGCL только верхняя граница minRPM в структуре нет).
+MIN_FAN_RPM = 200
+
+
 class GpuContext:
     """Открытая IGCL-сессия на одно устройство (дискретная Arc)."""
 
@@ -270,6 +276,12 @@ class GpuContext:
         fans = api.enum_fans(handle)
         if not 0 <= fan_index < len(fans):
             raise SafetyLimitError(f"вентилятора #{fan_index} нет")
+        if rpm < MIN_FAN_RPM:
+            raise SafetyLimitError(
+                f"{rpm} RPM < {MIN_FAN_RPM}: фиксация ниже минимума запрещена "
+                f"(вентилятор может не стартовать — перегрев); "
+                f"для автоуправления — reset_fans"
+            )
         props = api.get_fan_properties(fans[fan_index])
         if not props.canControl:
             raise SafetyLimitError(f"вентилятор #{fan_index} не управляется ПО")

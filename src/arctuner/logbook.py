@@ -72,6 +72,11 @@ def compute_rollback_targets(entries: Iterable[LogEntry]) -> dict[str, float | N
     целями. Вентиляторы (``fan[*]``) и маркер ``reset_fans`` в цели не входят —
     для них есть отдельная кнопка «Вернуть в авто».
 
+    Поле, чья ПОСЛЕДНЯЯ запись помечена ``restored`` (``log --rollback`` уже
+    восстановил его), из целей убирается: повторный откат вернул бы карту к
+    тому же значению. Новое изменение поля после восстановления возвращает
+    его в цели.
+
     Args:
         entries: записи журнала в хронологическом порядке (старые → новые).
 
@@ -84,6 +89,10 @@ def compute_rollback_targets(entries: Iterable[LogEntry]) -> dict[str, float | N
             targets.clear()
             continue
         if entry.field == RESET_FANS_FIELD or _is_fan_field(entry.field):
+            continue
+        if entry.restored:
+            # Поле восстановлено журналом — цель снимается до нового изменения.
+            targets.pop(entry.field, None)
             continue
         if entry.field not in targets and entry.old is not None:
             targets[entry.field] = entry.old
