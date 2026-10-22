@@ -143,12 +143,13 @@ Fans on B580: the driver only supports FIXED mode (RPM lock); there is no softwa
 [ROADMAP](docs/roadmap.md)).
 
 Interface language: **View → Language: Русский / English** — the choice is saved to
-`~/.arctune/language` and applied after a restart (same as the scale). The CLI reads
+`~/.arctune/language` and applied after a restart (same as the scale); right after
+switching, a dialog offers to restart the application. The CLI reads
 the same file, so the switcher also applies to the command line.
 
 If the text is too small for your monitor: **View → 125 / 150 / 175 / 200 %**
 (the scale is saved and applied after a restart — there is also
-"Restart with the new scale" in the same menu).
+"Restart application" in the same menu).
 
 ### Building the exe
 

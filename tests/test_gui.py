@@ -1168,3 +1168,102 @@ def test_gui_error_handler_propagates_interrupt(monkeypatch) -> None:
 
     assert len(captured) == 1
     assert captured[0][0] is KeyboardInterrupt
+
+
+# --- переключение языка (Вид → Язык) ---
+
+
+def _isolate_language_file(monkeypatch, tmp_path):
+    """Файл языка → tmp: тесты не должны трогать ~/.arctune/language пользователя."""
+    from arctuner import i18n
+
+    path = tmp_path / "language"
+    monkeypatch.setattr(i18n, "_language_file", lambda: path)
+    return path
+
+
+def test_language_menu_click_saves_and_asks_restart(qapp, monkeypatch, tmp_path) -> None:
+    """Клик «Вид → Язык → English»: файл=en, диалог перезапуска показан, процесс=en."""
+    from PySide6.QtWidgets import QMessageBox
+
+    from arctuner import i18n
+    from arctuner.gui.window import MainWindow
+
+    path = _isolate_language_file(monkeypatch, tmp_path)
+    _silence_no_device_dialog(monkeypatch)
+    asked: list[object] = []
+    monkeypatch.setattr(
+        "arctuner.gui.window.QMessageBox.question",
+        lambda *a, **k: asked.append(a) or QMessageBox.StandardButton.No,
+    )
+
+    win = MainWindow()
+    win._timer.stop()
+
+    # реальный путь пользователя: пункт меню, а не прямой вызов обработчика
+    view = next(a for a in win.menuBar().actions() if a.text() == "Вид")
+    lang_menu = next(a for a in view.menu().actions() if a.text() == "Язык")
+    en_action = next(a for a in lang_menu.menu().actions() if a.text() == "English")
+    en_action.trigger()
+
+    assert path.exists() and path.read_text(encoding="utf-8") == "en"
+    assert win._restart_action.isEnabled()  # restart-экшен включён
+    assert len(asked) == 1  # диалог «перезапустить сейчас?» показан
+    assert i18n.current_language() == "en"  # процесс переключен сразу (диалог по-английски)
+    assert win._status.currentMessage()  # выбран «Позже» → подсказка в статус-баре
+
+    win.close()
+    assert _wait_worker_stopped(win)
+
+
+def test_language_restart_yes_calls_restart(qapp, monkeypatch, tmp_path) -> None:
+    """Ответ «Да» в диалоге → вызван _on_restart (перезапуск для применения языка)."""
+    from PySide6.QtWidgets import QMessageBox
+
+    from arctuner.gui.window import MainWindow
+
+    _isolate_language_file(monkeypatch, tmp_path)
+    _silence_no_device_dialog(monkeypatch)
+    monkeypatch.setattr(
+        "arctuner.gui.window.QMessageBox.question",
+        lambda *a, **k: QMessageBox.StandardButton.Yes,
+    )
+
+    win = MainWindow()
+    win._timer.stop()
+    calls: list[bool] = []
+    monkeypatch.setattr(win, "_on_restart", lambda: calls.append(True))
+
+    win._on_language_selected("en")
+
+    assert calls == [True]  # перезапуск запрошен
+
+    win.close()
+    assert _wait_worker_stopped(win)
+
+
+def test_language_reselect_same_language_no_dialog(qapp, monkeypatch, tmp_path) -> None:
+    """Повторный выбор уже активного языка — без диалога и без записи файла."""
+    from PySide6.QtWidgets import QMessageBox
+
+    from arctuner.gui.window import MainWindow
+
+    path = _isolate_language_file(monkeypatch, tmp_path)
+    _silence_no_device_dialog(monkeypatch)
+    asked: list[object] = []
+    monkeypatch.setattr(
+        "arctuner.gui.window.QMessageBox.question",
+        lambda *a, **k: asked.append(a) or QMessageBox.StandardButton.No,
+    )
+
+    win = MainWindow()
+    win._timer.stop()
+
+    win._on_language_selected("ru")  # текущий язык уже ru (conftest пинит)
+
+    assert not asked
+    assert not win._restart_action.isEnabled()
+    assert not path.exists()
+
+    win.close()
+    assert _wait_worker_stopped(win)

@@ -37,7 +37,14 @@ from arctuner.gui.tabs import (
 )
 from arctuner.gui.theme import apply_theme, flame_icon, load_theme, save_theme
 from arctuner.gui.worker import GpuWorker
-from arctuner.i18n import LANGUAGE_LABELS, LANGUAGES, current_language, save_language, tr
+from arctuner.i18n import (
+    LANGUAGE_LABELS,
+    LANGUAGES,
+    current_language,
+    save_language,
+    set_language,
+    tr,
+)
 from arctuner.igcl.api import DeviceInfo, ExtendedDeviceInfo
 
 POLL_MS = 1000  # период опроса телеметрии; запись не опрашивается вовсе
@@ -232,9 +239,7 @@ class MainWindow(QMainWindow):
             self._scale_actions[value] = action
 
         menu.addSeparator()
-        self._restart_action = QAction(
-            tr("Перезапустить с новым масштабом", "Restart with new scale"), self
-        )
+        self._restart_action = QAction(tr("Перезапустить приложение", "Restart application"), self)
         self._restart_action.setEnabled(False)
         self._restart_action.triggered.connect(self._on_restart)
         menu.addAction(self._restart_action)
@@ -335,9 +340,9 @@ class MainWindow(QMainWindow):
         self._status.showMessage(
             tr(
                 f"Масштаб {value * 100:g}% сохранён — перезапустите приложение "
-                f"(меню «Вид» → «Перезапустить с новым масштабом»).",
+                f"(меню «Вид» → «Перезапустить приложение»).",
                 f"Scale {value * 100:g}% saved — restart the application "
-                f"(menu «View» → «Restart with new scale»).",
+                f"(menu «View» → «Restart application»).",
             ),
             10000,
         )
@@ -348,18 +353,37 @@ class MainWindow(QMainWindow):
         Подписи создаются при построении виджетов, поэтому — как и масштаб —
         язык применяется только после перезапуска. Выбор пишется в тот же файл
         (~/.arctune/language), который читает и CLI.
+
+        set_language() переключает язык процесса сразу, чтобы сам диалог (и
+        дальнейшие сообщения) уже отображались на выбранном языке — это же
+        показывает пользователю, что переключение работает.
         """
+        if lang == current_language():
+            return
         save_language(lang)
+        set_language(lang)
         self._restart_action.setEnabled(True)
-        self._status.showMessage(
+        answer = QMessageBox.question(
+            self,
+            tr("Язык интерфейса", "Interface language"),
             tr(
-                "Язык сохранён — перезапустите приложение (меню «Вид» → "
-                "«Перезапустить с новым масштабом»).",
-                "Language saved — restart the application (menu «View» → "
-                "«Restart with new scale»).",
+                "Язык сохранён. Перезапустить приложение сейчас?\n\n"
+                "Изменения применяются после перезапуска.",
+                "Language saved. Restart the application now?\n\nChanges apply after restart.",
             ),
-            10000,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
         )
+        if answer == QMessageBox.StandardButton.Yes:
+            self._on_restart()
+        else:
+            self._status.showMessage(
+                tr(
+                    "Язык применится после перезапуска («Вид» → «Перезапустить приложение»).",
+                    "The language will apply after a restart («View» → «Restart application»).",
+                ),
+                10000,
+            )
 
     def _on_theme_selected(self, name: str) -> None:
         """Пересобирает палитру/QSS на ходу.
@@ -407,7 +431,7 @@ class MainWindow(QMainWindow):
         self._overlay_toggle.setChecked(shown)
 
     def _on_restart(self) -> None:
-        """Перезапускает приложение, чтобы применить сохранённый масштаб."""
+        """Перезапускает приложение, чтобы применить сохранённый масштаб или язык."""
         if QProcess.startDetached(sys.executable, restart_argv()):
             self.close()  # closeEvent корректно закроет сессию IGCL в потоке воркера
         else:
