@@ -10,6 +10,12 @@ import os
 import sys
 import tempfile
 
+# Скриншоты без всплывающего окна; QT_QPA_FONTDIR обязателен — иначе
+# offscreen-платформа не находит шрифты Windows и весь текст становится
+# квадратиками (проверено: с переменной текст рендерится).
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+os.environ.setdefault("QT_QPA_FONTDIR", r"C:\Windows\Fonts")
+
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
