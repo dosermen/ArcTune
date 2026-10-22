@@ -142,8 +142,9 @@ Fans on B580: the driver only supports FIXED mode (RPM lock); there is no softwa
 "temperature → speed" curve yet. It stays on the roadmap (see
 [ROADMAP](docs/roadmap.md)).
 
-Language: **View → Language: Русский / English** — the choice is saved and applied
-after a restart (same as the scale).
+Interface language: **View → Language: Русский / English** — the choice is saved to
+`~/.arctune/language` and applied after a restart (same as the scale). The CLI reads
+the same file, so the switcher also applies to the command line.
 
 If the text is too small for your monitor: **View → 125 / 150 / 175 / 200 %**
 (the scale is saved and applied after a restart — there is also

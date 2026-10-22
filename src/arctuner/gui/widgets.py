@@ -11,6 +11,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from arctuner.i18n import tr
+
 
 class MetricCard(QFrame):
     """Карточка одного датчика: крупное значение + подпись + цветной маркер.
@@ -120,15 +122,18 @@ def confirm_write(
     Returns:
         True — пользователь подтвердил запись.
     """
-    text = "⚠️  Это ИЗМЕНИТ настройки карты (write).\n\n" + "\n".join(changes)
+    text = tr(
+        "⚠️  Это ИЗМЕНИТ настройки карты (write).\n\n",
+        "⚠️  This will CHANGE the card settings (write).\n\n",
+    ) + "\n".join(changes)
     if detail:
         text += f"\n\n{detail}"
     box = QMessageBox(parent)
     box.setIcon(QMessageBox.Icon.Warning)
     box.setWindowTitle(title)
     box.setText(text)
-    yes = box.addButton("Записать", QMessageBox.ButtonRole.AcceptRole)
-    box.addButton("Отмена", QMessageBox.ButtonRole.RejectRole)
+    yes = box.addButton(tr("Записать", "Write"), QMessageBox.ButtonRole.AcceptRole)
+    box.addButton(tr("Отмена", "Cancel"), QMessageBox.ButtonRole.RejectRole)
     box.setDefaultButton(box.buttons()[-1])  # по умолчанию — «Отмена»
     box.exec()
     return box.clickedButton() is yes

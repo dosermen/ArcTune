@@ -15,6 +15,8 @@ import argparse
 import sys
 from functools import partial
 
+from arctuner.i18n import tr
+
 
 def cmd_doctor(_: argparse.Namespace) -> int:
     """Проверяет, видит ли система IGCL API и ключевые функции."""
@@ -126,7 +128,12 @@ def cmd_telemetry(args: argparse.Namespace) -> int:
         with IgclApi() as api:
             found = find_arc_adapter(api)
             if not found:
-                print("[FAIL] Дискретная Intel Arc не найдена среди устройств.")
+                print(
+                    tr(
+                        "[FAIL] Дискретная Intel Arc не найдена среди устройств.",
+                        "[FAIL] Discrete Intel Arc not found among devices.",
+                    )
+                )
                 return 1
             handle, info = found
             print(
@@ -218,7 +225,12 @@ def cmd_status(_: argparse.Namespace) -> int:
         with IgclApi() as api:
             found = find_arc_adapter(api)
             if not found:
-                print("[FAIL] Дискретная Intel Arc не найдена.")
+                print(
+                    tr(
+                        "[FAIL] Дискретная Intel Arc не найдена.",
+                        "[FAIL] Discrete Intel Arc not found.",
+                    )
+                )
                 return 1
             handle, dev = found
             oc = api.read_oc_properties(handle)
@@ -280,12 +292,22 @@ def cmd_set(args: argparse.Namespace) -> int:
         changes.append(("vram_speed", args.vram_speed, tuner.set_vram_speed))
 
     if not changes:
-        print("Нечего менять: передайте хотя бы один параметр (--power-limit и т.п.).")
-        print("Диапазоны: python -m arctuner status")
+        print(
+            tr(
+                "Нечего менять: передайте хотя бы один параметр (--power-limit и т.п.).",
+                "Nothing to change: pass at least one parameter (--power-limit etc.).",
+            )
+        )
+        print(tr("Диапазоны: python -m arctuner status", "Ranges: python -m arctuner status"))
         return 2
 
     if not args.yes:
-        print("⚠️  Это ИЗМЕНИТ настройки карты (write). Запрошено:")
+        print(
+            tr(
+                "⚠️  Это ИЗМЕНИТ настройки карты (write). Запрошено:",
+                "⚠️  This will CHANGE the card settings (write). Requested:",
+            )
+        )
         for name, value, _ in changes:
             print(f"    {name} = {value}")
         if any(
@@ -293,23 +315,37 @@ def cmd_set(args: argparse.Namespace) -> int:
             for name, value, _ in changes
         ):
             print(
-                "    ℹ️ Будет вызван ctlOverclockWaiverSet — Intel требует его для записи"
-                " напряжения/отрицательной частоты (принятие риска снижения срока службы)."
+                tr(
+                    "    ℹ️ Будет вызван ctlOverclockWaiverSet — Intel требует его для записи"
+                    " напряжения/отрицательной частоты (принятие риска снижения срока службы).",
+                    "    ℹ️ ctlOverclockWaiverSet will be called — Intel requires it to write"
+                    " voltage/negative frequency (accepting the risk of reduced service life).",
+                )
             )
         try:
-            answer = input("Подтвердить запись? [y/N]: ")
+            answer = input(tr("Подтвердить запись? [y/N]: ", "Confirm write? [y/N]: "))
         except EOFError:
-            print("\nНеожиданный конец ввода — отмена записи.")
+            print(
+                tr(
+                    "\nНеожиданный конец ввода — отмена записи.",
+                    "\nUnexpected end of input — write cancelled.",
+                )
+            )
             return 1
         if answer.strip().lower() not in ("y", "yes", "д", "да"):
-            print("Отменено — ничего не записано.")
+            print(tr("Отменено — ничего не записано.", "Cancelled — nothing written."))
             return 1
 
     try:
         with IgclApi() as api:
             found = find_arc_adapter(api)
             if not found:
-                print("[FAIL] Дискретная Intel Arc не найдена.")
+                print(
+                    tr(
+                        "[FAIL] Дискретная Intel Arc не найдена.",
+                        "[FAIL] Discrete Intel Arc not found.",
+                    )
+                )
                 return 1
             handle, dev = found
             device_name = dev.name
@@ -436,7 +472,12 @@ def cmd_vf(args: argparse.Namespace) -> int:
         with IgclApi() as api:
             found = find_arc_adapter(api)
             if not found:
-                print("[FAIL] Дискретная Intel Arc не найдена.")
+                print(
+                    tr(
+                        "[FAIL] Дискретная Intel Arc не найдена.",
+                        "[FAIL] Discrete Intel Arc not found.",
+                    )
+                )
                 return 1
             handle, _ = found
 
@@ -450,12 +491,12 @@ def cmd_vf(args: argparse.Namespace) -> int:
                 if not args.yes:
                     print("\n⚠️  Это ЗАПИШЕТ кастомную кривую V/F (меняет карту).")
                     try:
-                        ans = input("Подтвердить запись? [y/N]: ")
+                        ans = input(tr("Подтвердить запись? [y/N]: ", "Confirm write? [y/N]: "))
                     except EOFError:
                         print("\nНеожиданный конец ввода — отмена.")
                         return 1
                     if ans.strip().lower() not in ("y", "yes", "д", "да"):
-                        print("Отменено — ничего не записано.")
+                        print(tr("Отменено — ничего не записано.", "Cancelled — nothing written."))
                         return 1
                 from arctuner.logbook import Logbook, default_logbook_path
 
@@ -537,7 +578,7 @@ def cmd_autofind(args: argparse.Namespace) -> int:
             print("\nНеожиданный конец ввода — отмена autofind.")
             return 1
         if ans.strip().lower() not in ("y", "yes", "д", "да"):
-            print("Отменено — ничего не записано.")
+            print(tr("Отменено — ничего не записано.", "Cancelled — nothing written."))
             return 1
 
     def on_step(i: int, value: float, snap) -> None:
@@ -597,7 +638,12 @@ def cmd_info(_: argparse.Namespace) -> int:
         with IgclApi() as api:
             found = find_arc_adapter(api)
             if not found:
-                print("[FAIL] Дискретная Intel Arc не найдена.")
+                print(
+                    tr(
+                        "[FAIL] Дискретная Intel Arc не найдена.",
+                        "[FAIL] Discrete Intel Arc not found.",
+                    )
+                )
                 return 1
             handle, dev = found
             print(f"Устройство: {dev.name} (0x{dev.device_id:04X})")
@@ -676,13 +722,18 @@ def cmd_log(args: argparse.Namespace) -> int:
                 print("\nНеожиданный конец ввода — отмена отката.")
                 return 1
             if ans.strip().lower() not in ("y", "yes", "д", "да"):
-                print("Отменено.")
+                print(tr("Отменено.", "Cancelled."))
                 return 1
         try:
             with IgclApi() as api:
                 found = find_arc_adapter(api)
                 if not found:
-                    print("[FAIL] Дискретная Intel Arc не найдена.")
+                    print(
+                        tr(
+                            "[FAIL] Дискретная Intel Arc не найдена.",
+                            "[FAIL] Discrete Intel Arc not found.",
+                        )
+                    )
                     return 1
                 handle, _ = found
                 _build_rollback_map()
@@ -759,7 +810,12 @@ def cmd_fans(args: argparse.Namespace) -> int:
         with IgclApi() as api:
             found = find_arc_adapter(api)
             if not found:
-                print("[FAIL] Дискретная Intel Arc не найдена.")
+                print(
+                    tr(
+                        "[FAIL] Дискретная Intel Arc не найдена.",
+                        "[FAIL] Discrete Intel Arc not found.",
+                    )
+                )
                 return 1
             handle, dev = found
             fans = api.enum_fans(handle)
@@ -792,12 +848,12 @@ def cmd_fans(args: argparse.Namespace) -> int:
                 if not args.yes:
                     print(f"\n⚠️  Зафиксировать скорость ВСЕХ вентиляторов на {args.set} RPM?")
                     try:
-                        ans = input("Подтвердить запись? [y/N]: ")
+                        ans = input(tr("Подтвердить запись? [y/N]: ", "Confirm write? [y/N]: "))
                     except EOFError:
                         print("\nНеожиданный конец ввода — отмена.")
                         return 1
                     if ans.strip().lower() not in ("y", "yes", "д", "да"):
-                        print("Отменено.")
+                        print(tr("Отменено.", "Cancelled."))
                         return 1
                 log = Logbook(default_logbook_path())
                 for i, f in enumerate(fans):
@@ -867,14 +923,19 @@ def cmd_reset(args: argparse.Namespace) -> int:
             print("\nНеожиданный конец ввода — отмена сброса.")
             return 1
         if ans.strip().lower() not in ("y", "yes", "д", "да"):
-            print("Отменено.")
+            print(tr("Отменено.", "Cancelled."))
             return 1
 
     try:
         with IgclApi() as api:
             found = find_arc_adapter(api)
             if not found:
-                print("[FAIL] Дискретная Intel Arc не найдена.")
+                print(
+                    tr(
+                        "[FAIL] Дискретная Intel Arc не найдена.",
+                        "[FAIL] Discrete Intel Arc not found.",
+                    )
+                )
                 return 1
             handle, dev = found
             log = Logbook(default_logbook_path())
@@ -962,14 +1023,29 @@ def _configure_console() -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="arctune", description="ArcTune — IGCL для Intel Arc")
+    p = argparse.ArgumentParser(
+        prog="arctune",
+        description=tr("ArcTune — IGCL для Intel Arc", "ArcTune — IGCL for Intel Arc"),
+    )
     p.add_argument("--version", action="version", version=f"arctune {_version()}")
     sub = p.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("doctor", help="проверка окружения").set_defaults(func=cmd_doctor)
-    ptelem = sub.add_parser("telemetry", help="телеметрия (read-only)")
-    ptelem.add_argument("--csv", metavar="FILE", help="дополнительно сохранить снимок в CSV")
-    ptelem.add_argument("-w", "--watch", type=int, metavar="SEC", help="повторять каждые N сек")
+    sub.add_parser("doctor", help=tr("проверка окружения", "check environment")).set_defaults(
+        func=cmd_doctor
+    )
+    ptelem = sub.add_parser("telemetry", help=tr("телеметрия (read-only)", "telemetry (read-only)"))
+    ptelem.add_argument(
+        "--csv",
+        metavar="FILE",
+        help=tr("дополнительно сохранить снимок в CSV", "also save snapshot to CSV"),
+    )
+    ptelem.add_argument(
+        "-w",
+        "--watch",
+        type=int,
+        metavar="SEC",
+        help=tr("повторять каждые N сек", "repeat every N sec"),
+    )
     ptelem.add_argument(
         "--replay",
         nargs="?",
@@ -977,78 +1053,173 @@ def build_parser() -> argparse.ArgumentParser:
         default=0,
         type=int,
         metavar="N",
-        help="буфер последних N снимков (по умолчанию 600); сброс счётчика "
-        "энергии или Ctrl+C пишет дамп в ~/.arctune/incidents",
+        help=tr(
+            "буфер последних N снимков (по умолчанию 600); сброс счётчика "
+            "энергии или Ctrl+C пишет дамп в ~/.arctune/incidents",
+            "buffer of the last N snapshots (default 600); energy-counter reset "
+            "or Ctrl+C writes a dump to ~/.arctune/incidents",
+        ),
     )
     ptelem.set_defaults(func=cmd_telemetry)
-    sub.add_parser("status", help="диапазоны разгона (read-only)").set_defaults(func=cmd_status)
+    sub.add_parser(
+        "status", help=tr("диапазоны разгона (read-only)", "overclock ranges (read-only)")
+    ).set_defaults(func=cmd_status)
 
-    plog = sub.add_parser("log", help="журнал изменений / откат")
-    plog.add_argument("-n", type=int, default=10, help="показать последние N записей")
-    plog.add_argument("--rollback", action="store_true", help="откатить к исходным значениям")
-    plog.add_argument("--yes", "-y", action="store_true", help="без подтверждения")
+    plog = sub.add_parser("log", help=tr("журнал изменений / откат", "change log / rollback"))
+    plog.add_argument(
+        "-n", type=int, default=10, help=tr("показать последние N записей", "show last N entries")
+    )
+    plog.add_argument(
+        "--rollback",
+        action="store_true",
+        help=tr("откатить к исходным значениям", "roll back to original values"),
+    )
+    plog.add_argument(
+        "--yes", "-y", action="store_true", help=tr("без подтверждения", "no confirmation")
+    )
     plog.set_defaults(func=cmd_log)
 
-    pvf = sub.add_parser("vf", help="кривая V/F: чтение/экспорт / ⚠️ --apply запись")
-    pvf.add_argument("--csv", metavar="FILE", help="экспортировать текущую кривую в CSV")
-    pvf.add_argument("--apply", metavar="FILE", help="⚠️ записать кривую из CSV (с валидацией)")
-    pvf.add_argument("--yes", "-y", action="store_true", help="без подтверждения")
+    pvf = sub.add_parser(
+        "vf",
+        help=tr(
+            "кривая V/F: чтение/экспорт / ⚠️ --apply запись",
+            "V/F curve: read/export / ⚠️ --apply write",
+        ),
+    )
+    pvf.add_argument(
+        "--csv",
+        metavar="FILE",
+        help=tr("экспортировать текущую кривую в CSV", "export current curve to CSV"),
+    )
+    pvf.add_argument(
+        "--apply",
+        metavar="FILE",
+        help=tr(
+            "⚠️ записать кривую из CSV (с валидацией)", "⚠️ write curve from CSV (with validation)"
+        ),
+    )
+    pvf.add_argument(
+        "--yes", "-y", action="store_true", help=tr("без подтверждения", "no confirmation")
+    )
     pvf.set_defaults(func=cmd_vf)
 
-    paf = sub.add_parser("autofind", help="⚠️ автопоиск стабильной точки (меняет карту)")
+    paf = sub.add_parser(
+        "autofind",
+        help=tr(
+            "⚠️ автопоиск стабильной точки (меняет карту)",
+            "⚠️ auto-find stable point (changes the card)",
+        ),
+    )
     paf.add_argument(
         "--mode",
         choices=["undervolt", "frequency"],
         default="frequency",
-        help="что двигать (по умолчанию frequency: undervolt через offset на B580 ограничен)",
+        help=tr(
+            "что двигать (по умолчанию frequency: undervolt через offset на B580 ограничен)",
+            "what to move (default frequency: undervolt via offset is limited on B580)",
+        ),
     )
     paf.add_argument(
         "--step",
         type=float,
         default=None,
-        help="шаг: 15 МГц для frequency (по умолчанию), 1%% для undervolt",
+        help=tr(
+            "шаг: 15 МГц для frequency (по умолчанию), 1%% для undervolt",
+            "step: 15 MHz for frequency (default), 1%% for undervolt",
+        ),
     )
-    paf.add_argument("--max-steps", type=int, default=20, help="максимум шагов")
-    paf.add_argument("--settle", type=float, default=1.0, help="пауза после шага, сек")
-    paf.add_argument("--temp-ceiling", type=float, default=80.0, help="откат при температуре >")
+    paf.add_argument(
+        "--max-steps", type=int, default=20, help=tr("максимум шагов", "maximum steps")
+    )
+    paf.add_argument(
+        "--settle",
+        type=float,
+        default=1.0,
+        help=tr("пауза после шага, сек", "pause after step, sec"),
+    )
+    paf.add_argument(
+        "--temp-ceiling",
+        type=float,
+        default=80.0,
+        help=tr("откат при температуре >", "rollback above temperature >"),
+    )
     paf.add_argument(
         "--no-load-check",
         action="store_true",
-        help="не требовать нагрузку GPU (не рекомендуется)",
+        help=tr(
+            "не требовать нагрузку GPU (не рекомендуется)",
+            "do not require GPU load (not recommended)",
+        ),
     )
-    paf.add_argument("--yes", "-y", action="store_true", help="без подтверждения")
+    paf.add_argument(
+        "--yes", "-y", action="store_true", help=tr("без подтверждения", "no confirmation")
+    )
     paf.set_defaults(func=cmd_autofind)
 
-    pf = sub.add_parser("fans", help="вентиляторы: чтение / --set RPM (⚠️ запись)")
-    pf.add_argument("--set", type=int, help="зафиксировать скорость, RPM (⚠️)")
-    pf.add_argument("--yes", "-y", action="store_true", help="без подтверждения")
+    pf = sub.add_parser(
+        "fans",
+        help=tr("вентиляторы: чтение / --set RPM (⚠️ запись)", "fans: read / --set RPM (⚠️ write)"),
+    )
+    pf.add_argument(
+        "--set", type=int, help=tr("зафиксировать скорость, RPM (⚠️)", "set speed, RPM (⚠️)")
+    )
+    pf.add_argument(
+        "--yes", "-y", action="store_true", help=tr("без подтверждения", "no confirmation")
+    )
     pf.set_defaults(func=cmd_fans)
 
-    pi = sub.add_parser("info", help="PCIe / ReBAR / ECC / прошивка / режимы вентиляторов")
+    pi = sub.add_parser(
+        "info",
+        help=tr(
+            "PCIe / ReBAR / ECC / прошивка / режимы вентиляторов",
+            "PCIe / ReBAR / ECC / firmware / fan modes",
+        ),
+    )
     pi.set_defaults(func=cmd_info)
 
-    pr = sub.add_parser("reset", help="⚠️ откат к дефолту")
-    pr.add_argument("--oc", action="store_true", help="сбросить OC-настройки")
-    pr.add_argument("--fans", action="store_true", help="вентиляторы в авто")
-    pr.add_argument("--yes", "-y", action="store_true", help="без подтверждения")
+    pr = sub.add_parser("reset", help=tr("⚠️ откат к дефолту", "⚠️ reset to default"))
+    pr.add_argument(
+        "--oc", action="store_true", help=tr("сбросить OC-настройки", "reset OC settings")
+    )
+    pr.add_argument("--fans", action="store_true", help=tr("вентиляторы в авто", "fans to auto"))
+    pr.add_argument(
+        "--yes", "-y", action="store_true", help=tr("без подтверждения", "no confirmation")
+    )
     pr.set_defaults(func=cmd_reset)
 
-    ps = sub.add_parser("set", help="⚠️ установка настроек (меняет карту)")
-    ps.add_argument("--vram-speed", type=float, help="скорость памяти, Гбит/с")
-    ps.add_argument("--power-limit", type=float, help="лимит питания, %%")
-    ps.add_argument("--voltage-offset", type=float, help="смещение напряжения ядра, %%")
-    ps.add_argument("--freq-offset", type=float, help="смещение частоты ядра, МГц")
-    ps.add_argument("--temp-limit", type=float, help="лимит температуры, °C")
+    ps = sub.add_parser(
+        "set", help=tr("⚠️ установка настроек (меняет карту)", "⚠️ apply settings (changes the card)")
+    )
+    ps.add_argument(
+        "--vram-speed", type=float, help=tr("скорость памяти, Гбит/с", "memory speed, Gbps")
+    )
+    ps.add_argument("--power-limit", type=float, help=tr("лимит питания, %%", "power limit, %%"))
+    ps.add_argument(
+        "--voltage-offset",
+        type=float,
+        help=tr("смещение напряжения ядра, %%", "core voltage offset, %%"),
+    )
+    ps.add_argument(
+        "--freq-offset",
+        type=float,
+        help=tr("смещение частоты ядра, МГц", "core frequency offset, MHz"),
+    )
+    ps.add_argument(
+        "--temp-limit", type=float, help=tr("лимит температуры, °C", "temperature limit, °C")
+    )
     ps.add_argument(
         "--yes",
         "-y",
         action="store_true",
-        help="пропустить подтверждение (для скриптов)",
+        help=tr("пропустить подтверждение (для скриптов)", "skip confirmation (for scripts)"),
     )
     ps.add_argument(
         "--force",
         action="store_true",
-        help="разрешить vram_speed выше номинала 20 Гбит/с (до 22)",
+        help=tr(
+            "разрешить vram_speed выше номинала 20 Гбит/с (до 22)",
+            "allow vram_speed above 20 Gbps nominal (up to 22)",
+        ),
     )
     ps.set_defaults(func=cmd_set)
     return p
@@ -1062,7 +1233,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return int(args.func(args))
     except KeyboardInterrupt:
-        print("\nПрервано пользователем.")
+        print(tr("\nПрервано пользователем.", "\nInterrupted by user."))
         return 130
     except SystemExit:
         raise  # argparse --help/--version и т.п. — штатный путь

@@ -40,6 +40,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from arctuner.i18n import tr
 from arctuner.igcl.api import TelemetrySnapshot
 
 #: макеты HUD (выбор пользователя; хранится в настройках)
@@ -51,6 +52,19 @@ LAYOUT_LABELS: dict[str, str] = {
     "grid": "Сетка 2×2",
     "detailed": "Подробный 2×4",
 }
+
+#: английские подписи макетов (см. LAYOUT_LABELS)
+LAYOUT_LABELS_EN: dict[str, str] = {
+    "compact": "Bar 1×4",
+    "grid": "Grid 2×2",
+    "detailed": "Detailed 2×4",
+}
+
+
+def layout_label(name: str) -> str:
+    """Подпись макета на текущем языке интерфейса (см. arctuner.i18n)."""
+    return tr(LAYOUT_LABELS[name], LAYOUT_LABELS_EN[name])
+
 
 #: допустимая непрозрачность (доля от 1.0)
 OPACITIES: tuple[float, ...] = (0.5, 0.7, 0.85, 1.0)
@@ -536,17 +550,17 @@ class OverlayWindow(QWidget):
         """Правый клик: быстрый выбор макета/непрозрачности без главного окна."""
         menu = QMenu(self)
 
-        layout_menu = menu.addMenu("Макет")
+        layout_menu = menu.addMenu(tr("Макет", "Layout"))
         layout_group = QActionGroup(menu)
         layout_group.setExclusive(True)
         for name in LAYOUTS:
-            action = QAction(LAYOUT_LABELS[name], menu, checkable=True)
+            action = QAction(layout_label(name), menu, checkable=True)
             action.setChecked(name == self._layout)
             action.triggered.connect(lambda _=False, n=name: self.set_layout(n))
             layout_group.addAction(action)
             layout_menu.addAction(action)
 
-        opacity_menu = menu.addMenu("Непрозрачность")
+        opacity_menu = menu.addMenu(tr("Непрозрачность", "Opacity"))
         opacity_group = QActionGroup(menu)
         opacity_group.setExclusive(True)
         for value in OPACITIES:
@@ -557,7 +571,7 @@ class OverlayWindow(QWidget):
             opacity_menu.addAction(action)
 
         menu.addSeparator()
-        hide_action = QAction("Скрыть", menu)
+        hide_action = QAction(tr("Скрыть", "Hide"), menu)
         hide_action.triggered.connect(lambda _=False: self.set_shown(False))
         menu.addAction(hide_action)
 
@@ -576,8 +590,10 @@ __all__ = [
     "DEFAULT_OPACITY",
     "LAYOUTS",
     "LAYOUT_LABELS",
+    "LAYOUT_LABELS_EN",
     "OPACITIES",
     "OverlayWindow",
+    "layout_label",
     "load_overlay_cells",
     "load_overlay_enabled",
     "load_overlay_layout",

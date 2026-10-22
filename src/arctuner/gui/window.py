@@ -19,10 +19,10 @@ from PySide6.QtWidgets import (
 
 from arctuner.device_profile import profile_status_note
 from arctuner.gui.overlay import (
-    LAYOUT_LABELS,
     LAYOUTS,
     OPACITIES,
     OverlayWindow,
+    layout_label,
     load_overlay_enabled,
 )
 from arctuner.gui.scale import SCALE_CHOICES, load_scale, restart_argv, save_scale
@@ -37,6 +37,7 @@ from arctuner.gui.tabs import (
 )
 from arctuner.gui.theme import apply_theme, flame_icon, load_theme, save_theme
 from arctuner.gui.worker import GpuWorker
+from arctuner.i18n import LANGUAGE_LABELS, LANGUAGES, current_language, save_language, tr
 from arctuner.igcl.api import DeviceInfo, ExtendedDeviceInfo
 
 POLL_MS = 1000  # период опроса телеметрии; запись не опрашивается вовсе
@@ -72,29 +73,37 @@ class MainWindow(QMainWindow):
                 (
                     self._monitoring,
                     style.standardIcon(QStyle.StandardPixmap.SP_ComputerIcon),
-                    "Мониторинг",
+                    tr("Мониторинг", "Monitoring"),
                 ),
-                (self._overclock, flame_icon(), "Разгон"),  # огонь вместо чёрной стрелки
+                (
+                    self._overclock,
+                    flame_icon(),
+                    tr("Разгон", "Overclock"),
+                ),  # огонь вместо чёрной стрелки
                 (
                     self._fans,
                     style.standardIcon(QStyle.StandardPixmap.SP_BrowserReload),
-                    "Вентиляторы",
+                    tr("Вентиляторы", "Fans"),
                 ),
                 (
                     self._vf,
                     style.standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView),
                     "V/F",
                 ),
-                (self._log, style.standardIcon(QStyle.StandardPixmap.SP_FileIcon), "Журнал"),
+                (
+                    self._log,
+                    style.standardIcon(QStyle.StandardPixmap.SP_FileIcon),
+                    tr("Журнал", "Journal"),
+                ),
                 (
                     self._autotune,
                     style.standardIcon(QStyle.StandardPixmap.SP_ComputerIcon),
-                    "Авторазгон",
+                    tr("Авторазгон", "AutoTune"),
                 ),
                 (
                     self._overlay_tab,
                     style.standardIcon(QStyle.StandardPixmap.SP_DesktopIcon),
-                    "Оверлей",
+                    tr("Оверлей", "Overlay"),
                 ),
             )
         ):
@@ -102,7 +111,7 @@ class MainWindow(QMainWindow):
             self._tabs.setTabIcon(index, icon_kind)
         self.setCentralWidget(self._tabs)
 
-        self._device_label = QLabel("Подключение…")
+        self._device_label = QLabel(tr("Подключение…", "Connecting…"))
         self._status = QStatusBar()
         self._status.addPermanentWidget(self._device_label, stretch=1)
         # Пилюля состояния вместо безликого текста: ok (запись) / warn / danger (инцидент).
@@ -208,7 +217,7 @@ class MainWindow(QMainWindow):
         и в контекстном меню самого оверлея — все три дороги сходятся на одних
         настройках и синхронизируются сигналами OverlayWindow.
         """
-        menu = self.menuBar().addMenu("Вид")
+        menu = self.menuBar().addMenu(tr("Вид", "View"))
         group = QActionGroup(self)
         group.setExclusive(True)
 
@@ -223,18 +232,23 @@ class MainWindow(QMainWindow):
             self._scale_actions[value] = action
 
         menu.addSeparator()
-        self._restart_action = QAction("Перезапустить с новым масштабом", self)
+        self._restart_action = QAction(
+            tr("Перезапустить с новым масштабом", "Restart with new scale"), self
+        )
         self._restart_action.setEnabled(False)
         self._restart_action.triggered.connect(self._on_restart)
         menu.addAction(self._restart_action)
 
         menu.addSeparator()
-        theme_menu = menu.addMenu("Тема")
+        theme_menu = menu.addMenu(tr("Тема", "Theme"))
         theme_group = QActionGroup(self)
         theme_group.setExclusive(True)
         current = load_theme()
         self._theme_actions: dict[str, QAction] = {}
-        for name, label in (("dark", "Тёмная"), ("light", "Светлая")):
+        for name, label in (
+            ("dark", tr("Тёмная", "Dark")),
+            ("light", tr("Светлая", "Light")),
+        ):
             action = QAction(label, self, checkable=True)
             action.setChecked(name == current)
             action.triggered.connect(lambda _=False, n=name: self._on_theme_selected(n))
@@ -243,25 +257,41 @@ class MainWindow(QMainWindow):
             self._theme_actions[name] = action
 
         menu.addSeparator()
-        overlay_menu = menu.addMenu("Оверлей")
-        self._overlay_toggle = QAction("Показывать поверх окон", self, checkable=True)
+        lang_menu = menu.addMenu(tr("Язык", "Language"))
+        lang_group = QActionGroup(self)
+        lang_group.setExclusive(True)
+        current_lang = current_language()
+        self._lang_actions: dict[str, QAction] = {}
+        for code in LANGUAGES:
+            action = QAction(LANGUAGE_LABELS[code], self, checkable=True)
+            action.setChecked(code == current_lang)
+            action.triggered.connect(lambda _=False, c=code: self._on_language_selected(c))
+            lang_group.addAction(action)
+            lang_menu.addAction(action)
+            self._lang_actions[code] = action
+
+        menu.addSeparator()
+        overlay_menu = menu.addMenu(tr("Оверлей", "Overlay"))
+        self._overlay_toggle = QAction(
+            tr("Показывать поверх окон", "Always on top"), self, checkable=True
+        )
         self._overlay_toggle.setChecked(load_overlay_enabled())
         self._overlay_toggle.triggered.connect(self._on_overlay_toggled)
         overlay_menu.addAction(self._overlay_toggle)
 
-        layout_menu = overlay_menu.addMenu("Макет")
+        layout_menu = overlay_menu.addMenu(tr("Макет", "Layout"))
         layout_group = QActionGroup(self)
         layout_group.setExclusive(True)
         self._overlay_layout_actions: dict[str, QAction] = {}
         for name in LAYOUTS:
-            action = QAction(LAYOUT_LABELS[name], self, checkable=True)
+            action = QAction(layout_label(name), self, checkable=True)
             action.setChecked(name == self._overlay.layout_name())
             action.triggered.connect(lambda _=False, n=name: self._overlay.set_layout(n))
             layout_group.addAction(action)
             layout_menu.addAction(action)
             self._overlay_layout_actions[name] = action
 
-        opacity_menu = overlay_menu.addMenu("Непрозрачность")
+        opacity_menu = overlay_menu.addMenu(tr("Непрозрачность", "Opacity"))
         opacity_group = QActionGroup(self)
         opacity_group.setExclusive(True)
         self._overlay_opacity_actions: dict[float, QAction] = {}
@@ -282,8 +312,8 @@ class MainWindow(QMainWindow):
 
     def _build_info_menu(self) -> None:
         """Меню «Информация»: обновление данных об устройстве."""
-        info_menu = self.menuBar().addMenu("Информация")
-        self._info_refresh_action = QAction("Обновить информацию", self)
+        info_menu = self.menuBar().addMenu(tr("Информация", "Information"))
+        self._info_refresh_action = QAction(tr("Обновить информацию", "Refresh info"), self)
         self._info_refresh_action.triggered.connect(self._on_info_refresh)
         info_menu.addAction(self._info_refresh_action)
 
@@ -303,8 +333,31 @@ class MainWindow(QMainWindow):
         save_scale(value)
         self._restart_action.setEnabled(True)
         self._status.showMessage(
-            f"Масштаб {value * 100:g}% сохранён — перезапустите приложение "
-            f"(меню «Вид» → «Перезапустить с новым масштабом»).",
+            tr(
+                f"Масштаб {value * 100:g}% сохранён — перезапустите приложение "
+                f"(меню «Вид» → «Перезапустить с новым масштабом»).",
+                f"Scale {value * 100:g}% saved — restart the application "
+                f"(menu «View» → «Restart with new scale»).",
+            ),
+            10000,
+        )
+
+    def _on_language_selected(self, lang: str) -> None:
+        """Сохраняет язык и предлагает перезапуск (применяется при следующем старте).
+
+        Подписи создаются при построении виджетов, поэтому — как и масштаб —
+        язык применяется только после перезапуска. Выбор пишется в тот же файл
+        (~/.arctune/language), который читает и CLI.
+        """
+        save_language(lang)
+        self._restart_action.setEnabled(True)
+        self._status.showMessage(
+            tr(
+                "Язык сохранён — перезапустите приложение (меню «Вид» → "
+                "«Перезапустить с новым масштабом»).",
+                "Language saved — restart the application (menu «View» → "
+                "«Restart with new scale»).",
+            ),
             10000,
         )
 
@@ -422,25 +475,32 @@ class MainWindow(QMainWindow):
         """
         self._set_pill("warn", f"⚠️ {message}")
         if not self._device_seen:
-            self._device_label.setText("Нет подключения")
+            self._device_label.setText(tr("Нет подключения", "No connection"))
             self._timer.stop()
             QMessageBox.warning(
                 self,
-                "ArcTune — нет подключения",
-                f"Не удалось подключиться к Intel Arc:\n{message}\n\n"
-                "Опрос остановлен. Запустите приложение заново после проверки "
-                "драйвера/подключения карты.",
+                tr("ArcTune — нет подключения", "ArcTune — no connection"),
+                tr(
+                    f"Не удалось подключиться к Intel Arc:\n{message}\n\n"
+                    "Опрос остановлен. Запустите приложение заново после проверки "
+                    "драйвера/подключения карты.",
+                    f"Failed to connect to Intel Arc:\n{message}\n\n"
+                    "Polling stopped. Restart the application after checking the "
+                    "driver/card connection.",
+                ),
             )
 
     def _on_write_error(self, message: str) -> None:
         """Ошибка записи — модально: запись не должна пройти молча."""
         self._set_pill("warn", f"⚠️ {message}")
-        QMessageBox.warning(self, "ArcTune — ошибка записи", message)
+        QMessageBox.warning(self, tr("ArcTune — ошибка записи", "ArcTune — write error"), message)
 
     def _on_autotune_error(self, message: str) -> None:
         """Ошибка процесса авторазгона (не одиночная запись)."""
         self._set_pill("warn", f"⚠️ авторазгон: {message}")
-        QMessageBox.warning(self, "ArcTune — ошибка авторазгона", message)
+        QMessageBox.warning(
+            self, tr("ArcTune — ошибка авторазгона", "ArcTune — auto-tune error"), message
+        )
 
     def _on_autotune_start(self, config: object) -> None:
         """Старт авторазгона: сброс флага отмены синхронно, затем queued-слот.

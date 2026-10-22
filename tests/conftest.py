@@ -6,8 +6,23 @@
 
 from __future__ import annotations
 
+import pytest
+
+from arctuner import i18n
 from arctuner.gui.context import FanInfo
 from arctuner.igcl.api import OcControlInfo, TelemetrySnapshot
+
+
+@pytest.fixture(autouse=True)
+def _pin_language_ru() -> None:
+    """Изолирует язык: каждый тест стартует с русского (язык по умолчанию).
+
+    tr() кэширует язык на уровне модуля, а на машине разработчика может быть
+    сохранён английский (файл ~/.arctune/language) или выставлен ARCTUNE_LANG.
+    Без фиксации GUI/CLI-тесты с русскими assert'ами падали бы. Тесты самой
+    локализации переключают язык явно внутри теста — после этой фикстуры.
+    """
+    i18n.set_language(i18n.LANG_RU)
 
 
 def _info(**kw: object) -> OcControlInfo:
