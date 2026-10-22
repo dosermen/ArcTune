@@ -25,7 +25,13 @@ from arctuner.gui.overlay import (
     layout_label,
     load_overlay_enabled,
 )
-from arctuner.gui.scale import SCALE_CHOICES, load_scale, restart_argv, save_scale
+from arctuner.gui.scale import (
+    SCALE_CHOICES,
+    load_scale,
+    restart_argv,
+    restart_env,
+    save_scale,
+)
 from arctuner.gui.tabs import (
     AutoTuneTab,
     FansTab,
@@ -431,8 +437,18 @@ class MainWindow(QMainWindow):
         self._overlay_toggle.setChecked(shown)
 
     def _on_restart(self) -> None:
-        """Перезапускает приложение, чтобы применить сохранённый масштаб или язык."""
-        if QProcess.startDetached(sys.executable, restart_argv()):
+        """Перезапускает приложение, чтобы применить сохранённый масштаб или язык.
+
+        В onefile-сборке дочерний процесс СТАРТУЕТ СВОЙ `_MEIxxxx`: стартеру
+        передаётся окружение без переменных PyInstaller (restart_env), иначе
+        новый bootloader переиспользует временный каталог умирающего инстанса
+        и падает с «Failed to import encodings module».
+        """
+        proc = QProcess()
+        proc.setProgram(sys.executable)
+        proc.setArguments(restart_argv())
+        proc.setProcessEnvironment(restart_env())
+        if proc.startDetached():
             self.close()  # closeEvent корректно закроет сессию IGCL в потоке воркера
         else:
             QMessageBox.information(

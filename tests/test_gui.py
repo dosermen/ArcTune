@@ -463,6 +463,70 @@ def test_restart_argv_matches_launch_mode() -> None:
         assert argv == ["-m", "arctuner.gui.main"]
 
 
+def test_restart_env_strips_pyi_variables(monkeypatch) -> None:
+    """Перезапуск не должен унаследовать переменные PyInstaller.
+
+    Иначе новый bootloader in-place переиспользует `_MEIxxxx` умирающего
+    инстанса и падает с «Failed to import encodings module» (реальный баг
+    onefile-сборки при смене языка EN→RU).
+    """
+    from PySide6.QtCore import QProcessEnvironment
+
+    from arctuner.gui.scale import restart_env
+
+    monkeypatch.setenv("_PYI_APPLICATION_HOME_DIR", r"C:\Temp\_MEIx")
+    monkeypatch.setenv("_PYI_ARCHIVE_FILE", r"C:\app\arctune-gui.exe")
+    monkeypatch.setenv("_PYI_PARENT_PROCESS_LEVEL", "1")
+    monkeypatch.setenv("_MEIPASS2", r"C:\Temp\_MEIx")
+    monkeypatch.setenv("QT_SCALE_FACTOR", "1.5")
+
+    env = restart_env()
+
+    assert isinstance(env, QProcessEnvironment)
+    keys = {str(k) for k in list(env.keys())}
+    assert not any(k.startswith("_PYI") for k in keys)
+    assert "_MEIPASS2" not in keys
+    assert "QT_SCALE_FACTOR" in keys  # полезные переменные не трогаем
+
+
+def test_restart_uses_cleaned_environment(qapp, monkeypatch) -> None:
+    """_on_restart спавнит дочерний процесс с окружением из restart_env."""
+    from arctuner.gui.window import MainWindow
+
+    _silence_no_device_dialog(monkeypatch)
+    monkeypatch.setenv("_PYI_APPLICATION_HOME_DIR", r"C:\Temp\_MEIx")
+
+    captured: dict[str, object] = {}
+
+    class FakeProcess:
+        def setProgram(self, value: str) -> None:  # noqa: N802
+            captured["program"] = value
+
+        def setArguments(self, value: list[str]) -> None:  # noqa: N802
+            captured["args"] = value
+
+        def setProcessEnvironment(self, value: object) -> None:  # noqa: N802
+            captured["env"] = value
+
+        def startDetached(self) -> bool:  # noqa: N802
+            captured["detached"] = True
+            return True
+
+    monkeypatch.setattr("arctuner.gui.window.QProcess", FakeProcess)
+
+    win = MainWindow()
+    win._timer.stop()
+
+    win._on_restart()  # close() внутри — реальный, воркер корректно остановится
+
+    assert captured["program"] == sys.executable
+    assert captured["detached"] is True
+    env = captured["env"]
+    assert not any(str(k).startswith("_PYI") for k in list(env.keys()))
+
+    assert _wait_worker_stopped(win)
+
+
 def test_spinbox_width_fits_widest_value(qapp) -> None:
     """Спинбокс памяти (19,750) не должен обрезаться при минимальной ширине."""
     from PySide6.QtGui import QFontMetrics

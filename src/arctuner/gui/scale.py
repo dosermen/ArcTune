@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 import sys
 
-from PySide6.QtCore import QSettings
+from PySide6.QtCore import QProcessEnvironment, QSettings
 
 #: доступные варианты масштаба (доля от системного)
 SCALE_CHOICES: tuple[float, ...] = (1.0, 1.25, 1.5, 1.75, 2.0)
@@ -75,4 +75,29 @@ def restart_argv() -> list[str]:
     return ["-m", "arctuner.gui.main"]
 
 
-__all__ = ["SCALE_CHOICES", "apply_qt_scale", "load_scale", "restart_argv", "save_scale"]
+def restart_env() -> QProcessEnvironment:
+    """Окружение для перезапуска без переменных PyInstaller.
+
+    В onefile-сборке сам процесс несёт `_PYI_APPLICATION_HOME_DIR`
+    (и легаси `_MEIPASS2`), указывающий на его `_MEIxxxx`. Если дочерний
+    процесс унаследует их, его bootloader примет это за «извлечение уже
+    сделано» и запустится из ЧУЖОГО (и к тому же удаляемого родителем)
+    временного каталога — старт падает с «Failed to import encodings
+    module», а старый процесс не может удалить `_MEIxxxx`. Убираем все
+    `_PYI*` — новый экземпляр распакуется сам.
+    """
+    env = QProcessEnvironment.systemEnvironment()
+    for key in list(env.keys()):
+        if key.startswith("_PYI") or key == "_MEIPASS2":
+            env.remove(key)
+    return env
+
+
+__all__ = [
+    "SCALE_CHOICES",
+    "apply_qt_scale",
+    "load_scale",
+    "restart_argv",
+    "restart_env",
+    "save_scale",
+]
