@@ -7,6 +7,7 @@ from arctuner.gui.tabs.fans import FansTab
 from arctuner.gui.tabs.logtab import LogTab
 from arctuner.gui.tabs.monitoring import MonitoringTab
 from arctuner.gui.tabs.overclock import OverclockTab
+from arctuner.gui.tabs.overlay import OverlayTab
 from arctuner.gui.tabs.vf import VfTab
 
 __all__ = [
@@ -15,5 +16,6 @@ __all__ = [
     "LogTab",
     "MonitoringTab",
     "OverclockTab",
+    "OverlayTab",
     "VfTab",
 ]

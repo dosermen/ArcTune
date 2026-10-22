@@ -8,10 +8,16 @@
 Выбор пользователя сохраняется в настройках (ArcTune/ArcTune — тот же файл,
 что масштаб и тема):
 
-* ``overlay/enabled``   — включён ли оверлей (меню «Вид → Оверлей»);
+* ``overlay/enabled``   — включён ли оверлей (вкладка «Оверлей», меню «Вид»);
 * ``overlay/layout``    — макет: полоса 1×4, сетка 2×2, подробный 2×4;
+* ``overlay/cells``     — какие метрики показывать (можно снять/поставить
+  галочки вручную — пресет макета возвращает свой набор);
 * ``overlay/opacity``   — непрозрачность (50/70/85/100 %);
 * ``overlay/geometry``  — положение и размер (перетаскивание мышью).
+
+Настройки доступны отовсюду: вкладка «Оверлей», подменю «Вид → Оверлей» и
+правый клик по самому HUD — все три дороги ведут в один ``OverlayWindow`` и
+синхронизируются его сигналами.
 
 Инварианты проекта: окно строго read-only — ни одной кнопки записи; данные
 приходят сигналами GpuWorker (``telemetry_ready`` 1 Гц и ``autotune_sample``
@@ -19,6 +25,8 @@
 """
 
 from __future__ import annotations
+
+from collections.abc import Iterable
 
 from PySide6.QtCore import QPoint, QSettings, Qt, Signal, Slot
 from PySide6.QtGui import QAction, QActionGroup, QContextMenuEvent, QMouseEvent
@@ -71,6 +79,13 @@ _LAYOUT_SPECS: dict[str, tuple[tuple[str, ...], int]] = {
         4,
     ),
 }
+
+#: канонический порядок метрик (сетка собирается в независимости от порядка
+#: выбора галочек — иначе один и тот же набор рисовался бы по-разному)
+CELL_KEYS: tuple[str, ...] = tuple(key for key, _, _, _ in _CELLS)
+
+#: ключ → подпись метрики для чекбоксов вкладки «Оверлей» (единица в скобках)
+CELL_CHOICES: dict[str, str] = {key: f"{title} ({unit})" for key, title, unit, _ in _CELLS}
 
 
 def _settings() -> QSettings:
@@ -128,6 +143,49 @@ def save_overlay_opacity(value: float) -> None:
     if matched is None:
         raise ValueError(f"непрозрачность вне {OPACITIES}: {value!r}")
     _settings().setValue("overlay/opacity", matched)
+
+
+def _normalize_cells(keys: Iterable[str]) -> tuple[str, ...]:
+    """Проверяет набор метрик и приводит его к каноническому порядку.
+
+    Args:
+        keys: ключи ячеек в произвольном порядке, возможны дубли.
+
+    Returns:
+        Ключи без дублей в каноническом порядке отрисовки.
+
+    Raises:
+        ValueError: неизвестный ключ или пустой набор (пустой HUD бессмыслен).
+    """
+    requested = list(dict.fromkeys(keys))  # дубли схлопываем, порядок пока их
+    unknown = [key for key in requested if key not in CELL_CHOICES]
+    if unknown:
+        raise ValueError(f"неизвестные метрики: {unknown} (ждём {CELL_KEYS})")
+    if not requested:
+        raise ValueError("нужна хотя бы одна метрика — пустой оверлей бессмыслен")
+    chosen = set(requested)
+    return tuple(key for key in CELL_KEYS if key in chosen)
+
+
+def load_overlay_cells() -> tuple[str, ...] | None:
+    """Сохранённый набор метрик; None — настройки нет либо там мусор.
+
+    Мусор намеренно НЕ роняет приложение: вызывающий берёт набор из пресета
+    текущего макета (см. ``OverlayWindow.__init__``).
+    """
+    raw = _settings().value("overlay/cells", None)
+    if raw is None:
+        return None
+    parts = [str(item) for item in raw] if isinstance(raw, (list, tuple)) else str(raw).split(",")
+    keys = [part.strip() for part in parts if part.strip()]
+    if not keys or any(key not in CELL_CHOICES for key in keys):
+        return None
+    return _normalize_cells(keys)
+
+
+def save_overlay_cells(keys: Iterable[str]) -> None:
+    """Сохраняет набор метрик (валидация — в ``_normalize_cells``)."""
+    _settings().setValue("overlay/cells", ",".join(_normalize_cells(keys)))
 
 
 class _Cell(QFrame):
@@ -201,13 +259,16 @@ class OverlayWindow(QWidget):
     """HUD поверх окон: без рамки, всегда сверху, перетаскивается мышью.
 
     Правый клик — контекстное меню (макет, непрозрачность, скрыть): оверлей
-    самодостаточен и не требует открытого главного окна. Смена настроек
-    эмитит сигналы, чтобы меню «Вид» главного окна оставалось в согласии.
+    самодостаточен и не требует открытого главного окна. Любая смена настроек
+    эмитит сигнал, чтобы вкладка «Оверлей» и меню «Вид» оставались в согласии —
+    ``set_shown``/``set_layout``/``set_opacity``/``set_visible_cells`` являются
+    единой точкой истины (правят и настройки, и виджеты).
     """
 
-    layout_changed = Signal(str)  # макет изменён (из контекстного меню)
+    layout_changed = Signal(str)  # макет изменён (вкладка/меню/правый клик)
+    cells_changed = Signal(object)  # tuple[str, ...] — набор метрик изменён
     opacity_changed = Signal(float)  # непрозрачность изменена
-    hide_requested = Signal()  # пользователь попросил спрятать оверлей
+    visibility_changed = Signal(bool)  # показан/спрятан (галочки вкладки и меню)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         # Без родителя: Tool-окно не должно прятаться вместе с главным окном —
@@ -224,6 +285,9 @@ class OverlayWindow(QWidget):
         self.setWindowTitle("ArcTune — оверлей")
 
         self._layout = load_overlay_layout()
+        # Набор метрик: сохранённый (в т.ч. правленный вручную) либо пресет
+        # текущего макета — мусор в настройках не должен ломать старт.
+        self._visible: tuple[str, ...] = load_overlay_cells() or _LAYOUT_SPECS[self._layout][0]
         self._opacity = load_overlay_opacity()
         self.setWindowOpacity(self._opacity)
         self._drag_offset: QPoint | None = None
@@ -268,15 +332,54 @@ class OverlayWindow(QWidget):
         return self._opacity
 
     def set_layout(self, name: str) -> None:
-        """Переключает макет: сохраняет выбор и пересобирает сетку ячеек."""
+        """Переключает макет: колонки и пресет-набор метрик, затем пересборка.
+
+        Пресет намеренно возвращает свой набор метрик — подписи «Полоса 1×4»
+        и т.п. должны соответствовать тому, что реально на экране. Свой набор
+        настраивается отдельно — ``set_visible_cells``.
+
+        Args:
+            name: Ключ из LAYOUTS.
+
+        Raises:
+            ValueError: неизвестный макет.
+        """
         if name not in LAYOUTS:
             raise ValueError(f"неизвестный макет: {name!r} (ждём {LAYOUTS})")
         if name == self._layout:
             return
         self._layout = name
         save_overlay_layout(name)
+        preset = _LAYOUT_SPECS[name][0]
+        cells_changed = preset != self._visible
+        if cells_changed:
+            self._visible = preset
+            save_overlay_cells(preset)
         self._rebuild()
         self.layout_changed.emit(name)
+        if cells_changed:
+            self.cells_changed.emit(self._visible)
+
+    def visible_cells(self) -> tuple[str, ...]:
+        """Какие метрики сейчас показаны (канонический порядок, минимум одна)."""
+        return self._visible
+
+    def set_visible_cells(self, keys: Iterable[str]) -> None:
+        """Оставляет в HUD только выбранные метрики и пересобирает сетку.
+
+        Args:
+            keys: Ключи ячеек (см. CELL_KEYS) в произвольном порядке.
+
+        Raises:
+            ValueError: неизвестный ключ либо пустой набор.
+        """
+        normalized = _normalize_cells(keys)
+        if normalized == self._visible:
+            return
+        self._visible = normalized
+        save_overlay_cells(normalized)
+        self._rebuild()
+        self.cells_changed.emit(normalized)
 
     def set_opacity(self, value: float) -> None:
         """Меняет непрозрачность окна; распознаются только значения из OPACITIES."""
@@ -290,10 +393,24 @@ class OverlayWindow(QWidget):
         self.setWindowOpacity(matched)
         self.opacity_changed.emit(matched)
 
-    def hide_overlay(self) -> None:
-        """Прячет оверлей и сообщает об этом (меню «Вид» снимет галочку)."""
-        self.hide()
-        self.hide_requested.emit()
+    def set_shown(self, shown: bool) -> None:
+        """Показывает/прячет HUD и сохраняет выбор (единая точка истины).
+
+        Так делают все дороги: вкладка «Оверлей», меню «Вид → Оверлей» и
+        пункт «Скрыть» в контекстном меню — сигнал ``visibility_changed``
+        синхронизирует остальные галочки.
+        """
+        save_overlay_enabled(shown)
+        if shown:
+            self.show()
+        else:
+            self.hide()
+        self.visibility_changed.emit(shown)
+
+    def reset_position(self) -> None:
+        """Возвращает окно в правый верхний угол основного экрана."""
+        self._place_default()
+        self._save_geometry()
 
     # --- данные ---
 
@@ -339,21 +456,34 @@ class OverlayWindow(QWidget):
     # --- раскладка ---
 
     def _rebuild(self) -> None:
-        """Пересобирает сетку под текущий макет (ячейки создаются один раз)."""
+        """Пересобирает сетку под текущий макет и выбранные метрики.
+
+        Ширина сетки (число колонок) берётся из макета, состав — из
+        ``_visible``: выбранные метрики укладываются в ``ceil(n / cols)`` строк.
+        """
         while self._grid.count():
             item = self._grid.takeAt(0)  # изымает ячейку, но оставляет её ребёнком
             widget = item.widget()
             if widget is not None:
                 widget.hide()
-        keys, cols = _LAYOUT_SPECS[self._layout]
+        cols = _LAYOUT_SPECS[self._layout][1]
+        keys = self._visible
         for index, key in enumerate(keys):
             cell = self._cells[key]
             self._grid.addWidget(cell, index // cols, index % cols)
             cell.show()
         if self._layout == "detailed":
-            self._grid.addWidget(self._limits, len(keys) // cols, 0, 1, cols)
+            self._grid.addWidget(self._limits, -(-len(keys) // cols), 0, 1, cols)
             self._limits.show()
         self.adjustSize()
+
+    def _place_default(self) -> None:
+        """Правый верхний угол основного экрана (с отступом 16 px)."""
+        screen = QApplication.primaryScreen()
+        if screen is None:
+            return
+        area = screen.availableGeometry()
+        self.move(area.right() - self.width() + 1 - 16, area.top() + 16)
 
     def _restore_geometry(self) -> None:
         """Сохранённое положение; без него — правый верхний угол основного экрана."""
@@ -366,11 +496,7 @@ class OverlayWindow(QWidget):
                 restored = False  # повреждённое значение не должно ронять старт
         if restored:
             return
-        screen = QApplication.primaryScreen()
-        if screen is None:
-            return
-        area = screen.availableGeometry()
-        self.move(area.right() - self.width() + 1 - 16, area.top() + 16)
+        self._place_default()
 
     def _save_geometry(self) -> None:
         """Запоминает положение/размер (вызывать только когда окно показано).
@@ -432,7 +558,7 @@ class OverlayWindow(QWidget):
 
         menu.addSeparator()
         hide_action = QAction("Скрыть", menu)
-        hide_action.triggered.connect(self.hide_overlay)
+        hide_action.triggered.connect(lambda _=False: self.set_shown(False))
         menu.addAction(hide_action)
 
         menu.exec(event.globalPos())
@@ -444,15 +570,19 @@ class OverlayWindow(QWidget):
 
 
 __all__ = [
+    "CELL_CHOICES",
+    "CELL_KEYS",
     "DEFAULT_LAYOUT",
     "DEFAULT_OPACITY",
     "LAYOUTS",
     "LAYOUT_LABELS",
     "OPACITIES",
     "OverlayWindow",
+    "load_overlay_cells",
     "load_overlay_enabled",
     "load_overlay_layout",
     "load_overlay_opacity",
+    "save_overlay_cells",
     "save_overlay_enabled",
     "save_overlay_layout",
     "save_overlay_opacity",

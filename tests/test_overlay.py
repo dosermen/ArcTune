@@ -2,10 +2,11 @@
 
 Проверяется то, что можно без Arc:
   - конструирование и переключение макетов (набор показанных ячеек);
+  - свой набор метрик (галочки вкладки) и защита от пустого HUD;
   - попадание данных снимка в ячейки (и игнорирование, пока окно спрятано);
-  - сохранение выбора пользователя (вкл/макет/непрозрачность) + защита от мусора;
+  - сохранение выбора пользователя (вкл/макет/метрики/непрозрачность) + защита от мусора;
   - read-only инвариант: в окне нет ни одной кнопки записи;
-  - связка с меню «Вид» главного окна (галочки сходятся с контекстным меню).
+  - связка «вкладка Оверлей ↔ меню «Вид» ↔ контекстное меню HUD» (одни настройки).
 
 Сессия IGCL оверлеем не открывается: снимки приходят сигналами GpuWorker,
 поэтому здесь достаточно эмита сигнала в UI-потоке.
@@ -149,6 +150,45 @@ def test_overlay_rejects_unknown_layout_and_opacity(settings, qapp) -> None:
     win.deleteLater()
 
 
+def test_overlay_custom_cells_rebuild_grid(settings, qapp) -> None:
+    """Свой набор метрик: канонический порядок, пересборка, сохранение, no-op."""
+    win = OverlayWindow()
+    fired: list[tuple[str, ...]] = []
+    win.cells_changed.connect(fired.append)
+
+    win.set_visible_cells(["vram", "temp"])  # порядок входа не важен
+    assert win.visible_cells() == ("temp", "vram")  # канонический порядок отрисовки
+    assert settings._store["overlay/cells"] == "temp,vram"
+    assert not win._cells["temp"].isHidden()
+    assert not win._cells["vram"].isHidden()
+    assert win._cells["power"].isHidden()  # выбранной метрики нет в HUD
+    assert fired == [("temp", "vram")]
+
+    win.set_visible_cells(("temp", "vram"))  # тот же набор — no-op, сигнал не повторяется
+    assert fired == [("temp", "vram")]
+
+    with pytest.raises(ValueError, match=r"хотя бы одна"):
+        win.set_visible_cells([])
+    with pytest.raises(ValueError, match=r"неизвестные метрики"):
+        win.set_visible_cells(["temp", "nope"])
+    assert win.visible_cells() == ("temp", "vram")  # ошибки не портят состояние
+    assert "overlay/cells" in settings._store
+    win.deleteLater()
+
+
+def test_overlay_layout_preset_restores_cells(settings, qapp) -> None:
+    """Пресет макета возвращает свой набор метрик — подписи «1×4» и т.п. не врут."""
+    win = OverlayWindow()
+    win.set_visible_cells(["temp"])
+
+    win.set_layout("grid")
+    assert win.visible_cells() == ("temp", "power", "freq", "vram")
+    assert settings._store["overlay/cells"] == "temp,power,freq,vram"
+    assert not win._cells["temp"].isHidden()
+    assert not win._cells["vram"].isHidden()  # (isHidden, т.к. окно не показано)
+    win.deleteLater()
+
+
 def test_overlay_opacity_roundtrip(settings, qapp) -> None:
     """Непрозрачность применяется к окну, сохраняется и эмитится сигналом."""
     win = OverlayWindow()
@@ -180,7 +220,7 @@ def test_overlay_telemetry_fills_cells(settings, qapp, snapshot) -> None:
     assert win._cells["freq"].text() == "2500 МГц"
     assert win._cells["vram"].text() == "19.75 Гбит/с"
 
-    win.hide_overlay()
+    win.set_shown(False)
     win.on_telemetry(replace(snapshot, gpu_temp_c=99.0))
     assert win._cells["temp"].text() == "55 °C"  # окно спрятано — не обновлялось
     win.deleteLater()
@@ -242,16 +282,38 @@ def test_overlay_settings_roundtrip(settings, qapp) -> None:
         overlay.save_overlay_opacity(0.6)
 
 
-def test_overlay_hide_reports_to_menu(settings, qapp) -> None:
-    """«Скрыть» из контекстного меню сообщает наверх — меню снимет галочку."""
+def test_overlay_cells_settings(settings, qapp) -> None:
+    """Набор метрик: сохранение/чтение; мусор → None (выбирается пресет макета)."""
+    assert overlay.load_overlay_cells() is None  # настройки ещё нет
+    overlay.save_overlay_cells(["vram", "temp"])
+    assert overlay.load_overlay_cells() == ("temp", "vram")
+    settings._store["overlay/cells"] = "temp,белиберда"  # мусор не роняет старт
+    assert overlay.load_overlay_cells() is None
+    settings._store["overlay/cells"] = ""  # пусто — тоже не набор
+    assert overlay.load_overlay_cells() is None
+
+    with pytest.raises(ValueError, match=r"хотя бы одна"):
+        overlay.save_overlay_cells([])
+    with pytest.raises(ValueError, match=r"неизвестные метрики"):
+        overlay.save_overlay_cells(["nope"])
+
+
+def test_overlay_hide_emits_visibility(settings, qapp) -> None:
+    """Показ/скрытие (вкладка, меню, правый клик) сообщает наверх одним сигналом."""
     win = OverlayWindow()
     win.show()
     fired: list[bool] = []
-    win.hide_requested.connect(lambda: fired.append(True))
+    win.visibility_changed.connect(fired.append)
 
-    win.hide_overlay()
+    win.set_shown(False)
     assert not win.isVisible()
-    assert fired == [True]
+    assert fired == [False]
+    assert overlay.load_overlay_enabled() is False  # выбор переживает перезапуск
+
+    win.set_shown(True)
+    assert win.isVisible()
+    assert fired == [False, True]
+    assert overlay.load_overlay_enabled() is True
     win.deleteLater()
 
 
@@ -300,7 +362,7 @@ def test_main_window_overlay_menu_stays_in_sync(settings, qapp, monkeypatch) -> 
     assert overlay.load_overlay_enabled() is True
 
     # спрятано своим контекстным меню → галочка снята и сохранена
-    win._overlay.hide_overlay()
+    win._overlay.set_shown(False)
     assert not win._overlay_toggle.isChecked()
     assert overlay.load_overlay_enabled() is False
 
@@ -321,5 +383,109 @@ def test_main_window_forwards_telemetry_to_overlay(settings, qapp, monkeypatch, 
 
     win._worker.autotune_sample.emit(replace(snapshot, gpu_temp_c=61.0))
     assert win._overlay._cells["temp"].text() == "61 °C"
+
+    _close_window(win)
+
+
+# --- вкладка «Оверлей» ---
+
+
+def test_overlay_tab_drives_overlay(settings, qapp) -> None:
+    """Вкладка — полноценный пульт оверлея; сигналы HUD обратно двигают виджеты."""
+    from arctuner.gui.tabs.overlay import OverlayTab
+
+    win = OverlayWindow()
+    tab = OverlayTab(win)
+
+    # показ
+    assert not tab._enable.isChecked()  # по умолчанию оверлей выключен
+    tab._enable.setChecked(True)
+    assert win.isVisible()
+    assert overlay.load_overlay_enabled() is True
+
+    # макет
+    tab._layout_buttons["grid"].click()
+    assert win.layout_name() == "grid"
+    assert tab._layout_buttons["grid"].isChecked()
+
+    # непрозрачность: слайдер ходит только по допустимым шагам
+    tab._opacity_slider.setValue(1)
+    assert win.current_opacity() == OPACITIES[1]
+    assert tab._opacity_label.text() == f"{OPACITIES[1] * 100:g} %"
+
+    # состав метрик
+    tab._cell_boxes["sa_vr"].setChecked(True)
+    assert "sa_vr" in win.visible_cells()
+
+    # сброс позиции не ломает настройки
+    tab._reset_position.click()
+    assert win.layout_name() == "grid"
+    assert "sa_vr" in win.visible_cells()
+
+    # обратная связь: правый клик/меню HUD двигают вкладку
+    win.set_opacity(0.7)
+    assert tab._opacity_slider.value() == OPACITIES.index(0.7)
+    win.set_layout("detailed")
+    assert tab._layout_buttons["detailed"].isChecked()
+    assert tab._cell_boxes["sa_vr"].isChecked()  # в подробном — все метрики
+    win.set_visible_cells(("temp", "vram"))
+    assert tab._cell_boxes["temp"].isChecked()
+    assert not tab._cell_boxes["power"].isChecked()
+    win.set_shown(False)
+    assert not tab._enable.isChecked()
+
+    win.deleteLater()
+
+
+def test_overlay_tab_keeps_at_least_one_cell(settings, qapp) -> None:
+    """Пустой HUD запрещён: последнюю снимаемую галочку вкладка возвращает сама."""
+    from arctuner.gui.tabs.overlay import OverlayTab
+
+    win = OverlayWindow()
+    tab = OverlayTab(win)
+
+    for box in tab._cell_boxes.values():
+        box.setChecked(False)
+
+    assert win.visible_cells() == ("vram",)  # осталась последняя галочка
+    assert tab._cell_boxes["vram"].isChecked()
+    win.deleteLater()
+
+
+def test_main_window_overlay_tab_stays_in_sync(settings, qapp, monkeypatch) -> None:
+    """Вкладка «Оверлей» и меню «Вид» — две двери в одни настройки оверлея."""
+    from arctuner.gui.tabs.overlay import OverlayTab
+    from arctuner.gui.window import MainWindow
+
+    monkeypatch.setattr("arctuner.gui.window.QMessageBox.warning", lambda *a, **k: None)
+    win = MainWindow()
+
+    assert isinstance(win._overlay_tab, OverlayTab)
+    assert win._tabs.tabText(6) == "Оверлей"
+
+    # вкладка включила оверлей → меню «Вид» подхватило
+    win._overlay_tab._enable.setChecked(True)
+    assert win._overlay.isVisible()
+    assert win._overlay_toggle.isChecked()
+    assert overlay.load_overlay_enabled() is True
+
+    # меню выключило → вкладка согласилась
+    win._overlay_toggle.trigger()
+    assert not win._overlay.isVisible()
+    assert not win._overlay_tab._enable.isChecked()
+    assert overlay.load_overlay_enabled() is False
+
+    # HUD спрятан своим контекстным меню → обе галочки сняты
+    win._overlay_tab._enable.setChecked(True)
+    win._overlay.set_shown(False)
+    assert not win._overlay_toggle.isChecked()
+    assert not win._overlay_tab._enable.isChecked()
+
+    # состав метрик из вкладки дошёл до HUD, а пресет макета вернул его обратно
+    win._overlay_tab._cell_boxes["sa_vr"].setChecked(True)
+    assert "sa_vr" in win._overlay.visible_cells()
+    win._overlay.set_layout("detailed")
+    assert win._overlay_tab._cell_boxes["sa_vr"].isChecked()
+    assert win._overlay_layout_actions["detailed"].isChecked()
 
     _close_window(win)

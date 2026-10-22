@@ -23,10 +23,17 @@ from arctuner.gui.overlay import (
     OPACITIES,
     OverlayWindow,
     load_overlay_enabled,
-    save_overlay_enabled,
 )
 from arctuner.gui.scale import SCALE_CHOICES, load_scale, restart_argv, save_scale
-from arctuner.gui.tabs import AutoTuneTab, FansTab, LogTab, MonitoringTab, OverclockTab, VfTab
+from arctuner.gui.tabs import (
+    AutoTuneTab,
+    FansTab,
+    LogTab,
+    MonitoringTab,
+    OverclockTab,
+    OverlayTab,
+    VfTab,
+)
 from arctuner.gui.theme import apply_theme, flame_icon, load_theme, save_theme
 from arctuner.gui.worker import GpuWorker
 from arctuner.igcl.api import DeviceInfo, ExtendedDeviceInfo
@@ -42,6 +49,13 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("ArcTune — Intel Arc")
         self.resize(980, 700)
 
+        # Оверлей (HUD поверх окон) — создаётся первым: работают с ним и вкладка
+        # «Оверлей», и меню «Вид». Без родителя — чтобы Tool-окно не пряталось
+        # вместе с главным (HUD нужен при свёрнутом ArcTune).
+        self._overlay = OverlayWindow()
+        if load_overlay_enabled():
+            self._overlay.show()
+
         self._tabs = QTabWidget()
         self._monitoring = MonitoringTab()
         self._overclock = OverclockTab()
@@ -49,6 +63,7 @@ class MainWindow(QMainWindow):
         self._vf = VfTab()
         self._log = LogTab()
         self._autotune = AutoTuneTab()
+        self._overlay_tab = OverlayTab(self._overlay)  # настройки HUD (без IGCL)
         style = self.style()  # иконки вкладок и окна — стандартные Qt, без ресурсов
         self.setWindowIcon(style.standardIcon(QStyle.StandardPixmap.SP_ComputerIcon))
         for index, (widget, icon_kind, name) in enumerate(
@@ -75,6 +90,11 @@ class MainWindow(QMainWindow):
                     style.standardIcon(QStyle.StandardPixmap.SP_ComputerIcon),
                     "Авторазгон",
                 ),
+                (
+                    self._overlay_tab,
+                    style.standardIcon(QStyle.StandardPixmap.SP_DesktopIcon),
+                    "Оверлей",
+                ),
             )
         ):
             self._tabs.addTab(widget, name)
@@ -98,13 +118,8 @@ class MainWindow(QMainWindow):
         # engine.run/watchdog), а завершает поток по сигналу shutdown_done.
         self._closing = False
 
-        # Оверлей (HUD поверх окон) — создаётся до меню: «Вид» о нём решает,
-        # телеметрия приходит из _wire_worker. Без родителя — чтобы Tool-окно
-        # не пряталось вместе с главным (HUD нужен при свёрнутом ArcTune).
-        self._overlay = OverlayWindow()
-        if load_overlay_enabled():
-            self._overlay.show()
-
+        # Оверлей создан в начале __init__ (нужен и вкладке, и меню «Вид»);
+        # телеметрия приходит из _wire_worker.
         self._build_view_menu()
 
         # --- worker в отдельном потоке: handle не потокобезопасен ---
@@ -188,8 +203,9 @@ class MainWindow(QMainWindow):
 
         QT_SCALE_FACTOR читается при старте, поэтому переключение масштаба
         сохраняется и применяется после перезапуска; тема и оверлей применяются
-        немедленно. Выбор макета/непрозрачности дублируется в контекстном меню
-        самого оверлея — обе дороги сходятся на одних настройках.
+        немедленно. Выбор макета/непрозрачности дублируется в вкладке «Оверлей»
+        и в контекстном меню самого оверлея — все три дороги сходятся на одних
+        настройках и синхронизируются сигналами OverlayWindow.
         """
         menu = self.menuBar().addMenu("Вид")
         group = QActionGroup(self)
@@ -256,11 +272,12 @@ class MainWindow(QMainWindow):
             opacity_menu.addAction(action)
             self._overlay_opacity_actions[value] = action
 
-        # Контекстное меню оверлея меняет те же настройки — галочки синхронизируем
-        # обратно (setChecked не эмитит triggered — зацикливания нет).
+        # Контекстное меню оверлея и вкладка «Оверлей» меняют те же настройки —
+        # галочки меню синхронизируем обратным сигналом (setChecked не эмитит
+        # triggered — зацикливания нет).
         self._overlay.layout_changed.connect(self._sync_overlay_layout)
         self._overlay.opacity_changed.connect(self._sync_overlay_opacity)
-        self._overlay.hide_requested.connect(self._on_overlay_hide_requested)
+        self._overlay.visibility_changed.connect(self._sync_overlay_visibility)
 
     def _build_info_menu(self) -> None:
         """Меню «Информация»: обновление данных об устройстве."""
@@ -303,12 +320,13 @@ class MainWindow(QMainWindow):
     # --- оверлей (HUD поверх окон) ---
 
     def _on_overlay_toggled(self, checked: bool) -> None:
-        """Вкл/выкл оверлея из меню «Вид»; выбор переживает перезапуск."""
-        save_overlay_enabled(checked)
-        if checked:
-            self._overlay.show()
-        else:
-            self._overlay.hide()
+        """Вкл/выкл оверлея из меню «Вид» (сохранение — внутри оверлея).
+
+        Оверлей — единая точка истины: set_shown правит настройку, окно и
+        эмитит visibility_changed, поэтому вкладка «Оверлей» сама подхватит
+        изменение (визитки «Вид» и вкладки не расходятся).
+        """
+        self._overlay.set_shown(checked)
 
     @Slot(str)
     def _sync_overlay_layout(self, name: str) -> None:
@@ -322,11 +340,10 @@ class MainWindow(QMainWindow):
         for key, action in self._overlay_opacity_actions.items():
             action.setChecked(abs(key - value) < 1e-3)
 
-    @Slot()
-    def _on_overlay_hide_requested(self) -> None:
-        """Оверлей спрятан своим меню — эквивалент снятия галочки в «Вид»."""
-        self._overlay_toggle.setChecked(False)
-        save_overlay_enabled(False)
+    @Slot(bool)
+    def _sync_overlay_visibility(self, shown: bool) -> None:
+        """Показ/скрытие из любой точки (вкладка, правый клик) — галочка меню."""
+        self._overlay_toggle.setChecked(shown)
 
     def _on_restart(self) -> None:
         """Перезапускает приложение, чтобы применить сохранённый масштаб."""
