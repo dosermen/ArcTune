@@ -32,10 +32,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev,gui]"
 
-      - name: Линтинг — ruff format (без правок: CI только проверяет)
+      - name: "Линтинг — ruff format (без правок: CI только проверяет)"
         run: ruff format --check .
 
-      - name: Линтинг — ruff check (без --fix: CI только проверяет)
+      - name: "Линтинг — ruff check (без --fix: CI только проверяет)"
         run: ruff check .
 
       - name: Типизация — mypy (базовый уровень, ctypes-слой строго типизирован)
