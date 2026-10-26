@@ -1,0 +1,86 @@
+name: Release
+
+# Релиз по тегу: git tag v0.1.0 && git push origin v0.1.0
+# Собирает CLI/GUI exe и публикует GitHub Release с артефактами.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Клони репозиторий
+        uses: actions/checkout@v4
+
+      - name: Установить Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Установить зависимости
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,gui,build]"
+
+      - name: Линтинг, типизация и тесты (релиз только из зелёного дерева)
+        run: |
+          ruff format --check .
+          ruff check .
+          python -m mypy src/arctuner
+          python -m pytest -m "not hardware" -q
+
+      - name: Сверить тег с версией пакета
+        # Единый источник версии — arctuner/__init__.py: __version__.
+        # Тег v0.2.0 при __version__ = "0.1.0" — ошибка, а не релиз.
+        shell: pwsh
+        run: |
+          $ver = (Select-String -Path src/arctuner/__init__.py -Pattern '__version__ = "(.+)"').Matches.Groups[1].Value
+          if ("${{ github.ref_name }}" -ne "v$ver") {
+            Write-Host "Тег ${{ github.ref_name }} не совпадает с версией пакета v$ver"
+            exit 1
+          }
+
+      - name: Собрать CLI и GUI exe
+        run: |
+          pyinstaller --clean --noconfirm packaging/arctune.spec
+          pyinstaller --clean --noconfirm packaging/arctune-gui.spec
+
+      - name: Smoke-чек собранных файлов
+        # CLI-exe реально запускаем (--version не трогает карту); GUI-exe
+        # проверяем на существование — офлайн-запуск окна в CI ненадёжен.
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "dist/arctune.exe")) { Write-Host "нет CLI-exe"; exit 1 }
+          if (-not (Test-Path "dist/arctune-gui.exe")) { Write-Host "нет GUI-exe"; exit 1 }
+          ./dist/arctune.exe --version
+          if ($LASTEXITCODE -ne 0) { Write-Host "--version: exit $LASTEXITCODE"; exit 1 }
+
+      - name: Упаковать артефакты
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist/arctune.exe -DestinationPath dist/arctune-cli-x64.zip
+          Compress-Archive -Path dist/arctune-gui.exe -DestinationPath dist/arctune-gui-x64.zip
+
+      - name: Опубликовать GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/arctune-cli-x64.zip
+            dist/arctune-gui-x64.zip
+          generate_release_notes: true
+          body: |
+            **ArcTune ${{ github.ref_name }}** — мониторинг и разгон Intel Arc (проверено на B580).
+
+            - `arctune-cli-x64.zip` — CLI (`arctune.exe doctor|telemetry|status|set|…`)
+            - `arctune-gui-x64.zip` — GUI (`arctune-gui.exe`, 7 вкладок + оверлей)
+
+            Разгон — на ваш страх и риск. Требуется установленный драйвер Intel Arc
+            с IGCL.dll. Инварианты: нет обхода лимитов, никаких страпов/vBIOS.
+            Подробнее: [docs/safety.md](https://github.com/dosermen/arctune/blob/main/docs/safety.md).
