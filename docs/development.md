@@ -120,6 +120,24 @@ pytest -m "not hardware"
 - docstrings на публичных функциях (Google style)
 - низкоуровневый слой `igcl/` повторяет C-имена без «улучшений»
 
+Полный набор проверок перед коммитом:
+```powershell
+ruff format .
+ruff check --fix .
+python -m mypy src/arctuner   # базовый уровень, зелёный в CI
+pytest -m "not hardware"
+```
+
+### pre-commit (необязательно)
+
+```powershell
+pip install pre-commit
+pre-commit install   # вешает ruff format / ruff check --fix / mypy на git commit
+```
+
+Хуки локальные (system): используют установленные ruff/mypy и не ходят в сеть.
+Сброс одного коммита без хуков: `git commit --no-verify`.
+
 ---
 
 ## Отладка IGCL
