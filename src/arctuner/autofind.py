@@ -1,4 +1,11 @@
-"""Автоматический поиск стабильной точки разгона (undervolt / частотный шаг).
+"""Модуль совместимости: старый автопоиск (⚠️ меняет настройки карты).
+
+Рабочая логика ПЕРЕЕХАЛА в :mod:`arctuner.autotune.engine` (TuningEngine):
+CLI `autofind` и GUI «Авторазгон» используют её. Этот модуль оставлен для
+прямых скриптов и старых импортов: публичные имена `MODE_UNDERVOLT`,
+`MODE_FREQUENCY`, `AutofindAbortError`, `AutofindConfig`, `AutofindResult`
+и функция `autofind()` здесь сохранены; константы и исключение
+переэкспортируются из engine.
 
 Как это работает (см. docs/roadmap.md, docs/overclocking.md):
   1. фиксируем базовое состояние;
@@ -27,12 +34,13 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
+from arctuner.autotune.engine import (
+    MODE_FREQUENCY,
+    MODE_UNDERVOLT,
+    AutofindAbortError,
+)
 from arctuner.igcl.api import IgclApi, IgclError, TelemetrySnapshot
 from arctuner.tuner import SafetyLimitError, current_values, set_gpu_voltage_offset
-
-# Направления поиска.
-MODE_UNDERVOLT = "undervolt"  # снижать gpuVoltageOffset (безопасное направление)
-MODE_FREQUENCY = "frequency"  # поднимать gpuFrequencyOffset (разгон)
 
 
 @dataclass
@@ -94,10 +102,6 @@ class AutofindResult:
     def improvement(self) -> float:
         """Насколько ушли от базы (знак зависит от режима)."""
         return self.best_stable - self.baseline
-
-
-class AutofindAbortError(RuntimeError):
-    """Поиск прерван пользователем/средой (не ошибка железа)."""
 
 
 def _activity(api: IgclApi, handle, snap: TelemetrySnapshot | None = None) -> int | None:

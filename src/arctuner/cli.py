@@ -544,8 +544,12 @@ def cmd_autofind(args: argparse.Namespace) -> int:
     через tuner-проверки и журнал (реальные gpuFrequencyOffset/gpuVoltageOffset),
     поэтому ``log --rollback`` работает и не знает полей frequency/undervolt.
     """
-    from arctuner import autofind as af
-    from arctuner.autotune.engine import TuningConfig, TuningEngine
+    from arctuner.autotune.engine import (
+        MODE_FREQUENCY,
+        AutotuneAbortError,
+        TuningConfig,
+        TuningEngine,
+    )
     from arctuner.autotune.watchdog import Watchdog
     from arctuner.context import GpuContext
     from arctuner.igcl.api import IgclError
@@ -554,7 +558,7 @@ def cmd_autofind(args: argparse.Namespace) -> int:
 
     mode = args.mode
     # Шаг по умолчанию зависит от режима: 15 МГц для частоты, 1 % для undervolt.
-    step = args.step if args.step is not None else (15.0 if mode == af.MODE_FREQUENCY else 1.0)
+    step = args.step if args.step is not None else (15.0 if mode == MODE_FREQUENCY else 1.0)
     cfg = TuningConfig(
         mode=mode,
         step=step,
@@ -621,7 +625,7 @@ def cmd_autofind(args: argparse.Namespace) -> int:
                     "  ⚠️  Состояние карты НЕ подтверждено: откат/запись не удались."
                     " Проверьте `python -m arctuner status` и `telemetry`."
                 )
-    except af.AutofindAbortError as e:
+    except AutotuneAbortError as e:
         print(f"\n[ABORT] {e}")
         return 1
     except (IgclError, SafetyLimitError) as e:

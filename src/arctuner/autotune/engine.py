@@ -29,10 +29,21 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from arctuner.autofind import MODE_FREQUENCY, MODE_UNDERVOLT
 from arctuner.autotune import loader
 from arctuner.igcl.api import IgclError, TelemetrySnapshot
 from arctuner.tuner import SafetyLimitError
+
+#: Направления поиска (общие для CLI и GUI; исторически жили в autofind.py).
+MODE_UNDERVOLT = "undervolt"  # снижать gpuVoltageOffset (безопасное направление)
+MODE_FREQUENCY = "frequency"  # поднимать gpuFrequencyOffset (разгон)
+
+
+class AutotuneAbortError(RuntimeError):
+    """Поиск прерван пользователем/средой (не ошибка железа)."""
+
+
+#: Историческое имя исключения из модуля autofind — та же сущность.
+AutofindAbortError = AutotuneAbortError
 
 
 class TuningContext(Protocol):
@@ -450,9 +461,7 @@ class TuningEngine:
             # need_restore уже корректен по фазе шага (True — если карта ушла
             # с best и ещё не засчитана) — finally выполнит откат.
             reason = "прервано пользователем (Ctrl+C) — выполнен откат"
-            from arctuner.autofind import AutofindAbortError
-
-            raise AutofindAbortError(reason) from None
+            raise AutotuneAbortError(reason) from None
         finally:
             # Откат и остановка нагрузчика независимы: сбой журнала/отката
             # (в т.ч. JournalWriteError) не имеет права оставить стресс-процесс

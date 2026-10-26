@@ -20,6 +20,23 @@ from arctuner.autofind import (
 from arctuner.igcl.api import OcControlInfo, TelemetrySnapshot
 
 
+def test_legacy_module_reexports_engine_names() -> None:
+    """autofind.py — модуль совместимости: имена те же объекты, что в engine.
+
+    Рабочая логика (MODE_*/AutotuneAbortError) живёт в autotune.engine;
+    старые импорты из arctuner.autofind обязаны продолжать работать.
+    """
+    from arctuner import autofind as legacy
+    from arctuner.autotune import engine
+
+    assert legacy.MODE_UNDERVOLT is engine.MODE_UNDERVOLT
+    assert legacy.MODE_FREQUENCY is engine.MODE_FREQUENCY
+    # AutofindAbortError — алиас AutotuneAbortError, а не отдельный класс:
+    # `except AutofindAbortError` ловит то же, что `except AutotuneAbortError`.
+    assert legacy.AutofindAbortError is engine.AutotuneAbortError
+    assert legacy.AutofindAbortError is engine.AutofindAbortError
+
+
 class _FakeDll:
     """Имитация loader.dll: Get-функции пишут заданное значение, всегда 0."""
 

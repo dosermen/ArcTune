@@ -26,8 +26,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from arctuner.autofind import MODE_FREQUENCY, MODE_UNDERVOLT
-from arctuner.autotune.engine import TuningConfig, TuningResult
+from arctuner.autotune.engine import (
+    MODE_FREQUENCY,
+    MODE_UNDERVOLT,
+    TuningConfig,
+    TuningResult,
+)
 from arctuner.autotune.profiles import ProfileStore
 from arctuner.gui.charts import LiveChart
 from arctuner.igcl.api import TelemetrySnapshot
