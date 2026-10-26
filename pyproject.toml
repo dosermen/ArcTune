@@ -82,12 +82,7 @@ disallow_untyped_defs = false
 disallow_untyped_calls = false
 strict_equality = true
 no_implicit_optional = true
-scripts_can_be_main = true
 disallow_any_generics = false
-
-[[tool.mypy.overrides]]
-module = "tests.*"
-ignore_errors = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

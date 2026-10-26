@@ -13,9 +13,14 @@ from __future__ import annotations
 
 import argparse
 import sys
+from collections.abc import Callable
 from functools import partial
+from typing import TYPE_CHECKING
 
 from arctuner.i18n import tr
+
+if TYPE_CHECKING:
+    from arctuner.tuner import WriteReport
 
 
 def cmd_doctor(_: argparse.Namespace) -> int:
@@ -32,7 +37,10 @@ def cmd_doctor(_: argparse.Namespace) -> int:
     print(f"[OK]   IGCL API: {info['path']}")
     missing = info["missing_required"]
     if missing:
-        print(f"[FAIL] Отсутствуют обязательные функции (старый драйвер?): {', '.join(missing)}")
+        missing_list = missing if isinstance(missing, list) else [str(missing)]
+        print(
+            f"[FAIL] Отсутствуют обязательные функции (старый драйвер?): {', '.join(missing_list)}"
+        )
         print("Обновите драйвер Intel Arc — без этих ctl* функций работа невозможна.")
         return 1
     print("[OK]   Все обязательные ctl* функции доступны")
@@ -218,7 +226,7 @@ def cmd_telemetry(args: argparse.Namespace) -> int:
 def cmd_status(_: argparse.Namespace) -> int:
     """Диапазоны пунктов разгона (read-only)."""
     from arctuner.device_profile import profile_status_note
-    from arctuner.igcl.api import IgclApi, IgclError
+    from arctuner.igcl.api import IgclApi, IgclError, OcControlInfo
     from arctuner.telemetry import find_arc_adapter
 
     try:
@@ -240,7 +248,7 @@ def cmd_status(_: argparse.Namespace) -> int:
             if note:
                 print(f"  ⚠️  {dev.name}: {note}")
             for key, val in oc.items():
-                if key == "supported" or not getattr(val, "supported", False):
+                if key == "supported" or not isinstance(val, OcControlInfo):
                     continue
                 print(
                     f"  {key:<25} {val.min:>8.2f} .. {val.max:<8.2f} "
@@ -279,7 +287,7 @@ def cmd_set(args: argparse.Namespace) -> int:
     from arctuner.tuner import SafetyLimitError
 
     # Собираем запрошенные изменения (только явно переданные флаги).
-    changes: list[tuple[str, float, object]] = []
+    changes: list[tuple[str, float, Callable[..., WriteReport]]] = []
     if args.power_limit is not None:
         changes.append(("power_limit", args.power_limit, tuner.set_power_limit))
     if args.freq_offset is not None:
@@ -769,17 +777,17 @@ def cmd_log(args: argparse.Namespace) -> int:
         print(f"Журнал пуст: {default_logbook_path()}")
         return 0
     print(f"Последние {len(entries)} записей ({default_logbook_path()}):")
-    for e in entries:
-        flag = " [restored]" if e.restored else ""
-        print(f"  {e.timestamp}  {e.field}: {e.old} -> {e.new}{flag}")
-        if e.note:
-            print(f"      {e.note}")
+    for entry in entries:
+        flag = " [restored]" if entry.restored else ""
+        print(f"  {entry.timestamp}  {entry.field}: {entry.old} -> {entry.new}{flag}")
+        if entry.note:
+            print(f"      {entry.note}")
     print("\nОткат: python -m arctuner log --rollback")
     return 0  # иначе main() падает на int(None) — TypeError после печати
 
 
 # Карта полей → функции восстановления (для rollback).
-_ROLLBACK_MAP: dict[str, object] = {}
+_ROLLBACK_MAP: dict[str, Callable[..., WriteReport]] = {}
 
 
 def _build_rollback_map() -> None:

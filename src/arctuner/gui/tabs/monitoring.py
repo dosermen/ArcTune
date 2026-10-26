@@ -137,12 +137,15 @@ class MonitoringTab(QWidget):
         self._limits.setText(f"Ограничение: {snap.limit_summary()}")
 
         # На график кладём только полные снимки — частичные точки соврали бы картинку.
-        if None not in (snap.gpu_temp_c, snap.gpu_power_percent, snap.gpu_freq_mhz):
+        gpu_temp = snap.gpu_temp_c
+        gpu_power = snap.gpu_power_percent
+        gpu_freq = snap.gpu_freq_mhz
+        if gpu_temp is not None and gpu_power is not None and gpu_freq is not None:
             t = time.monotonic() - self._t0
             if self._t_last is not None and t - self._t_last > GAP_MAX_S:
                 # Долгий перерыв (сон/занятый воркер): линия через паузу — ложь.
                 self._chart.clear()
-            self._chart.push(t, snap.gpu_temp_c, snap.gpu_power_percent, snap.gpu_freq_mhz)
+            self._chart.push(t, gpu_temp, gpu_power, gpu_freq)
             self._t_last = t
 
 

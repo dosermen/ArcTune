@@ -399,7 +399,7 @@ class IgclApi:
             "ctlEnumerateDevices",
         )
         # Индексация массива ctypes возвращает int-адрес (или None) для c_void_p.
-        return [h for h in arr if h]
+        return [CtlDeviceHandle(h) for h in arr if h]
 
     def get_device_properties(self, handle: CtlDeviceHandle) -> DeviceInfo:
         """ctlGetDeviceProperties — свойства устройства."""
@@ -521,7 +521,7 @@ class IgclApi:
         f = T.read_item_value(item)
         return int(f) if f is not None else None
 
-    def read_oc_properties(self, handle: CtlDeviceHandle) -> dict[str, OcControlInfo]:
+    def read_oc_properties(self, handle: CtlDeviceHandle) -> dict[str, OcControlInfo | bool]:
         """ctlOverclockGetProperties — диапазоны пунктов разгона (read-only)."""
         props = T.CtlOcProperties()
         props.Size = ctypes.sizeof(T.CtlOcProperties)
@@ -543,7 +543,7 @@ class IgclApi:
             )
 
         return {
-            "supported": props.bSupported,  # type: ignore[dict-item]
+            "supported": props.bSupported,
             "gpuFrequencyOffset": conv(props.gpuFrequencyOffset),
             "gpuVoltageOffset": conv(props.gpuVoltageOffset),
             "powerLimit": conv(props.powerLimit),
@@ -613,7 +613,7 @@ class IgclApi:
             return []
         arr = (CtlFanHandle * n)()
         _check(self.loader.dll.ctlEnumFans(handle, ctypes.byref(count), arr), "ctlEnumFans")
-        return [h for h in arr if h]
+        return [CtlFanHandle(h) for h in arr if h]
 
     def get_fan_properties(self, fan: CtlFanHandle) -> T.CtlFanProperties:
         """ctlFanGetProperties — возможности вентилятора (read-only)."""

@@ -38,6 +38,9 @@ jobs:
       - name: Линтинг — ruff check (без --fix: CI только проверяет)
         run: ruff check .
 
+      - name: Типизация — mypy (базовый уровень, ctypes-слой строго типизирован)
+        run: python -m mypy src/arctuner
+
       - name: Тесты — pytest (без железа)
         run: python -m pytest -m "not hardware" -q
 

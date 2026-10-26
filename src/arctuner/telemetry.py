@@ -9,13 +9,13 @@ from __future__ import annotations
 import time
 from dataclasses import replace
 
-from arctuner.igcl.api import DeviceInfo, IgclApi, TelemetrySnapshot
+from arctuner.igcl.api import CtlDeviceHandle, DeviceInfo, IgclApi, TelemetrySnapshot
 
 
-def find_arc_adapter(api: IgclApi) -> tuple[object, DeviceInfo] | None:
+def find_arc_adapter(api: IgclApi) -> tuple[CtlDeviceHandle, DeviceInfo] | None:
     """Ищет дискретную Arc (приоритет — B580, device_id 0xE20B). Среди
     перечисленных устройств возвращает handle и свойства первой дискретной Arc."""
-    best: tuple[object, DeviceInfo] | None = None
+    best: tuple[CtlDeviceHandle, DeviceInfo] | None = None
     for handle in api.enumerate_devices():
         info = api.get_device_properties(handle)
         if info.is_integrated:
@@ -29,7 +29,7 @@ def find_arc_adapter(api: IgclApi) -> tuple[object, DeviceInfo] | None:
     return best
 
 
-def read_snapshot(api: IgclApi, handle) -> TelemetrySnapshot:
+def read_snapshot(api: IgclApi, handle: CtlDeviceHandle) -> TelemetrySnapshot:
     """Снимает телеметрию. Read-only, безопасно."""
     return api.read_power_telemetry(handle)
 

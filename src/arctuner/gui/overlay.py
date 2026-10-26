@@ -142,7 +142,7 @@ def save_overlay_layout(name: str) -> None:
 def load_overlay_opacity() -> float:
     """Непрозрачность из настроек; неизвестное значение схлопывается к допустимым."""
     try:
-        value = float(_settings().value("overlay/opacity", DEFAULT_OPACITY))
+        value = float(str(_settings().value("overlay/opacity", DEFAULT_OPACITY)))
     except (TypeError, ValueError):
         return DEFAULT_OPACITY
     return next(
@@ -477,6 +477,8 @@ class OverlayWindow(QWidget):
         """
         while self._grid.count():
             item = self._grid.takeAt(0)  # изымает ячейку, но оставляет её ребёнком
+            if item is None:
+                break
             widget = item.widget()
             if widget is not None:
                 widget.hide()

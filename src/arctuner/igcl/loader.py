@@ -128,7 +128,7 @@ class IgclLoader:
     def __exit__(self, *args: object) -> None:
         self.close()
 
-    def healthcheck(self) -> dict[str, object]:
+    def healthcheck(self) -> dict[str, str | bool | list[str]]:
         """Сводка для `arctuner doctor`: путь, доступные/отсутствующие функции."""
         return {
             "path": str(self.path),

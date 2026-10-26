@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from collections import deque
+from typing import Protocol
 
 from PySide6.QtCharts import (
     QChart,
@@ -22,6 +23,18 @@ from arctuner.tuner import (
     VF_MIN_FREQ_MHZ,
     VF_MIN_VOLTAGE_MV,
 )
+
+
+class ThemedChart(Protocol):
+    """Минимальный контракт «график, умеющий менять тему».
+
+    LiveChart и VfChart наследуют QChartView и реализуют set_dark. Protocol
+    нужен, чтобы findChildren(QChartView) (базовый тип) позволял вызывать
+    set_dark без подавления ошибок mypy.
+    """
+
+    def set_dark(self, dark: bool) -> None: ...
+
 
 # Цвета серий (темп/мощность/частота) — одинаковы и в легенде, и на графике.
 # Значения приходят из theme.py (единый источник с маркерами карточек).

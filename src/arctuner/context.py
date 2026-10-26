@@ -19,6 +19,7 @@ from typing import Any, ClassVar
 
 from arctuner import tuner
 from arctuner.igcl.api import (
+    CtlDeviceHandle,
     DeviceInfo,
     ExtendedDeviceInfo,
     IgclApi,
@@ -58,7 +59,7 @@ class GpuContext:
 
     def __init__(self) -> None:
         self._api: IgclApi | None = None
-        self._handle: object | None = None
+        self._handle: CtlDeviceHandle | None = None
         self._info: DeviceInfo | None = None
         self._log = Logbook(default_logbook_path())
         # Расчёт ватт из счётчиков энергии: одна база на всю сессию опроса.
@@ -84,8 +85,7 @@ class GpuContext:
         # driver_version и firmware_version из raw CtlDeviceAdapterProperties.
         # Перечитаем raw-свойства и соберём ExtendedDeviceInfo.
         props_raw = api.read_raw_device_properties(handle)  # возвращает CtlDeviceAdapterProperties
-        extended = ExtendedDeviceInfo.from_properties(self._info, props_raw)  # type: ignore[return-value]
-        return extended  # type: ignore[return-value]
+        return ExtendedDeviceInfo.from_properties(self._info, props_raw)
 
     @property
     def log(self) -> Logbook:
@@ -123,7 +123,7 @@ class GpuContext:
         self._handle = None
         self._info = None
 
-    def _require(self) -> tuple[IgclApi, object]:
+    def _require(self) -> tuple[IgclApi, CtlDeviceHandle]:
         if self._api is None or self._handle is None:
             raise SafetyLimitError("IGCL-сессия не открыта")
         return self._api, self._handle
@@ -189,7 +189,7 @@ class GpuContext:
     def _restore_old(
         self,
         api: IgclApi,
-        handle: object,
+        handle: CtlDeviceHandle,
         fn,
         report: WriteReport,
         *extra,
@@ -391,7 +391,7 @@ class GpuContext:
             fn = self._ROLLBACK_MAP.get(name)
             if fn is None or value is None:
                 continue
-            fn(api, handle, value)  # type: ignore[operator]
+            fn(api, handle, value)
             self._log.mark_restored(name)
             done.append((name, value))
         return done

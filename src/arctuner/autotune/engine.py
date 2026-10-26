@@ -27,7 +27,6 @@ import subprocess
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from functools import partial
 from typing import Any, Protocol
 
 from arctuner.autofind import MODE_FREQUENCY, MODE_UNDERVOLT
@@ -188,7 +187,7 @@ class TuningEngine:
         self,
         seconds: float,
         stop_check: Callable[[], bool] | None,
-        sample: Callable[[], None] | None = None,
+        sample: Callable[[], object] | None = None,
     ) -> None:
         """Пауза, прерываемая stop_check.
 
@@ -320,7 +319,9 @@ class TuningEngine:
 
         # Единый источник снимков: подписчик получает именно те значения, по
         # которым движок проверяет нагрузку, температуру и watchdog.
-        sample = partial(self._read_telemetry, on_sample) if on_sample is not None else None
+        sample: Callable[[], TelemetrySnapshot] | None = (
+            (lambda: self._read_telemetry(on_sample)) if on_sample is not None else None
+        )
         if sample is not None:
             sample()  # первый снимок сразу — график не пустует до первого шага
 

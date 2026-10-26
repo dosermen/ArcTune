@@ -222,7 +222,7 @@ class AutoTuneTab(QWidget):
         self._now.setText("Сейчас: " + (" · ".join(parts) if parts else "нет данных"))
 
         # На график — только полные снимки: частичная точка соврала бы картинку.
-        if None not in (temp, power, freq):
+        if temp is not None and power is not None and freq is not None:
             t = time.monotonic() - self._t0
             if self._t_last is not None and t - self._t_last > _GAP_MAX_S:
                 self._live.clear()  # пауза (сон/зависание) — не мостим линию

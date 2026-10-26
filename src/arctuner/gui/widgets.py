@@ -77,7 +77,7 @@ class MetricCard(QFrame):
 
     def set_value(
         self,
-        value: float | int | None,
+        value: float | int | str | None,
         digits: int = 0,
         *,
         unit: str | None = None,
@@ -86,7 +86,7 @@ class MetricCard(QFrame):
         """Показывает значение; None -> «—» (датчик недоступен).
 
         Args:
-            value: значение датчика; None — нет данных.
+            value: значение датчика; None — нет данных; str — отображается как есть.
             digits: знаков после запятой (для float).
             unit: переопределить единицу (по умолчанию — подпись карточки).
             tooltip: подпись при наведении (вторичная информация).
@@ -133,8 +133,8 @@ def confirm_write(
     box.setWindowTitle(title)
     box.setText(text)
     yes = box.addButton(tr("Записать", "Write"), QMessageBox.ButtonRole.AcceptRole)
-    box.addButton(tr("Отмена", "Cancel"), QMessageBox.ButtonRole.RejectRole)
-    box.setDefaultButton(box.buttons()[-1])  # по умолчанию — «Отмена»
+    cancel = box.addButton(tr("Отмена", "Cancel"), QMessageBox.ButtonRole.RejectRole)
+    box.setDefaultButton(cancel)  # по умолчанию — «Отмена»
     box.exec()
     return box.clickedButton() is yes
 

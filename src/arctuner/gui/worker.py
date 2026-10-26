@@ -12,7 +12,7 @@ from __future__ import annotations
 import csv
 from collections.abc import Callable
 from pathlib import Path
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 
@@ -20,6 +20,10 @@ from arctuner.gui.context import GpuContext
 from arctuner.igcl.api import IgclError
 from arctuner.replay import IncidentReplay
 from arctuner.tuner import SafetyLimitError, VfPoint, WriteReport
+
+if TYPE_CHECKING:
+    from arctuner.autotune.engine import TuningConfig
+    from arctuner.igcl.api import TelemetrySnapshot
 
 
 class GpuWorker(QObject):
@@ -121,7 +125,7 @@ class GpuWorker(QObject):
         self.telemetry_ready.emit(snap)
         self._replay_telemetry(snap)
 
-    def _replay_telemetry(self, snap: object) -> None:
+    def _replay_telemetry(self, snap: TelemetrySnapshot) -> None:
         """Толкает снимок в буфер реплея; при инциденте пишет дамп и извещает UI.
 
         Сбой дампа не останавливает опрос телеметрии (error-сигнал, без диалога).
@@ -295,7 +299,7 @@ class GpuWorker(QObject):
     # --- авторазгон ---
 
     @Slot(object)
-    def autotune_search(self, config: object) -> None:
+    def autotune_search(self, config: TuningConfig) -> None:
         """Запускает адаптивный поиск авторазгона (в этом потоке).
 
         Пишет через GpuContext (tuner-проверки + журнал). Прогресс —
@@ -347,7 +351,7 @@ class GpuWorker(QObject):
             self.reload_static()  # карта могла измениться (шаг/откат) — обновить статику
             self.busy_changed.emit(False)
 
-    def _autotune_sample(self, snap: object) -> None:
+    def _autotune_sample(self, snap: TelemetrySnapshot) -> None:
         """Снимок движка (в его потоке): живой график + реплей инцидентов.
 
         Вызывается на каждое чтение телеметрии поиском (включая settle), а не

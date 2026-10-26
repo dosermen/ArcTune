@@ -33,7 +33,7 @@ def load_scale() -> float:
     (скринридер, чужая программа, опечатка) не должен задавать QT_SCALE_FACTOR.
     """
     try:
-        scale = float(_settings().value("ui/scale", _DEFAULT))
+        scale = float(str(_settings().value("ui/scale", _DEFAULT)))
     except (TypeError, ValueError):
         return _DEFAULT
     return next(

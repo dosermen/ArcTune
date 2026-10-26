@@ -218,16 +218,24 @@ def set_vram_speed(
     if profile.vram_min_gbps is not None:
         nominal = profile.vram_nominal_gbps
         hard_max = profile.vram_max_gbps
-        hi = hard_max if allow_beyond_nominal else (nominal if nominal is not None else hard_max)
+        if hard_max is None:
+            # Профиль задал min, но не потолок — верх берётся из IGCL-диапазона
+            # (_check_igcl_range ниже). Такого в штатных профилях нет, но
+            # замыкать типы нужно: _check_hard_limit требует float.
+            hi = float("inf")
+        elif allow_beyond_nominal:
+            hi = hard_max  # явное согласие пользователя — потолок профиля
+        else:
+            hi = nominal if nominal is not None else hard_max
         _check_hard_limit("vram_speed", gbps, profile.vram_min_gbps, hi)
     info = _oc_info(api, handle, "vramMemSpeedLimit")
     _check_igcl_range("vram_speed", gbps, info)
     old = _read_current(api, handle, "vramMemSpeedLimit")
     api.set_vram_mem_speed(handle, gbps)
-    nominal = profile.vram_nominal_gbps
+    note_nominal = profile.vram_nominal_gbps
     note = (
-        f"сверх номинала ({nominal:g}) — явное согласие"
-        if nominal is not None and gbps > nominal
+        f"сверх номинала ({note_nominal:g}) — явное согласие"
+        if note_nominal is not None and gbps > note_nominal
         else ""
     )
     return WriteReport("vramMemSpeedLimit", old, gbps, note)

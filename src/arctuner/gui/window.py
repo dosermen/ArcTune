@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from typing import cast
 
 from PySide6.QtCharts import QChartView
 from PySide6.QtCore import QMetaObject, QProcess, Qt, QThread, QTimer, Slot
@@ -18,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from arctuner.device_profile import profile_status_note
+from arctuner.gui.charts import ThemedChart
 from arctuner.gui.overlay import (
     LAYOUTS,
     OPACITIES,
@@ -254,14 +256,14 @@ class MainWindow(QMainWindow):
         theme_menu = menu.addMenu(tr("Тема", "Theme"))
         theme_group = QActionGroup(self)
         theme_group.setExclusive(True)
-        current = load_theme()
+        current_theme = load_theme()
         self._theme_actions: dict[str, QAction] = {}
         for name, label in (
             ("dark", tr("Тёмная", "Dark")),
             ("light", tr("Светлая", "Light")),
         ):
             action = QAction(label, self, checkable=True)
-            action.setChecked(name == current)
+            action.setChecked(name == current_theme)
             action.triggered.connect(lambda _=False, n=name: self._on_theme_selected(n))
             theme_group.addAction(action)
             theme_menu.addAction(action)
@@ -399,14 +401,16 @@ class MainWindow(QMainWindow):
         """
         save_theme(name)
         app = QApplication.instance()
-        if app is not None:
+        if isinstance(app, QApplication):
             apply_theme(app, name == "dark")
         self._apply_theme_to_charts(name == "dark")
 
     def _apply_theme_to_charts(self, dark: bool) -> None:
         """Синхронизирует темы всех графиков (мониторинг игнорирует — см. выше)."""
         for view in self.findChildren(QChartView):
-            view.set_dark(dark)
+            # Все реальные view — LiveChart/VfChart, оба реализуют set_dark;
+            # findChildren возвращает базовый QChartView без этого метода.
+            cast("ThemedChart", view).set_dark(dark)
 
     # --- оверлей (HUD поверх окон) ---
 

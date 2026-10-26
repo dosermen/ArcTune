@@ -96,21 +96,23 @@ class Watchdog:
         prev = self._last_snap
         if prev is None:
             return None
-        act = (prev.activity_counter, snapshot.activity_counter)
-        enj = (prev.gpu_energy_counter_j, snapshot.gpu_energy_counter_j)
-        if None in act or None in enj:
+        prev_act = prev.activity_counter
+        cur_act = snapshot.activity_counter
+        prev_enj = prev.gpu_energy_counter_j
+        cur_enj = snapshot.gpu_energy_counter_j
+        if prev_act is None or cur_act is None or prev_enj is None or cur_enj is None:
             return None  # данных мало — не решаем
-        if act[1] > act[0]:  # активность растёт — телеметрия жива
+        if cur_act > prev_act:  # активность растёт — телеметрия жива
             return None
-        if act[1] < act[0]:
+        if cur_act < prev_act:
             # Счётчик сброшен/переполнился — после TDR или рестарта драйвера
             # оба счётчика обнуляются (энергия при этом «скачет» — ложная
             # заморозка не детектится, ловим именно сброс активности).
             return WatchdogEvent(
                 type="TELEMETRY_FROZEN",
-                detail=f"activity_counter сброшен ({act[0]} → {act[1]}) — рестарт драйвера?",
+                detail=f"activity_counter сброшен ({prev_act} → {cur_act}) — рестарт драйвера?",
             )
-        if act[0] > 0 and abs(enj[1] - enj[0]) < 1e-6:
+        if prev_act > 0 and abs(cur_enj - prev_enj) < 1e-6:
             return WatchdogEvent(
                 type="TELEMETRY_FROZEN",
                 detail="activity_counter стоит, счётчик энергии не растёт — возможен сбой драйвера",
