@@ -411,7 +411,7 @@ class IgclApi:
             "ctlGetDeviceProperties",
         )
         return DeviceInfo(
-            name=props.name.decode("ascii", errors="replace").rstrip("\x00"),
+            name=props.name.decode("utf-8", errors="replace").rstrip("\x00"),
             vendor_id=props.pci_vendor_id,
             device_id=props.pci_device_id,
             subsystem_id=props.pci_subsys_id,
