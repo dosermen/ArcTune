@@ -240,6 +240,7 @@ python -m arctuner reset --oc --fans        # reset overclock + fans to auto
 | [docs/development.md](docs/development.md) | Environment setup, running, tests (Russian) |
 | [docs/building.md](docs/building.md) | Building the portable `arctune.exe` (Russian) |
 | [docs/roadmap.md](docs/roadmap.md) | Plans and what's already done (Russian) |
+| [docs/adr/](docs/adr/) | Architecture decision records ADR-0001…0006 (Russian) |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Contribution rules and code style (Russian) |
 
 ---

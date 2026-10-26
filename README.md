@@ -241,6 +241,7 @@ python -m arctuner reset --oc --fans        # сброс OC + вентилято
 | [docs/development.md](docs/development.md) | Настройка окружения, запуск, тесты |
 | [docs/building.md](docs/building.md) | Сборка переносимого `arctune.exe` (PyInstaller) |
 | [docs/roadmap.md](docs/roadmap.md) | Планы и что уже сделано |
+| [docs/adr/](docs/adr/) | Журнал архитектурных решений (ADR-0001…0006) |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Правила участия и стиль кода |
 
 ---
