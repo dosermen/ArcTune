@@ -4,7 +4,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "arctune"
-version = "0.1.0"
+# Единый источник версии — arctuner/__init__.py: __version__ (setuptools
+# читает литерату статически, импорт пакета не выполняется).
+dynamic = ["version"]
 description = "Python-обёртка над IGCL API для мониторинга и разгона Intel Arc (B580)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -51,6 +53,9 @@ Documentation = "https://github.com/dosermen/arctune/tree/main/docs"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.dynamic]
+version = { attr = "arctuner.__version__" }
+
 # PEP 561: потребителям пакета доступны аннотации типов (модуль arctuner — py.typed).
 [tool.setuptools.package-data]
 arctuner = ["py.typed"]
@@ -89,4 +94,13 @@ testpaths = ["tests"]
 markers = [
     "hardware: тесты, требующие реального устройства Intel Arc",
 ]
-addopts = "-q"
+# Покрытие — часть обычного прогона: набор маленький (~4 с), регрессия
+# покрытия видна сразу и в CI, и локально.
+addopts = "-q --cov=arctuner --cov-report=term-missing"
+
+[tool.coverage.run]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
