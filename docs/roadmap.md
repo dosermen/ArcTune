@@ -58,7 +58,8 @@
 - [x] **Общий движок `autotune/engine.py`** для CLI и GUI: адаптивный шаг, снаппинг к сетке IGCL (`min/step`), проверка нагрузки, температуры и watchdog, откат к последнему стабильному значению
 - [x] **Watchdog авторазгона**: TDR (Event ID 4101), заморозка телеметрии (счётчик энергии не растёт при активности), аварийная температура 85 °C
 - [x] **JSON-профили параметров поиска** (`autotune/profiles.py`) — без применения к карте
-- [x] CLI `autofind` переведён на новый движок; `autofind.py` оставлен модулем совместимости и тестов
+- [x] CLI `autofind` переведён на новый движок; `autofind.py` — модуль совместимости
+  (MODE_*/`AutofindAbortError` канонически в `autotune/engine.py`, отсюда переэкспорт)
 
 ### GUI (PySide6)
 
@@ -83,8 +84,19 @@
 
 ### Инфраструктура и устойчивость
 
-- [x] **CI** (`.github/workflows/ci.yml`): ruff format/check + pytest `-m "not hardware"`
-  + сборка CLI/GUI exe + smoke-запуск CLI — python 3.10–3.12, windows-latest
+- [x] **CI** (`.github/workflows/ci.yml`): ruff format/check + mypy + pytest `-m "not hardware"`
+  (с покрытием) + сборка CLI/GUI exe + smoke-запуск CLI — python 3.10–3.12, windows-latest
+- [x] **mypy без ошибок** (62 → 0 по всем 39 файлам src/) + шаг в CI; строгий
+  strict-режим остаётся перспективой
+- [x] **Release по тегу** (`.github/workflows/release.yml`): `git tag v*` → сверка
+  тега с `__version__` → сборка exe → GitHub Release с артефактами zip
+- [x] **Единый источник версии**: `pyproject.toml` → dynamic, читает `__version__`
+  из `src/arctuner/__init__.py`
+- [x] **Покрытие в обычном прогоне pytest** (`--cov=arctuner`, branch): сейчас ~73 %,
+  регрессия видна сразу
+- [x] **pre-commit** (`.pre-commit-config.yaml`): локальные system-хуки ruff
+  format/check + mypy, без сети и пиннинга версий
+- [x] **ADR-журнал** (`docs/adr/`): 6 принятых архитектурных решений + указатель
 - [x] **Рестарт onefile-exe** — очистка `_PYI*`-переменных (`restart_env`): второй
   инстанс не стартует из чужого `_MEIxxxx` и не падает при выходе первого
 - [x] **requirements.lock** — воспроизводимые версии зависимостей
@@ -133,9 +145,7 @@
 | **Домены частот: `ctlFrequencyDomain`** | Троттлинг-время как метрика «успевает ли карта», список доменов (PXE, PM4, Compute, Media, VFE) |
 | **`ctlPowerTelemetryGetV2`** | Новая версия телеметрии — оценить, даёт ли больше полей на B580 |
 | **Инсталлятор / иконка / app.manifest** | DPI-aware Windows-сборка (критично для GUI с масштабом 100–200 %) |
-| **Release по тегу** | GitHub Actions: сборка exe + Release с артефактами при `git tag v*` |
 | **mypy strict** | Строгая типизация ctypes-кода — сложный, но важный шаг для проекта со структурами; базовый mypy уже в CI |
-| **pre-commit** | ruff format/check на git-хуке |
 | **Разгонный дневник: отчёт MD/HTML** | Рендер готовых фактов (logbook + история авторазгона + снапшоты + device info) в карточку для форума/вики; приватность: имя ПК вырезать |
 | **Дифф снапшотов** | «До/после разгона» — сравнение конфигов |
 | **Оповещения: Telegram** | Аналогично Discord webhook, но для Telegram Bot API |
@@ -191,8 +201,8 @@
 |---|---|---|---|
 | **С** (критично) | 4 | С (1 функция/вкладка) | **~3 ч** |
 | **Ж** (желательно) | 5 | С–М (модуль/обёртка) | **~3.5 ч** |
-| **К** (перспектива) | 16 | М–Л (новый слой) | **~13 ч** |
-| **Итого** | **25** |  | **~19.5 ч** |
+| **К** (перспектива) | 14 | М–Л (новый слой) | **~12.5 ч** |
+| **Итого** | **23** |  | **~19 ч** |
 
 | Сложность | Время | Описание |
 |---|---|---|
@@ -204,8 +214,14 @@
 
 ## Версия и релиз
 
-- Версия: **0.1.0** (`pyproject.toml`, `arctuner/__init__.py`)
+- Версия: **0.1.0** — единый источник `src/arctuner/__init__.py` (`__version__`);
+  `pyproject.toml` подключает её через `dynamic = ["version"]`
 - Semver: **MAJOR** — API-ломы; **MINOR** — новые фичи; **PATCH** — исправления
 - CHANGELOG.md: Keep a Changelog v1.0.0
-- CI: `.github/workflows/ci.yml` — ruff + pytest + сборка exe (python 3.10–3.12, windows-latest)
-- `git tag` пуст, remote нет — релизы пока не оформляются
+- CI: `.github/workflows/ci.yml` — ruff + mypy + pytest (с покрытием) + сборка exe
+  (python 3.10–3.12, windows-latest)
+- Release: `.github/workflows/release.yml` — при теге `v*` сверяет тег с
+  `__version__` (расхождение = ошибка, не релиз), собирает exe и публикует
+  GitHub Release с артефактами zip
+- `git tag` пуст, remote не настроен — релизы ещё не оформлялись (первый тег
+  поставить после публикации репозитория)
