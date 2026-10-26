@@ -1,35 +1,41 @@
-"""Тесты кодов выхода CLI: контракт main() и команд — без железа, только моки.
+"""Тесты exit-кодов CLI: 0 — успех, 1 — ошибка, 2 — неверные аргументы, 130 — Ctrl+C.
 
-Контракт:
-  0   — успех;
-  1   — отказ/ошибка (нет IGCL, нет Arc, IgclError, SafetyLimitError, отмена, EOF);
-  2   — ошибка использования (argparse; set/reset без параметров);
-  130 — KeyboardInterrupt (Ctrl+C).
-SystemExit от argparse проходит насквозь: --help → 0, неверные аргументы → 2.
+Каждая команда проходит через main() с фейковым IgclApi/find_arc_adapter/tuner —
+реального IGCL.dll здесь нет и быть не может (без hardware-метки).
+
+Реальные коды cli.py:
+    main          — 130 при KeyboardInterrupt, 1 при необработанном исключении,
+                    SystemExit (argparse --help/--version) перебрасывается;
+    cmd_set       — 2 «нечего менять», 1 отмена подтверждения/ошибка записи;
+    cmd_reset     — 2 «не указано что сбрасывать»;
+    cmd_telemetry — 0 Ctrl+C (штатное завершение watch), 1 ошибка/нет Arc.
 """
 
 from __future__ import annotations
 
-import argparse
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from arctuner.cli import (
-    build_parser,
-    cmd_fans,
-    cmd_reset,
-    cmd_set,
-    cmd_status,
-    cmd_telemetry,
-    main,
+import arctuner.cli as cli_mod
+from arctuner.autotune import engine as engine_mod
+from arctuner.autotune import watchdog as watchdog_mod
+from arctuner.cli import main
+from arctuner.igcl.api import IgclError, TelemetrySnapshot
+from arctuner.logbook import RESET_OC_FIELD, JournalWriteError, Logbook, default_logbook_path
+from arctuner.tuner import SafetyLimitError, WriteReport
+
+_DEV = SimpleNamespace(
+    name="Intel Arc B580",
+    device_id=0xE20B,
+    frequency_mhz=2670,
+    num_xe_cores=20,
 )
-from arctuner.igcl.api import OcControlInfo, TelemetrySnapshot
-from arctuner.logbook import RESET_OC_FIELD, Logbook, default_logbook_path
 
 
 def _snap() -> TelemetrySnapshot:
-    """Снимок телеметрии: все поля дефолтные, кроме счётчиков энергии."""
+    """Минимальный снимок телеметрии для фейкового read_power_telemetry."""
     return TelemetrySnapshot(
         gpu_voltage_v=1.0,
         gpu_freq_mhz=2500.0,
@@ -50,37 +56,15 @@ def _snap() -> TelemetrySnapshot:
     )
 
 
-def _dev(device_id: int = 0xE20B) -> SimpleNamespace:
-    """DeviceInfo-подобная заглушка для find_arc_adapter."""
-    return SimpleNamespace(
-        name="Intel Arc B580",
-        device_id=device_id,
-        frequency_mhz=2600,
-        num_xe_cores=20,
-    )
-
-
-def _power_info() -> OcControlInfo:
-    """Диапазон powerLimit как у B580: 50..120 % (120 — аппаратный потолок)."""
-    return OcControlInfo(
-        supported=True, relative=False, units=0, min=50.0, max=120.0, step=1.0, default=100.0
-    )
-
-
-class _NoLoader:
-    """Лоадер-заглушка: V2 Get-функций нет → текущие значения не читаются."""
-
-    def has(self, name: str) -> bool:
-        return False
-
-
 class _FakeApi:
-    """Мини-API IGCL: контекст, телеметрия, OC-свойства, запись powerLimit."""
+    """IgclApi-дублёр: контекстный менеджер + read-only заглушки без DLL.
+
+    write-методы не определены намеренно: тесты подмешивают их через
+    setattr экземпляра или monkeypatch tuner-функций.
+    """
 
     def __init__(self) -> None:
-        self.loader = _NoLoader()
-        self.written_power: list[float] = []
-        self.resets = 0
+        self.power = _snap()
 
     def __enter__(self) -> _FakeApi:
         return self
@@ -89,290 +73,450 @@ class _FakeApi:
         pass
 
     def read_power_telemetry(self, handle: object) -> TelemetrySnapshot:
-        return _snap()
+        return self.power
 
     def read_oc_properties(self, handle: object) -> dict:
-        return {"supported": True, "powerLimit": _power_info()}
+        return {"supported": False}
 
-    def get_device_properties(self, handle: object) -> SimpleNamespace:
-        return SimpleNamespace(name="Intel Arc B580", device_id=0xE20B)
+    def read_vf_curve(self, handle: object) -> list:
+        return [SimpleNamespace(voltage_mv=700, freq_mhz=2800)]
 
-    def set_power_limit(self, handle: object, value: float) -> None:
-        self.written_power.append(value)
+    def get_pci_state(self, handle: object) -> SimpleNamespace:
+        return SimpleNamespace(
+            gen=5, width=16, address="0000:03:00.0", rebar_enabled=True, rebar_supported=True
+        )
 
-    def reset_to_default(self, handle: object) -> None:
-        self.resets += 1
+    def get_firmware_properties(self, handle: object) -> SimpleNamespace:
+        return SimpleNamespace(name="i915", version="1.0")
 
+    def get_ecc_state(self, handle: object) -> SimpleNamespace:
+        return SimpleNamespace(current="disabled", pending="disabled")
 
-class _BrokenWriteApi(_FakeApi):
-    """Запись powerLimit падает как ошибка драйвера."""
-
-    def set_power_limit(self, handle: object, value: float) -> None:
-        from arctuner.igcl.api import IgclError
-
-        raise IgclError(0x44000001, "ctlOverclockPowerLimitSetV2")
-
-
-class _FanApi(_FakeApi):
-    """Вентиляторная часть API для cmd_fans."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.fan = object()
-        self.fixed: list[int] = []
-
-    def enum_fans(self, handle: object) -> list[object]:
-        return [self.fan]
-
-    def get_fan_properties(self, fan: object) -> SimpleNamespace:
-        return SimpleNamespace(supportedModes=2, canControl=True, maxRPM=3000)
-
-    def get_fan_speed(self, fan: object) -> int:
-        return 1200
-
-    def set_fan_fixed_speed(self, fan: object, rpm: int) -> None:
-        self.fixed.append(rpm)
+    def enum_fans(self, handle: object) -> list:
+        return []
 
 
-def _fake_igcl(monkeypatch, api: _FakeApi, found: bool = True) -> None:
-    """Подменяет IgclApi и поиск Arc-адаптера (паттерн из test_cli.py)."""
+@pytest.fixture()
+def cli_env(monkeypatch, tmp_path: Path) -> _FakeApi:
+    """Изолирует журнал (ARCTUNE_LOG) и подменяет IGCL-слой фейками."""
+    monkeypatch.setenv("ARCTUNE_LOG", str(tmp_path / "logbook.jsonl"))
+    api = _FakeApi()
     monkeypatch.setattr("arctuner.igcl.api.IgclApi", lambda: api)
-    if found:
-        monkeypatch.setattr("arctuner.telemetry.find_arc_adapter", lambda _api: (1, _dev()))
-    else:
-        monkeypatch.setattr("arctuner.telemetry.find_arc_adapter", lambda _api: None)
+    monkeypatch.setattr("arctuner.telemetry.find_arc_adapter", lambda _api: (1, _DEV))
+    monkeypatch.setattr("arctuner.tuner.current_values", lambda _api, _handle: {})
+    return api
 
 
-# --- main(): разбор аргументов и последний рубеж ---
+# --- успех (0) ---
 
 
-def test_main_help_raises_systemexit_zero(capsys) -> None:
-    """--help штатно завершается через SystemExit(0), не через return."""
-    with pytest.raises(SystemExit) as excinfo:
-        main(["--help"])
-    assert excinfo.value.code == 0
-    capsys.readouterr()  # забираем вывод help из лога
+def test_read_only_commands_return_zero(cli_env: _FakeApi) -> None:
+    """telemetry/status/info/vf/log на фейках завершаются с кодом 0."""
+    assert main(["telemetry"]) == 0
+    assert main(["status"]) == 0
+    assert main(["info"]) == 0
+    assert main(["vf"]) == 0
+    assert main(["log"]) == 0  # пустой журнал — не ошибка, просто нечего показывать
 
 
-def test_main_bad_arguments_raises_systemexit_two(capsys) -> None:
-    """Неизвестный аргумент — usage от argparse и SystemExit(2)."""
-    with pytest.raises(SystemExit) as excinfo:
-        main(["telemetry", "--bogus-flag"])
-    assert excinfo.value.code == 2
-    capsys.readouterr()
-
-
-def test_main_doctor_ok_returns_zero(monkeypatch, capsys) -> None:
-    """Успешный doctor через main() → 0."""
+def test_doctor_success_returns_zero(monkeypatch, capsys) -> None:
     import arctuner.igcl.loader as loader_mod
 
-    class OkLoader:
-        def healthcheck(self) -> dict[str, object]:
+    class FakeLoader:
+        def healthcheck(self) -> dict:
             return {"path": "C:/Windows/System32/igcl.dll", "missing_required": []}
 
-    monkeypatch.setattr(loader_mod, "IgclLoader", OkLoader)
+    monkeypatch.setattr(loader_mod, "IgclLoader", FakeLoader)
     assert main(["doctor"]) == 0
-    assert "[OK]" in capsys.readouterr().out
+    assert "в порядке" in capsys.readouterr().out
 
 
-def test_main_doctor_not_found_returns_one(monkeypatch, capsys) -> None:
-    """IGCL не найден → doctor → 1 через main()."""
+def test_telemetry_keyboard_interrupt_returns_zero(cli_env: _FakeApi, capsys) -> None:
+    """Ctrl+C в telemetry — штатное завершение watch, а не ошибка (код 0)."""
+
+    def interrupt(handle: object) -> TelemetrySnapshot:
+        raise KeyboardInterrupt
+
+    cli_env.read_power_telemetry = interrupt  # type: ignore[method-assign]
+    assert main(["telemetry"]) == 0
+    assert "Остановлено" in capsys.readouterr().out
+
+
+def test_set_success_returns_zero(cli_env: _FakeApi, monkeypatch) -> None:
+    def ok(_api: object, _handle: object, value: float) -> WriteReport:
+        return WriteReport(field="powerLimit", old=100.0, new=value, note="")
+
+    monkeypatch.setattr("arctuner.tuner.set_power_limit", ok)
+    assert main(["set", "--power-limit", "115", "--yes"]) == 0
+    entries = Logbook(default_logbook_path()).read_all()
+    assert [e.field for e in entries] == ["powerLimit"]
+    assert entries[0].old == 100.0
+    assert entries[0].new == 115.0
+
+
+def test_fans_no_fans_returns_zero(cli_env: _FakeApi) -> None:
+    """Нет вентиляторов (enum пуст) — не ошибка, читать нечего."""
+    assert main(["fans"]) == 0
+
+
+def test_log_rollback_empty_returns_zero(cli_env: _FakeApi) -> None:
+    """Пустой журнал: rollback — no-op с кодом 0 («нечего откатывать»)."""
+    assert main(["log", "--rollback", "--yes"]) == 0
+
+
+def test_log_rollback_success_returns_zero(cli_env: _FakeApi, monkeypatch) -> None:
+    Logbook(default_logbook_path()).record("powerLimit", 100.0, 110.0)
+    calls: list[float] = []
+
+    def restore(_api: object, _handle: object, value: float) -> WriteReport:
+        calls.append(value)
+        return WriteReport(field="powerLimit", old=110.0, new=value, note="")
+
+    # Подменяем саму карту: _build_rollback_map не перезаполняет непустой dict.
+    monkeypatch.setattr(cli_mod, "_ROLLBACK_MAP", {"powerLimit": restore})
+    assert main(["log", "--rollback", "--yes"]) == 0
+    assert calls == [100.0]
+    assert Logbook(default_logbook_path()).read_all()[0].restored is True
+
+
+def test_log_rollback_blocked_target_does_not_fail_command(
+    cli_env: _FakeApi, monkeypatch, capsys
+) -> None:
+    """SafetyLimitError по одному пункту (диапазоны IGCL сменились) → код 0."""
+    log = Logbook(default_logbook_path())
+    log.record("powerLimit", 100.0, 110.0)
+    log.record("gpuFrequencyOffset", 0.0, 50.0)
+
+    def blocked(_api: object, _handle: object, _value: float) -> WriteReport:
+        raise SafetyLimitError("диапазон сменён драйвером")
+
+    ok_calls: list[float] = []
+
+    def ok(_api: object, _handle: object, value: float) -> WriteReport:
+        ok_calls.append(value)
+        return WriteReport(field="gpuFrequencyOffset", old=0.0, new=value, note="")
+
+    monkeypatch.setattr(cli_mod, "_ROLLBACK_MAP", {"powerLimit": blocked, "gpuFrequencyOffset": ok})
+    assert main(["log", "--rollback", "--yes"]) == 0
+    assert ok_calls == [0.0]
+    out = capsys.readouterr().out
+    assert "[BLOCK]" in out and "Откат завершён" in out
+    # Восстановлено только успешное поле.
+    flags = {e.field: e.restored for e in log.read_all()}
+    assert flags == {"powerLimit": False, "gpuFrequencyOffset": True}
+
+
+# --- неверные аргументы (2) ---
+
+
+def test_set_without_params_returns_two() -> None:
+    assert main(["set"]) == 2
+
+
+def test_reset_without_flags_returns_two() -> None:
+    assert main(["reset"]) == 2
+
+
+# --- отказ пользователя / EOF (1) ---
+
+
+def test_set_declined_confirmation_returns_one(cli_env: _FakeApi, monkeypatch) -> None:
+    monkeypatch.setattr("builtins.input", lambda _prompt: "n")
+    assert main(["set", "--power-limit", "115"]) == 1
+    assert Logbook(default_logbook_path()).read_all() == []  # ничего не записано
+
+
+def test_set_eof_returns_one(cli_env: _FakeApi, monkeypatch) -> None:
+    def eof(_prompt: str) -> str:
+        raise EOFError
+
+    monkeypatch.setattr("builtins.input", eof)
+    assert main(["set", "--power-limit", "115"]) == 1
+
+
+def test_log_rollback_declined_returns_one(cli_env: _FakeApi, monkeypatch) -> None:
+    Logbook(default_logbook_path()).record("powerLimit", 100.0, 110.0)
+    monkeypatch.setattr("builtins.input", lambda _prompt: "n")
+    assert main(["log", "--rollback"]) == 1
+
+
+def test_autofind_declined_returns_one(monkeypatch) -> None:
+    monkeypatch.setattr("builtins.input", lambda _prompt: "n")
+    assert main(["autofind"]) == 1
+
+
+def test_autofind_eof_returns_one(monkeypatch) -> None:
+    def eof(_prompt: str) -> str:
+        raise EOFError
+
+    monkeypatch.setattr("builtins.input", eof)
+    assert main(["autofind"]) == 1
+
+
+# --- ошибка пользователя/драйвера (1) ---
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["telemetry"],
+        ["status"],
+        ["info"],
+        ["vf"],
+        ["fans"],
+        ["reset", "--oc", "--yes"],
+        ["set", "--power-limit", "115", "--yes"],
+    ],
+)
+def test_no_arc_adapter_returns_one(cli_env: _FakeApi, monkeypatch, argv: list[str]) -> None:
+    """Дискретная Arc не найдена — все команды, трогающие карту, выходят с 1."""
+    monkeypatch.setattr("arctuner.telemetry.find_arc_adapter", lambda _api: None)
+    assert main(argv) == 1
+
+
+def test_set_safety_limit_returns_one(cli_env: _FakeApi, monkeypatch, capsys) -> None:
+    def blocked(_api: object, _handle: object, _value: float) -> WriteReport:
+        raise SafetyLimitError("115% выше предела B580")
+
+    monkeypatch.setattr("arctuner.tuner.set_power_limit", blocked)
+    assert main(["set", "--power-limit", "115", "--yes"]) == 1
+    assert "[BLOCK]" in capsys.readouterr().out
+
+
+def test_set_igcl_error_returns_one(cli_env: _FakeApi, monkeypatch, capsys) -> None:
+    """Сбой записи драйвера (IgclError) внутри цикла → [BLOCK] и код 1."""
+
+    def broken(_api: object, _handle: object, _value: float) -> WriteReport:
+        raise IgclError(0x44000001, "ctlOverclockPowerLimitSet")
+
+    monkeypatch.setattr("arctuner.tuner.set_power_limit", broken)
+    assert main(["set", "--power-limit", "115", "--yes"]) == 1
+    assert "[BLOCK]" in capsys.readouterr().out
+
+
+def test_doctor_not_found_returns_one(monkeypatch, capsys) -> None:
     import arctuner.igcl.loader as loader_mod
-    from arctuner.igcl.loader import IgclNotFoundError
 
-    class NoDll:
-        def __init__(self) -> None:
-            raise IgclNotFoundError("IGCL не найден")
+    def no_dll() -> object:
+        raise loader_mod.IgclNotFoundError("IGCL.dll не найден")
 
-    monkeypatch.setattr(loader_mod, "IgclLoader", NoDll)
+    monkeypatch.setattr(loader_mod, "IgclLoader", no_dll)
     assert main(["doctor"]) == 1
     assert "[FAIL]" in capsys.readouterr().out
 
 
-def test_main_keyboard_interrupt_returns_130(monkeypatch, capsys) -> None:
-    """KeyboardInterrupt → 130, «Прервано пользователем», не traceback."""
+def test_telemetry_unexpected_error_returns_one(cli_env: _FakeApi, capsys) -> None:
+    def broken(handle: object) -> TelemetrySnapshot:
+        raise RuntimeError("драйвер упал")
 
-    def boom(_args: argparse.Namespace) -> int:
+    cli_env.read_power_telemetry = broken  # type: ignore[method-assign]
+    assert main(["telemetry"]) == 1
+    assert "[UNEXPECTED]" in capsys.readouterr().out
+
+
+def test_telemetry_igcl_error_returns_one(cli_env: _FakeApi, capsys) -> None:
+    """IgclError при чтении телеметрии тоже уходит в catch-all команды → 1."""
+
+    def broken(handle: object) -> TelemetrySnapshot:
+        raise IgclError(0x44000002, "ctlPowerTelemetryGet")
+
+    cli_env.read_power_telemetry = broken  # type: ignore[method-assign]
+    assert main(["telemetry"]) == 1
+    assert "[UNEXPECTED]" in capsys.readouterr().out
+
+
+def test_vf_empty_curve_returns_one(cli_env: _FakeApi, capsys) -> None:
+    """Кривая не читается — честный [FAIL] с кодом 1, не пустой успех."""
+    cli_env.read_vf_curve = lambda _handle: []  # type: ignore[method-assign]
+    assert main(["vf"]) == 1
+    assert "[FAIL]" in capsys.readouterr().out
+
+
+def test_vf_igcl_error_returns_one(cli_env: _FakeApi, capsys) -> None:
+    def broken(_handle: object) -> list:
+        raise IgclError(0x40000006, "ctlOverclockVfCurveGet")
+
+    cli_env.read_vf_curve = broken  # type: ignore[method-assign]
+    assert main(["vf"]) == 1
+    assert "[FAIL]" in capsys.readouterr().out
+
+
+def test_fans_declined_confirmation_returns_one(cli_env: _FakeApi, monkeypatch) -> None:
+    """Отказ пользователя от фиксации RPM → 1, карта не тронута."""
+    fan = object()
+    fixed: list[int] = []
+    cli_env.enum_fans = lambda _handle: [fan]  # type: ignore[method-assign]
+    cli_env.get_fan_properties = lambda _f: SimpleNamespace(  # type: ignore[method-assign]
+        supportedModes=2, canControl=True, maxRPM=3000
+    )
+    cli_env.get_fan_speed = lambda _f: 1200  # type: ignore[method-assign]
+    cli_env.set_fan_fixed_speed = lambda _f, rpm: fixed.append(rpm)  # type: ignore[method-assign]
+    monkeypatch.setattr("builtins.input", lambda _prompt: "n")
+    assert main(["fans", "--set", "1800"]) == 1
+    assert fixed == []  # ни одной записи на карту
+
+
+def test_fans_set_success_returns_zero(cli_env: _FakeApi) -> None:
+    """Фиксация RPM → 0, запись API и журнал fan[0] на месте."""
+    fan = object()
+    fixed: list[int] = []
+    cli_env.enum_fans = lambda _handle: [fan]  # type: ignore[method-assign]
+    cli_env.get_fan_properties = lambda _f: SimpleNamespace(  # type: ignore[method-assign]
+        supportedModes=2, canControl=True, maxRPM=3000
+    )
+    cli_env.get_fan_speed = lambda _f: 1200  # type: ignore[method-assign]
+    cli_env.set_fan_fixed_speed = lambda _f, rpm: fixed.append(rpm)  # type: ignore[method-assign]
+    assert main(["fans", "--set", "1800", "--yes"]) == 0
+    assert fixed == [1800]
+    entry = Logbook(default_logbook_path()).read_all()[-1]
+    assert entry.field == "fan[0]"
+    assert entry.new == 1800.0
+
+
+def test_fans_journal_failure_returns_one_and_reverts_fan(
+    cli_env: _FakeApi, monkeypatch, capsys
+) -> None:
+    """Журнал не записался после фиксации RPM: вентилятор возвращён в авто, код 1."""
+    fan = object()
+    cli_env.enum_fans = lambda _handle: [fan]  # type: ignore[method-assign]
+    cli_env.get_fan_properties = lambda _f: SimpleNamespace(  # type: ignore[method-assign]
+        supportedModes=2, canControl=True, maxRPM=3000
+    )
+    cli_env.get_fan_speed = lambda _f: 1200  # type: ignore[method-assign]
+    cli_env.set_fan_fixed_speed = lambda _f, _rpm: None  # type: ignore[method-assign]
+    reverted: list[object] = []
+    cli_env.set_fan_default = lambda f: reverted.append(f)  # type: ignore[method-assign]
+
+    class FailingLogbook:
+        def __init__(self, path: Path) -> None:
+            self.path = path
+
+        def record(self, *_args: object, **_kwargs: object) -> None:
+            raise JournalWriteError("нет места в журнале")
+
+    monkeypatch.setattr("arctuner.logbook.Logbook", FailingLogbook)
+    assert main(["fans", "--set", "1800", "--yes"]) == 1
+    assert reverted == [fan]  # карта возвращена в авто до падения
+    assert "журнал не записан" in capsys.readouterr().out
+
+
+def test_reset_fans_igcl_error_returns_one(cli_env: _FakeApi, capsys) -> None:
+    fan = object()
+    cli_env.enum_fans = lambda _handle: [fan]  # type: ignore[method-assign]
+
+    def broken(_f: object) -> None:
+        raise IgclError(0x44000001, "ctlFanDefaultSet")
+
+    cli_env.set_fan_default = broken  # type: ignore[method-assign]
+    assert main(["reset", "--fans", "--yes"]) == 1
+    assert "[FAIL]" in capsys.readouterr().out
+
+
+def test_reset_oc_success_returns_zero(cli_env: _FakeApi) -> None:
+    """reset --oc → 0: карта в дефолте, маркер reset_oc записан в журнал."""
+    cli_env.reset_to_default = lambda _handle: None  # type: ignore[method-assign]
+    assert main(["reset", "--oc", "--yes"]) == 0
+    assert Logbook(default_logbook_path()).read_all()[-1].field == RESET_OC_FIELD
+
+
+def test_reset_oc_journal_failure_returns_one(cli_env: _FakeApi, monkeypatch, capsys) -> None:
+    """OC сброшены, но маркер в журнал не записан — код 1, с честным сообщением."""
+    cli_env.reset_to_default = lambda _handle: None  # type: ignore[method-assign]
+
+    def boom(self: object, *_args: object, **_kwargs: object) -> None:
+        raise OSError("нет места")
+
+    monkeypatch.setattr("arctuner.logbook.Logbook.record", boom)
+    assert main(["reset", "--oc", "--yes"]) == 1
+    assert "журнал не записан" in capsys.readouterr().out
+
+
+# --- autofind: коды ошибок движка ---
+
+
+class _FakeCtx:
+    """GpuContext-дублёр: open/close без IGCL, info = None (нет устройства)."""
+
+    info = None
+
+    def __enter__(self) -> _FakeCtx:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        pass
+
+
+@pytest.fixture()
+def autofind_env(monkeypatch) -> None:
+    """Подменяет контекст/движок/watchdog autofind (без железа и Qt)."""
+    monkeypatch.setenv("ARCTUNE_LOG", "unused-logbook.jsonl")
+    monkeypatch.setattr("arctuner.context.GpuContext", _FakeCtx)
+    monkeypatch.setattr(watchdog_mod, "Watchdog", _FakeWatchdog)
+
+
+class _FakeWatchdog:
+    def __init__(self, device: str = "") -> None:
+        self.device = device
+
+
+def _engine_raising(exc: BaseException) -> type:
+    class _FailingEngine:
+        def __init__(self, ctx: object, cfg: object, *, watchdog: object = None) -> None:
+            pass
+
+        def run(self, **_kwargs: object) -> object:
+            raise exc
+
+    return _FailingEngine
+
+
+def test_autofind_abort_returns_one(autofind_env, monkeypatch, capsys) -> None:
+    abort = _engine_raising(engine_mod.AutotuneAbortError("нет нагрузки"))
+    monkeypatch.setattr(engine_mod, "TuningEngine", abort)
+    assert main(["autofind", "--yes"]) == 1
+    assert "[ABORT]" in capsys.readouterr().out
+
+
+def test_autofind_safety_limit_returns_one(autofind_env, monkeypatch, capsys) -> None:
+    monkeypatch.setattr(engine_mod, "TuningEngine", _engine_raising(SafetyLimitError("предел")))
+    assert main(["autofind", "--yes"]) == 1
+    out = capsys.readouterr().out
+    assert "[FAIL]" in out and "выполнен откат" in out
+
+
+# --- main(): последний рубеж ---
+
+
+def test_main_keyboard_interrupt_returns_130(monkeypatch, capsys) -> None:
+    def kb(_args: object) -> int:
         raise KeyboardInterrupt
 
-    monkeypatch.setattr("arctuner.cli.cmd_doctor", boom)
+    monkeypatch.setattr("arctuner.cli.cmd_doctor", kb)
     assert main(["doctor"]) == 130
-    assert "Прервано" in capsys.readouterr().out
+    assert "Прервано пользователем" in capsys.readouterr().out
+
+
+def test_main_help_raises_systemexit_zero() -> None:
+    """argparse --help штатно завершается SystemExit(0) — main его не гасит."""
+    with pytest.raises(SystemExit) as exc:
+        main(["--help"])
+    assert exc.value.code == 0
+
+
+def test_main_bad_arguments_raises_systemexit_two() -> None:
+    """Неизвестный аргумент — usage от argparse и SystemExit(2), не return."""
+    with pytest.raises(SystemExit) as exc:
+        main(["telemetry", "--bogus-flag"])
+    assert exc.value.code == 2
 
 
 def test_main_reraises_systemexit_from_command(monkeypatch) -> None:
     """SystemExit от команды не «съедается» catch-all'ом — пробрасывается."""
 
-    def halt(_args: argparse.Namespace) -> int:
+    def halt(_args: object) -> int:
         raise SystemExit(5)
 
     monkeypatch.setattr("arctuner.cli.cmd_doctor", halt)
-    with pytest.raises(SystemExit) as excinfo:
+    with pytest.raises(SystemExit) as exc:
         main(["doctor"])
-    assert excinfo.value.code == 5
-
-
-# --- telemetry ---
-
-
-def test_telemetry_success_returns_zero(monkeypatch, capsys) -> None:
-    _fake_igcl(monkeypatch, _FakeApi())
-    assert cmd_telemetry(build_parser().parse_args(["telemetry"])) == 0
-    out = capsys.readouterr().out
-    assert "Intel Arc B580" in out
-    assert "Телеметрия" in out
-
-
-def test_telemetry_without_adapter_returns_one(monkeypatch, capsys) -> None:
-    _fake_igcl(monkeypatch, _FakeApi(), found=False)
-    assert cmd_telemetry(build_parser().parse_args(["telemetry"])) == 1
-    assert "[FAIL]" in capsys.readouterr().out
-
-
-def test_telemetry_igcl_error_returns_one(monkeypatch, capsys) -> None:
-    """Сбой чтения телеметрии ловится catch-all'ом команды → 1, не traceback."""
-
-    class BrokenApi(_FakeApi):
-        def read_power_telemetry(self, handle: object) -> TelemetrySnapshot:
-            from arctuner.igcl.api import IgclError
-
-            raise IgclError(0x44000002, "ctlPowerTelemetryGet")
-
-    _fake_igcl(monkeypatch, BrokenApi())
-    assert cmd_telemetry(build_parser().parse_args(["telemetry"])) == 1
-    assert "[UNEXPECTED]" in capsys.readouterr().out
-
-
-# --- status ---
-
-
-def test_status_success_returns_zero(monkeypatch, capsys) -> None:
-    _fake_igcl(monkeypatch, _FakeApi())
-    assert cmd_status(build_parser().parse_args(["status"])) == 0
-    out = capsys.readouterr().out
-    assert "powerLimit" in out
-    assert "Разгон поддерживается" in out
-
-
-def test_status_without_adapter_returns_one(monkeypatch, capsys) -> None:
-    _fake_igcl(monkeypatch, _FakeApi(), found=False)
-    assert cmd_status(build_parser().parse_args(["status"])) == 1
-    assert "[FAIL]" in capsys.readouterr().out
-
-
-# --- set ---
-
-
-def test_set_without_changes_returns_two(capsys) -> None:
-    """set без параметров — ошибка использования (2), IGCL не трогается."""
-    assert cmd_set(build_parser().parse_args(["set"])) == 2
-    assert "Нечего менять" in capsys.readouterr().out
-
-
-def test_set_decline_returns_one(monkeypatch, capsys) -> None:
-    """Отказ пользователя от записи → 1, карта не тронута."""
-    monkeypatch.setattr("builtins.input", lambda _prompt: "n")
-    args = build_parser().parse_args(["set", "--power-limit", "110"])
-    assert cmd_set(args) == 1
-    assert "Отменено" in capsys.readouterr().out
-
-
-def test_set_eof_returns_one(monkeypatch, capsys) -> None:
-    """Конец ввода вместо ответа — отмена записи, код 1."""
-
-    def eof(_prompt: str) -> str:
-        raise EOFError
-
-    monkeypatch.setattr("builtins.input", eof)
-    args = build_parser().parse_args(["set", "--power-limit", "110"])
-    assert cmd_set(args) == 1
-    assert "конец ввода" in capsys.readouterr().out
-
-
-def test_set_without_adapter_returns_one(monkeypatch) -> None:
-    _fake_igcl(monkeypatch, _FakeApi(), found=False)
-    args = build_parser().parse_args(["set", "--power-limit", "110", "--yes"])
-    assert cmd_set(args) == 1
-
-
-def test_set_safety_limit_returns_one(monkeypatch, tmp_path, capsys) -> None:
-    """500% питания — за жёстким потолком B580 (120%) → SafetyLimitError → 1."""
-    monkeypatch.setenv("ARCTUNE_LOG", str(tmp_path / "logbook.jsonl"))
-    _fake_igcl(monkeypatch, _FakeApi())
-    args = build_parser().parse_args(["set", "--power-limit", "500", "--yes"])
-    assert cmd_set(args) == 1
-    assert "[BLOCK]" in capsys.readouterr().out
-    assert Logbook(default_logbook_path()).read_all() == []  # запись не прошла — журнала нет
-
-
-def test_set_igcl_error_returns_one(monkeypatch, tmp_path, capsys) -> None:
-    """Ошибка драйвера при записи → 1 (частичный откат уже покрыт в test_cli)."""
-    monkeypatch.setenv("ARCTUNE_LOG", str(tmp_path / "logbook.jsonl"))
-    _fake_igcl(monkeypatch, _BrokenWriteApi())
-    args = build_parser().parse_args(["set", "--power-limit", "110", "--yes"])
-    assert cmd_set(args) == 1
-    assert "[BLOCK]" in capsys.readouterr().out
-
-
-def test_set_success_returns_zero(monkeypatch, tmp_path) -> None:
-    """Успешная запись → 0, вызов API и запись журнала на месте."""
-    monkeypatch.setenv("ARCTUNE_LOG", str(tmp_path / "logbook.jsonl"))
-    api = _FakeApi()
-    _fake_igcl(monkeypatch, api)
-    args = build_parser().parse_args(["set", "--power-limit", "110", "--yes"])
-    assert cmd_set(args) == 0
-    assert api.written_power == [110.0]
-    entry = Logbook(default_logbook_path()).read_all()[-1]
-    assert entry.field == "powerLimit"
-    assert entry.new == 110.0
-
-
-# --- reset ---
-
-
-def test_reset_without_flags_returns_two(capsys) -> None:
-    """reset без --oc/--fans — ошибка использования (2), IGCL не трогается."""
-    args = argparse.Namespace(oc=False, fans=False, yes=True)
-    assert cmd_reset(args) == 2
-    assert "Укажите" in capsys.readouterr().out
-
-
-def test_reset_without_adapter_returns_one(monkeypatch) -> None:
-    _fake_igcl(monkeypatch, _FakeApi(), found=False)
-    args = argparse.Namespace(oc=True, fans=False, yes=True)
-    assert cmd_reset(args) == 1
-
-
-def test_reset_oc_success_returns_zero(monkeypatch, tmp_path) -> None:
-    monkeypatch.setenv("ARCTUNE_LOG", str(tmp_path / "logbook.jsonl"))
-    api = _FakeApi()
-    _fake_igcl(monkeypatch, api)
-    args = argparse.Namespace(oc=True, fans=False, yes=True)
-    assert cmd_reset(args) == 0
-    assert api.resets == 1
-    assert Logbook(default_logbook_path()).read_all()[-1].field == RESET_OC_FIELD
-
-
-# --- fans ---
-
-
-def test_fans_without_adapter_returns_one(monkeypatch) -> None:
-    _fake_igcl(monkeypatch, _FanApi(), found=False)
-    assert cmd_fans(build_parser().parse_args(["fans"])) == 1
-
-
-def test_fans_decline_returns_one(monkeypatch, capsys) -> None:
-    monkeypatch.setattr("builtins.input", lambda _prompt: "n")
-    args = build_parser().parse_args(["fans", "--set", "1800"])
-    assert cmd_fans(args) == 1
-    assert "Отменено" in capsys.readouterr().out
-
-
-def test_fans_set_success_returns_zero(monkeypatch, tmp_path) -> None:
-    monkeypatch.setenv("ARCTUNE_LOG", str(tmp_path / "logbook.jsonl"))
-    api = _FanApi()
-    _fake_igcl(monkeypatch, api)
-    args = build_parser().parse_args(["fans", "--set", "1800", "--yes"])
-    assert cmd_fans(args) == 0
-    assert api.fixed == [1800]
-    assert Logbook(default_logbook_path()).read_all()[-1].field == "fan[0]"
+    assert exc.value.code == 5

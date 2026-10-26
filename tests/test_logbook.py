@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from arctuner.logbook import (
@@ -246,6 +248,142 @@ def test_compute_rollback_targets_respects_reset(tmp_path) -> None:
     ]
     targets = compute_rollback_targets(entries)
     assert targets == {"powerLimit": 110.0}  # после сброса
+
+
+# --- атомарность _rewrite: сбой не теряет историю ---
+
+
+def test_rewrite_atomic_on_mkstemp_failure(tmp_path, monkeypatch) -> None:
+    """Сбой mkstemp (до записи): исходник не тронут, tmp-файлов не остаётся."""
+    log = Logbook(tmp_path / "log.jsonl")
+    log.record("powerLimit", 100.0, 110.0)
+    log.record("gpuFrequencyOffset", 0.0, 50.0)
+    before = log.path.read_text(encoding="utf-8")
+
+    def boom(*_args: object, **_kwargs: object) -> None:
+        raise OSError("нет места во временном каталоге")
+
+    monkeypatch.setattr("arctuner.logbook.tempfile.mkstemp", boom)
+    with pytest.raises(OSError, match="нет места"):
+        log.mark_restored("powerLimit")
+    assert log.path.read_text(encoding="utf-8") == before
+    # Журнал остаётся валидным JSONL: обе записи читаются как прежде.
+    assert [e.field for e in log.read_all()] == ["powerLimit", "gpuFrequencyOffset"]
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_rewrite_fsync_failure_keeps_journal_valid_jsonl(tmp_path, monkeypatch) -> None:
+    """Сбой fsync посреди перезаписи: исходный JSONL валиден, tmp убран."""
+    log = Logbook(tmp_path / "log.jsonl")
+    log.record("powerLimit", 100.0, 110.0)
+    before = log.path.read_text(encoding="utf-8")
+
+    def boom(_fd: int) -> None:
+        raise OSError("fsync упал")
+
+    monkeypatch.setattr("arctuner.logbook.os.fsync", boom)
+    with pytest.raises(OSError, match="fsync"):
+        log.mark_restored("powerLimit")
+    assert log.path.read_text(encoding="utf-8") == before
+    # Каждая строка — валидный JSON: файл не обрезан и не обнулён.
+    for line in log.path.read_text(encoding="utf-8").splitlines():
+        json.loads(line)
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_record_propagates_oserror(tmp_path, monkeypatch) -> None:
+    """Сбой записи журнала не глотается: вызывающий видит настоящий OSError."""
+
+    def boom(_fd: int) -> None:
+        raise OSError("диск полон")
+
+    monkeypatch.setattr("arctuner.logbook.os.fsync", boom)
+    log = Logbook(tmp_path / "log.jsonl")
+    with pytest.raises(OSError, match="диск полон"):
+        log.record("powerLimit", 100.0, 110.0)
+
+
+# --- mark_restored: идемпотентность ---
+
+
+def test_mark_restored_idempotent(tmp_path) -> None:
+    """Повторный mark_restored — no-op: журнал байт-в-байт тот же, без дублей."""
+    log = Logbook(tmp_path / "log.jsonl")
+    log.record("powerLimit", 100.0, 110.0)
+    log.mark_restored("powerLimit")
+    after_first = log.path.read_text(encoding="utf-8")
+    log.mark_restored("powerLimit")
+    assert log.path.read_text(encoding="utf-8") == after_first
+    flags = [e.restored for e in log.read_all() if e.field == "powerLimit"]
+    assert flags == [True]  # одна запись — один флаг
+
+
+def test_mark_restored_unknown_field_changes_nothing(tmp_path) -> None:
+    """Поля нет в журнале — ни одна запись не помечается, содержимое не меняется."""
+    log = Logbook(tmp_path / "log.jsonl")
+    log.record("powerLimit", 100.0, 110.0)
+    before = log.path.read_text(encoding="utf-8")
+    log.mark_restored("vramMemSpeedLimit")
+    assert log.path.read_text(encoding="utf-8") == before
+    assert all(not e.restored for e in log.read_all())
+
+
+def test_mark_restored_marks_only_newest_active_entry(tmp_path) -> None:
+    """Из двух записей поля восстанавливается только последняя (как cmd_log)."""
+    log = Logbook(tmp_path / "log.jsonl")
+    log.record("powerLimit", 100.0, 110.0)
+    log.record("powerLimit", 110.0, 120.0)
+    log.mark_restored("powerLimit")
+    flags = [e.restored for e in log.read_all() if e.field == "powerLimit"]
+    assert flags == [False, True]
+    assert log.rollback_targets() == {}  # последняя восстановлена — цель снята
+
+
+# --- compute_rollback_targets: edge-cases ---
+
+
+def test_compute_targets_empty_entries() -> None:
+    from arctuner.logbook import compute_rollback_targets
+
+    assert compute_rollback_targets([]) == {}
+
+
+def test_compute_targets_only_restored_entries_removed() -> None:
+    """Поле ТОЛЬКО с restored-записями убирается из целей: откатывать нечего."""
+    from arctuner.logbook import LogEntry, compute_rollback_targets
+
+    ts = "2026-01-01T00:00:00+00:00"
+    entries = [
+        LogEntry(timestamp=ts, field="powerLimit", old=100.0, new=110.0, restored=True),
+        LogEntry(timestamp=ts, field="gpuFrequencyOffset", old=0.0, new=50.0, restored=True),
+    ]
+    assert compute_rollback_targets(entries) == {}
+
+
+def test_compute_targets_fan_fields_and_reset_fans_ignored() -> None:
+    """fan[*] и маркер reset_fans — не цели; OC-поля при этом сохраняются."""
+    from arctuner.logbook import RESET_FANS_FIELD, LogEntry, compute_rollback_targets
+
+    ts = "2026-01-01T00:00:00+00:00"
+    entries = [
+        LogEntry(timestamp=ts, field="powerLimit", old=100.0, new=120.0),
+        LogEntry(timestamp=ts, field="fan[0]", old=1200.0, new=1800.0),
+        LogEntry(timestamp=ts, field=RESET_FANS_FIELD, old=None, new=None),
+        LogEntry(timestamp=ts, field="fan[1]", old=1100.0, new=1500.0),
+    ]
+    assert compute_rollback_targets(entries) == {"powerLimit": 100.0}
+
+
+def test_compute_targets_entry_without_old_is_not_a_target() -> None:
+    """old=None («было» неизвестно) — поле не становится целью отката."""
+    from arctuner.logbook import LogEntry, compute_rollback_targets
+
+    ts = "2026-01-01T00:00:00+00:00"
+    entries = [
+        LogEntry(timestamp=ts, field="powerLimit", old=None, new=120.0),
+        LogEntry(timestamp=ts, field="gpuFrequencyOffset", old=0.0, new=50.0),
+    ]
+    assert compute_rollback_targets(entries) == {"gpuFrequencyOffset": 0.0}
 
 
 # --- краевые случаи compute_rollback_targets ---

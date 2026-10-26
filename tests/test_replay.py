@@ -191,6 +191,68 @@ def test_dump_failure_keeps_buffer_and_removes_tmp(tmp_path: Path, monkeypatch) 
     assert replay.samples == 0
 
 
+def test_reset_trigger_dump_contains_pre_and_post_samples(tmp_path: Path) -> None:
+    """Сброс счётчика → дамп: meta с триггером + снимки «до» и сам «сброшенный»."""
+    replay = IncidentReplay(directory=tmp_path, device="B580")
+    replay.push(_snap(gpu_j=1000.0), t=0.0, wall=1700000000.0)
+    replay.push(_snap(gpu_j=1050.0), t=1.0, wall=1700000001.0)
+    trigger = replay.push(_snap(gpu_j=50.0), t=2.0, wall=1700000002.0)
+    assert trigger == "energy_counter_reset_gpu"
+    path = replay.dump(trigger)  # type: ignore[arg-type]
+    meta, rows = _read_dump(path)  # type: ignore[arg-type]
+    assert meta["trigger"] == "energy_counter_reset_gpu"
+    assert meta["samples"] == 3  # контекст «до» и сам момент сброса
+    assert [r["gpu_energy_counter_j"] for r in rows] == [1000.0, 1050.0, 50.0]
+    assert [r["t"] for r in rows] == [0.0, 1.0, 2.0]
+    assert replay.samples == 0  # после дампа буфер пуст
+
+
+def test_one_trigger_per_incident_when_all_counters_drop(tmp_path: Path) -> None:
+    """Падение всех трёх счётчиков — один триггер; база жива, повторов нет."""
+    replay = IncidentReplay(directory=tmp_path)
+    replay.push(_snap(gpu_j=1000.0, card_j=5000.0, vram_j=100.0), t=0.0)
+    first = replay.push(_snap(gpu_j=10.0, card_j=20.0, vram_j=5.0), t=1.0)
+    assert first == "energy_counter_reset_gpu"  # первый опустившийся счётчик
+    # Следующий снимок — не инцидент: база ВСЕХ счётчиков уже обновлена.
+    assert replay.push(_snap(gpu_j=11.0, card_j=21.0, vram_j=6.0), t=2.0) is None
+
+
+def test_no_reset_creates_no_dump_files(tmp_path: Path) -> None:
+    """Без сброса счётчика push не пишет ничего: инцидентов нет — файлов нет."""
+    replay = IncidentReplay(directory=tmp_path)
+    for i in range(5):
+        assert replay.push(_snap(gpu_j=1000.0 + i), t=float(i)) is None
+    assert replay.samples == 5
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_ring_overflow_started_at_moves_with_window(tmp_path: Path) -> None:
+    """После вытеснения started_at — метка СТАРШЕГО из оставшихся, не первого."""
+    from datetime import datetime
+
+    replay = IncidentReplay(max_samples=2, directory=tmp_path)
+    for i in range(5):
+        replay.push(_snap(gpu_j=1000.0 + i), t=float(i), wall=1700000000.0 + i)
+    path = replay.dump("manual_interrupt")
+    meta, rows = _read_dump(path)  # type: ignore[arg-type]
+    # Остались последние два (i=3,4); t отсчитывается от начала окна: 0, 1.
+    assert [r["t"] for r in rows] == [0.0, 1.0]
+    assert [r["gpu_energy_counter_j"] for r in rows] == [1003.0, 1004.0]
+    # started_at = wall старшего оставшегося снимка (1700000003), не первого.
+    started = datetime.fromisoformat(meta["started_at"])
+    assert started.timestamp() == pytest.approx(1700000003.0)
+
+
+def test_second_dump_after_drain_is_none(tmp_path: Path) -> None:
+    """Пустой после дампа буфер: второй dump — None, файлов не прибавилось."""
+    replay = IncidentReplay(directory=tmp_path)
+    replay.push(_snap(), t=0.0, wall=1700000000.0)
+    first = replay.dump("manual_interrupt")
+    assert first is not None and first.exists()
+    assert replay.dump("manual_interrupt") is None
+    assert len(list(tmp_path.glob("incident_*.jsonl"))) == 1
+
+
 # --- дополнительные проверки: эвикция, сброс счётчика, «пустые» пути ---
 
 
