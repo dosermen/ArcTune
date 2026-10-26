@@ -189,3 +189,82 @@ def test_dump_failure_keeps_buffer_and_removes_tmp(tmp_path: Path, monkeypatch) 
     path = replay.dump("manual_interrupt")
     assert path is not None and path.exists()
     assert replay.samples == 0
+
+
+# --- дополнительные проверки: эвикция, сброс счётчика, «пустые» пути ---
+
+
+def _snap_freq(gpu_j: float, freq_mhz: float) -> TelemetrySnapshot:
+    """Снимок с уникальной частотой — чтобы отличать конкретные записи в дампе."""
+    from dataclasses import replace
+
+    return replace(_snap(gpu_j=gpu_j), gpu_freq_mhz=freq_mhz)
+
+
+def test_ring_buffer_evicts_oldest_records_not_random(tmp_path: Path) -> None:
+    """Эвикция выбрасывает СТАРЫЕ записи: в буфере/дампе — только последние.
+
+    started_at должен указывать на первый ОСТАВШИЙСЯ снимок, а не на
+    вытесненный — иначе датчик времени инцидента врёт.
+    """
+    replay = IncidentReplay(max_samples=2, directory=tmp_path)
+    replay.push(_snap_freq(1000.0, 1000.0), t=0.0, wall=1700000000.0)
+    replay.push(_snap_freq(1001.0, 2000.0), t=1.0, wall=1700000100.0)
+    replay.push(_snap_freq(1002.0, 3000.0), t=2.0, wall=1700000200.0)
+
+    path = replay.dump("manual_interrupt")
+    meta, rows = _read_dump(path)  # type: ignore[arg-type]
+    assert meta["samples"] == 2
+    # Вытеснены именно первые два снимка (1000 и 1001 МГц), остались последние.
+    assert [r["gpu_freq_mhz"] for r in rows] == [2000.0, 3000.0]
+    assert [r["gpu_energy_counter_j"] for r in rows] == [1001.0, 1002.0]
+    # started_at — от первого оставшегося снимка (wall=1700000100, не 1700000000).
+    assert meta["started_at"].startswith("2023-11-14T22:15")  # 1700000100 = 22:15:00 UTC
+
+
+def test_reset_dump_contains_post_reset_snapshot(tmp_path: Path) -> None:
+    """Дамп по сбросу счётчика содержит снимок ПОСЛЕ сброса и имя файла с триггером."""
+    replay = IncidentReplay(directory=tmp_path, device="B580")
+    replay.push(_snap(gpu_j=1000.0), t=0.0, wall=1700000000.0)
+    replay.push(_snap(gpu_j=1050.0), t=1.0, wall=1700000001.0)
+    trigger = replay.push(_snap(gpu_j=7.0), t=2.0, wall=1700000002.0)
+    assert trigger == "energy_counter_reset_gpu"
+
+    path = replay.dump(trigger)  # type: ignore[arg-type]
+    meta, rows = _read_dump(path)  # type: ignore[arg-type]
+    assert meta["trigger"] == "energy_counter_reset_gpu"
+    assert meta["samples"] == 3  # контекст до инцидента + сам сброс
+    assert rows[-1]["gpu_energy_counter_j"] == 7.0  # сбросившийся снимок в дампе
+    assert trigger in path.name  # триггер виден в имени файла
+
+
+def test_simultaneous_reset_gives_single_trigger(tmp_path: Path) -> None:
+    """Один перезапуск драйвера = один инцидент, даже если упали все счётчики.
+
+    База обновляется для card/vram даже после найденного сброса — иначе следующий
+    снимок дал бы два ложных дампа на один инцидент.
+    """
+    replay = IncidentReplay(directory=tmp_path)
+    replay.push(_snap(gpu_j=1000.0, card_j=5000.0, vram_j=100.0), t=0.0)
+    # Все три счётчика обнулились одновременно → ровно один триггер (gpu, первый по порядку).
+    assert replay.push(_snap(gpu_j=900.0, card_j=4000.0, vram_j=50.0), t=1.0) == (
+        "energy_counter_reset_gpu"
+    )
+    # Следующий снимок с теми же значениями — без новых инцидентов.
+    assert replay.push(_snap(gpu_j=900.0, card_j=4000.0, vram_j=50.0), t=2.0) is None
+
+
+def test_no_reset_means_no_files(tmp_path: Path) -> None:
+    """Без сбросов и без явного dump() каталог инцидентов не появляется."""
+    replay = IncidentReplay(directory=tmp_path / "incidents")
+    for i in range(5):
+        assert replay.push(_snap(gpu_j=1000.0 + i), t=float(i)) is None
+    assert list((tmp_path / "incidents").glob("*.jsonl")) == []
+
+
+def test_dump_empty_buffer_does_not_create_directory(tmp_path: Path) -> None:
+    """Пустой буфер: dump() → None и каталог не создаётся (пустого дампа не бывает)."""
+    incidents = tmp_path / "incidents"
+    replay = IncidentReplay(directory=incidents)
+    assert replay.dump("energy_counter_reset_gpu") is None
+    assert not incidents.exists()

@@ -246,3 +246,110 @@ def test_compute_rollback_targets_respects_reset(tmp_path) -> None:
     ]
     targets = compute_rollback_targets(entries)
     assert targets == {"powerLimit": 110.0}  # после сброса
+
+
+# --- краевые случаи compute_rollback_targets ---
+
+
+def test_compute_rollback_targets_empty_entries() -> None:
+    """Пустой журнал — пустые цели, без сюрпризов."""
+    from arctuner.logbook import compute_rollback_targets
+
+    assert compute_rollback_targets([]) == {}
+
+
+def test_compute_rollback_targets_only_restored_entries() -> None:
+    """Поле, у которого ВСЕ записи уже restored, — не цель (откат отката)."""
+    from arctuner.logbook import LogEntry, compute_rollback_targets
+
+    entries = [
+        LogEntry(timestamp="t1", field="powerLimit", old=100.0, new=110.0, restored=True),
+        LogEntry(timestamp="t2", field="gpuFrequencyOffset", old=0.0, new=500.0, restored=True),
+    ]
+    assert compute_rollback_targets(entries) == {}
+
+
+def test_compute_rollback_targets_fan_fields_ignored() -> None:
+    """fan[*] — не цель отката ни с каким old, включая индексы > 9."""
+    from arctuner.logbook import LogEntry, compute_rollback_targets
+
+    entries = [
+        LogEntry(timestamp="t1", field="fan[0]", old=1200.0, new=1800.0),
+        LogEntry(timestamp="t2", field="fan[12]", old=1300.0, new=1900.0),
+        LogEntry(timestamp="t3", field="powerLimit", old=100.0, new=110.0),
+    ]
+    targets = compute_rollback_targets(entries)
+    assert targets == {"powerLimit": 100.0}
+
+
+def test_compute_rollback_targets_reset_fans_marker_not_clearing_oc() -> None:
+    """reset_fans-маркер не трогает цели OC и сам не становится целью."""
+    from arctuner.logbook import LogEntry, compute_rollback_targets
+
+    entries = [
+        LogEntry(timestamp="t1", field="powerLimit", old=100.0, new=120.0),
+        LogEntry(timestamp="t2", field=RESET_FANS_FIELD, old=None, new=None),
+        LogEntry(timestamp="t3", field="fan[0]", old=1800.0, new=0.0),
+    ]
+    assert compute_rollback_targets(entries) == {"powerLimit": 100.0}
+
+
+# --- устойчивость записи/перезаписи журнала ---
+
+
+def test_record_write_failure_raises_oserror(tmp_path, monkeypatch) -> None:
+    """Сбой fsync при append всплывает как OSError — молчаливая потеря недопустима."""
+    log = Logbook(tmp_path / "log.jsonl")
+
+    def boom(_fd: int) -> None:
+        raise OSError("диск полон")
+
+    monkeypatch.setattr("arctuner.logbook.os.fsync", boom)
+    with pytest.raises(OSError, match="диск полон"):
+        log.record("powerLimit", 100.0, 110.0)
+
+
+def test_rewrite_mkstemp_failure_keeps_journal(tmp_path, monkeypatch) -> None:
+    """Сбой на этапе mkstemp: mark_restored падает, старый файл цел, *.tmp нет."""
+    log = Logbook(tmp_path / "log.jsonl")
+    log.record("powerLimit", 100.0, 110.0)
+    before = log.path.read_text(encoding="utf-8")
+
+    def boom(*args: object, **kwargs: object) -> None:
+        raise OSError("нет места во временных файлах")
+
+    monkeypatch.setattr("arctuner.logbook.tempfile.mkstemp", boom)
+    with pytest.raises(OSError):
+        log.mark_restored("powerLimit")
+    assert log.path.read_text(encoding="utf-8") == before
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_mark_restored_twice_is_idempotent(tmp_path) -> None:
+    """Повторный mark_restored не меняет файл: последняя запись уже restored."""
+    log = Logbook(tmp_path / "log.jsonl")
+    log.record("powerLimit", 100.0, 110.0)
+    log.mark_restored("powerLimit")
+    after_first = log.path.read_bytes()
+    log.mark_restored("powerLimit")
+    assert log.path.read_bytes() == after_first  # байт-в-байт тот же файл
+    assert [e.restored for e in log.read_all()] == [True]
+
+
+def test_mark_restored_unknown_field_keeps_entries(tmp_path) -> None:
+    """Несуществующее поле: записей для флипа нет, содержимое журнала не меняется."""
+    log = Logbook(tmp_path / "log.jsonl")
+    log.record("powerLimit", 100.0, 110.0)
+    before = log.path.read_text(encoding="utf-8")
+    log.mark_restored("fan[9]")  # такого поля в журнале нет
+    assert log.path.read_text(encoding="utf-8") == before
+    assert log.read_all()[0].restored is False
+
+
+def test_mark_restored_on_missing_file_creates_empty(tmp_path) -> None:
+    """Журнала нет: mark_restored не падает, создаёт пустой (валидный) файл."""
+    log = Logbook(tmp_path / "log.jsonl")
+    log.mark_restored("powerLimit")
+    assert log.path.exists()
+    assert log.path.read_text(encoding="utf-8") == ""
+    assert log.read_all() == []
