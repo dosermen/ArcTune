@@ -84,22 +84,24 @@
 
 ### Инфраструктура и устойчивость
 
-- [x] **CI** (`.github/workflows/ci.yml`): ruff format/check + mypy + pytest `-m "not hardware"`
-  (с покрытием) + сборка CLI/GUI exe + smoke-запуск CLI — python 3.10–3.12, windows-latest
-- [x] **mypy без ошибок** (62 → 0 по всем 39 файлам src/) + шаг в CI; строгий
-  strict-режим остаётся перспективой
-- [x] **Release по тегу** (`.github/workflows/release.yml`): `git tag v*` → сверка
-  тега с `__version__` → сборка exe → GitHub Release с артефактами zip
-- [x] **Единый источник версии**: `pyproject.toml` → dynamic, читает `__version__`
-  из `src/arctuner/__init__.py`
-- [x] **Покрытие в обычном прогоне pytest** (`--cov=arctuner`, branch): сейчас ~73 %,
-  регрессия видна сразу
-- [x] **pre-commit** (`.pre-commit-config.yaml`): локальные system-хуки ruff
-  format/check + mypy, без сети и пиннинга версий
-- [x] **ADR-журнал** (`docs/adr/`): 6 принятых архитектурных решений + указатель
-- [x] **Рестарт onefile-exe** — очистка `_PYI*`-переменных (`restart_env`): второй
-  инстанс не стартует из чужого `_MEIxxxx` и не падает при выходе первого
-- [x] **requirements.lock** — воспроизводимые версии зависимостей
+- [x] **CI** (`.github/workflows/ci.yml`): ruff format/check + pytest `-m "not hardware"`
+  + smoke + PyInstaller — python 3.10–3.12, windows-latest. **✅ подтверждено аудитом
+  2026-10-23**: workflow существует. **❌ открытые пробелы**: шаг mypy в workflow
+  отсутствует; job сборки exe и release-публикация — отсутствуют
+- [ ] **mypy строгий** — конфиг `pyproject.toml` есть (`strict = false`,
+  `check_untyped_defs = true`), ошибок пока нет (62 → 0 по файлам); строгий режим —
+  перспектива. **❌ открыт**: строгий mypy + CI-шаг
+- [ ] **Release по тегу** — workflow `release.yml` не подтверждён/отсутствует → задача:
+  tag `v*` → сверка с `__version__` → сборка exe → GitHub Release с артефактами zip
+- [ ] **Единый источник версии** — версия дублируется (`pyproject.toml` 0.1.0 +
+  `src/arctuner/__init__.py` `__version__ = "0.1.0"`) → задача: `dynamic = ["version"]`
+- [ ] **Покрытие pytest** — конфиг `--cov=arctuner` / branch coverage отсутствует;
+  pytest-cov заявлен, но не настроен → задача
+- [ ] **pre-commit** — `.pre-commit-config.yaml` отсутствует → задача (ruff format/check + mypy)
+- [ ] **ADR-журнал** — `docs/adr/` отсутствует → задача (6 ADR + указатель)
+- [x] **Рестарт onefile-exe** — ✅ (очистка `_PYI*` через `restart_env`: второй инстанс
+  не стартует из чужого `_MEIxxxx`)
+- [ ] **requirements.lock** — lock-файл отсутствует → задача (uv.lock / requirements.lock)
 
 ---
 
@@ -116,6 +118,7 @@
 | **CSV-экспорт из GUI** | Экспорт телеметрии из GUI (в worker уже есть `export_vf`, нужна общая `export_telemetry`) |
 | **Вкладка «Об устройстве» в GUI** | PCIe / firmware / ECC / режим вентиляторов — данные уже отдаёт `arctune info`, нужна UI-часть (card widgets) |
 | **Постоянный watchdog** | Fallback-мониторинг вне авторазгона: TDR (Event ID 4101), заморозка телеметрии, аварийная 85 °C, авто-откат OC (только с явной опцией). Каждый — в logbook |
+| **Отображение уровня загрузки GPU/памяти** | ✅ CLI (`telemetry --load`), источник `load_source=igcl` (`ctlEngineGetActivity` + `ctlMemoryGetState`, проверено на B580); pdh/dxgi зарезервированы (см. docs/igcl-api.md). ⏳ осталось: вкладка «Мониторинг» + overlay |
 
 ### Ж — желательно (~4.5 часа)
 
@@ -199,7 +202,7 @@
 
 | Приоритет | Задач | Сложность | Время |
 |---|---|---|---|
-| **С** (критично) | 4 | С (1 функция/вкладка) | **~3 ч** |
+| **С** (критично) | 5 | С (1 функция/вкладка) | **~3.5 ч** |
 | **Ж** (желательно) | 5 | С–М (модуль/обёртка) | **~3.5 ч** |
 | **К** (перспектива) | 14 | М–Л (новый слой) | **~12.5 ч** |
 | **Итого** | **23** |  | **~19 ч** |
@@ -215,13 +218,14 @@
 ## Версия и релиз
 
 - Версия: **0.1.0** — единый источник `src/arctuner/__init__.py` (`__version__`);
-  `pyproject.toml` подключает её через `dynamic = ["version"]`
-- Semver: **MAJOR** — API-ломы; **MINOR** — новые фичи; **PATCH** — исправления
-- CHANGELOG.md: Keep a Changelog v1.0.0
+  `pyproject.toml` подключает её через `dynamic = ["version"]` → **❌ открыт**
+  (версия дублируется: `pyproject.toml` + `src/arctuner/__init__.py`)
+- Semver: **MAJOR** — API-ломы; **MINOR** — новые фичи; **PATCH** — исправления — **✅**
+- CHANGELOG.md: Keep a Changelog v1.0.0 — **✅**
 - CI: `.github/workflows/ci.yml` — ruff + mypy + pytest (с покрытием) + сборка exe
-  (python 3.10–3.12, windows-latest)
+  (python 3.10–3.12, windows-latest) — **✅ CI существует**; mypy-шаг/coverage — **❌ открытые пробелы**
 - Release: `.github/workflows/release.yml` — при теге `v*` сверяет тег с
   `__version__` (расхождение = ошибка, не релиз), собирает exe и публикует
-  GitHub Release с артефактами zip
+  GitHub Release с артефактами zip → **❌ открыт**
 - `git tag` пуст, remote не настроен — релизы ещё не оформлялись (первый тег
   поставить после публикации репозитория)
