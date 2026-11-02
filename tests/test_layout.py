@@ -183,3 +183,62 @@ def test_firmware_properties_layout() -> None:
     assert CtlFirmwareProperties.FirmwareConfig.offset == 136
     assert CtlFirmwareProperties.reserved.offset == 140
     assert ctypes.sizeof(CtlFirmwareProperties) == 156
+
+
+# --- Движки и память (ctlEngine*, ctlMemory*) — загрузка GPU/памяти ---
+# Размеры сверены с igcl_api.h (v1-r1) и подтверждены на живой B580:
+# EngineProperties=12, EngineStats=24, MemProperties=32, MemState=24,
+# MemBandwidth=40.
+
+
+def test_engine_properties_layout() -> None:
+    """_ctl_engine_properties_t: Size(4) + Version(1) + pad + type(4) = 12."""
+    assert T.CtlEngineProperties.Size.offset == 0
+    assert T.CtlEngineProperties.Version.offset == 4
+    assert T.CtlEngineProperties.type.offset == 8  # int (align 4)
+    assert ctypes.sizeof(T.CtlEngineProperties) == 12
+
+
+def test_engine_stats_layout() -> None:
+    """_ctl_engine_stats_t: два u64-счётчика с offset 8/16 = 24."""
+    assert T.CtlEngineStats.Size.offset == 0
+    assert T.CtlEngineStats.Version.offset == 4
+    # u64 → выравнивание 8 → паддинг после Version.
+    assert T.CtlEngineStats.activeTime.offset == 8
+    assert T.CtlEngineStats.timestamp.offset == 16
+    assert ctypes.sizeof(T.CtlEngineStats) == 24
+
+
+def test_mem_properties_layout() -> None:
+    """_ctl_mem_properties_t: type(8)/location(12)/physicalSize(16) = 32."""
+    assert T.CtlMemProperties.Size.offset == 0
+    assert T.CtlMemProperties.Version.offset == 4
+    assert T.CtlMemProperties.type.offset == 8
+    assert T.CtlMemProperties.location.offset == 12
+    assert T.CtlMemProperties.physicalSize.offset == 16  # u64 (align 8)
+    assert T.CtlMemProperties.busWidth.offset == 24
+    assert T.CtlMemProperties.numChannels.offset == 28
+    assert ctypes.sizeof(T.CtlMemProperties) == 32
+
+
+def test_mem_state_layout() -> None:
+    """_ctl_mem_state_t: free(8)/size(16) = 24."""
+    assert T.CtlMemState.Size.offset == 0
+    assert T.CtlMemState.Version.offset == 4
+    assert T.CtlMemState.free.offset == 8
+    assert T.CtlMemState.size.offset == 16
+    assert ctypes.sizeof(T.CtlMemState) == 24
+
+
+def test_mem_bandwidth_layout() -> None:
+    """_ctl_mem_bandwidth_t: 4×u64 после заголовка = 40.
+
+    readCounter/writeCounter валидны только при Version > 0 (igcl_api.h).
+    """
+    assert T.CtlMemBandwidth.Size.offset == 0
+    assert T.CtlMemBandwidth.Version.offset == 4
+    assert T.CtlMemBandwidth.maxBandwidth.offset == 8
+    assert T.CtlMemBandwidth.timestamp.offset == 16
+    assert T.CtlMemBandwidth.readCounter.offset == 24
+    assert T.CtlMemBandwidth.writeCounter.offset == 32
+    assert ctypes.sizeof(T.CtlMemBandwidth) == 40

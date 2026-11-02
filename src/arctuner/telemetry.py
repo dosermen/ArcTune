@@ -9,7 +9,17 @@ from __future__ import annotations
 import time
 from dataclasses import replace
 
-from arctuner.igcl.api import CtlDeviceHandle, DeviceInfo, IgclApi, TelemetrySnapshot
+from arctuner.igcl import types as T
+from arctuner.igcl.api import (
+    CtlDeviceHandle,
+    CtlEngineHandle,
+    CtlMemHandle,
+    DeviceInfo,
+    IgclApi,
+    IgclError,
+    TelemetrySnapshot,
+)
+from arctuner.loadsource import SOURCE_IGCL, SOURCE_LABELS, current_source
 
 
 def find_arc_adapter(api: IgclApi) -> tuple[CtlDeviceHandle, DeviceInfo] | None:
@@ -99,4 +109,106 @@ class PowerMeter:
         return delta_j / dt, (now, energy_j)
 
 
-__all__ = ["PowerMeter", "find_arc_adapter", "read_snapshot"]
+class LoadMeter:
+    """Считает загрузку ядра (%) и память (байты/%) — read-only.
+
+    **Загрузка ядра**: два снимка ``ctlEngineGetActivity`` →
+    ``%util = ΔactiveTime / Δtimestamp`` (формула из igcl_api.h). Первый снимок —
+    база, % нет — так же, как у PowerMeter нет Вт на первом тике.
+
+    **Память**: ``ctlMemoryGetState`` → ``used = size − free``,
+    ``% = 100 · used / size`` — без дельты, доступна сразу с первого тика.
+
+    Источник берётся из настройки (см. arctuner.loadsource); сейчас реализован
+    только ``igcl`` — прочие источники честно отклоняются при создании, без
+    тихого отката.
+
+    Один экземпляр на один поток опроса (не потокобезопасен).
+    """
+
+    #: минимальный интервал (мкс) между снимками для честного % (аналог min_gap
+    #: у PowerMeter): короче — шум квантования, базу не сдвигаем.
+    _MIN_GAP_US = 100_000  # 0.1 с
+
+    def __init__(
+        self,
+        api: IgclApi,
+        handle: CtlDeviceHandle,
+        source: str | None = None,
+    ) -> None:
+        src = source or current_source()
+        if src != SOURCE_IGCL:
+            raise NotImplementedError(
+                f"Источник загрузки {src!r} "
+                f"({SOURCE_LABELS.get(src, src)}) ещё не реализован — "
+                f"используйте {SOURCE_IGCL!r}."
+            )
+        self._api = api
+        loader = api.loader
+        # GT-движок (все движки вместе) — итоговая загрузка ядра.
+        self._engine: CtlEngineHandle | None = None
+        if loader.has("ctlEnumEngineGroups") and loader.has("ctlEngineGetActivity"):
+            for eng in api.enumerate_engine_groups(handle):
+                try:
+                    if api.get_engine_properties(eng) == T.CtlEngineGroup.GT:
+                        self._engine = eng
+                        break
+                except IgclError:
+                    continue  # группа не отдала свойства — пропускаем
+        # Первый модуль памяти (на B580 их один).
+        self._mem: CtlMemHandle | None = None
+        if loader.has("ctlEnumMemoryModules") and loader.has("ctlMemoryGetState"):
+            mods = api.enumerate_memory_modules(handle)
+            if mods:
+                self._mem = mods[0]
+        # База дельты для % загрузки (первый снимок).
+        self._prev: tuple[int, int] | None = None
+        if self._engine is not None:
+            act = api.read_engine_activity(self._engine)
+            self._prev = (act.active_time_us, act.timestamp_us)
+
+    def enrich(self, snap: TelemetrySnapshot) -> TelemetrySnapshot:
+        """Возвращает копию снимка с заполненными load % и памятью.
+
+        Args:
+            snap: снимок от read_power_telemetry.
+
+        Returns:
+            Новый снимок (frozen dataclass — исходный не меняется).
+        """
+        load: float | None = None
+        if self._engine is not None:
+            act = self._api.read_engine_activity(self._engine)
+            load = self._step(act.active_time_us, act.timestamp_us)
+        used: int | None = None
+        total: int | None = None
+        pct: float | None = None
+        if self._mem is not None:
+            st = self._api.read_memory_state(self._mem)
+            used, total, pct = st.used, st.size, st.percent
+        return replace(
+            snap,
+            gpu_load_percent=load,
+            vram_used_bytes=used,
+            vram_total_bytes=total,
+            vram_percent=pct,
+        )
+
+    def _step(self, active_us: int, ts_us: int) -> float | None:
+        """Один шаг расчёта % загрузки: (%, новая база)."""
+        if self._prev is None:
+            self._prev = (active_us, ts_us)
+            return None
+        pa, pt = self._prev
+        d_active = active_us - pa
+        d_ts = ts_us - pt
+        if d_ts <= 0 or d_active < 0:
+            self._prev = (active_us, ts_us)  # откат счётчика (рестарт драйвера)
+            return None
+        if d_ts < self._MIN_GAP_US:
+            return None  # базу не сдвигаем — интервал накопится
+        self._prev = (active_us, ts_us)
+        return max(0.0, min(100.0, 100.0 * d_active / d_ts))
+
+
+__all__ = ["LoadMeter", "PowerMeter", "find_arc_adapter", "read_snapshot"]

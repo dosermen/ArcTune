@@ -33,6 +33,8 @@ def _check(code: int, func: str) -> None:
 CtlApiHandle = ctypes.c_void_p
 CtlDeviceHandle = ctypes.c_void_p
 CtlFanHandle = ctypes.c_void_p
+CtlEngineHandle = ctypes.c_void_p
+CtlMemHandle = ctypes.c_void_p
 
 
 @dataclass(frozen=True)
@@ -153,6 +155,50 @@ class FanConfigInfo:
 
 
 @dataclass(frozen=True)
+class EngineActivity:
+    """Счётчики активности движков (ctlEngineGetActivity).
+
+    active_time_us/timestamp_us — монотонные счётчики в микросекундах.
+    %загрузки = ΔactiveTime / Δtimestamp двух снимков ОДНОГО движка
+    (формула из igcl_api.h); сам объект % здесь не считает.
+    """
+
+    active_time_us: int
+    timestamp_us: int
+
+
+@dataclass(frozen=True)
+class MemoryModuleInfo:
+    """Свойства модуля памяти (ctlMemoryGetProperties)."""
+
+    mem_type: int  # ctl_mem_type_t (12 = GDDR6 на B580)
+    location: int  # ctl_mem_loc_t (1 = device)
+    physical_size: int  # байты; 0 = неизвестно
+    bus_width: int  # бит; -1 = неизвестно
+    num_channels: int  # -1 = неизвестно
+
+
+@dataclass(frozen=True)
+class MemoryState:
+    """Занято/свободно памяти (ctlMemoryGetState), байты."""
+
+    free: int
+    size: int  # всего выделяемого (≤ physicalSize)
+
+    @property
+    def used(self) -> int:
+        """Занято = size − free (байты)."""
+        return max(0, self.size - self.free)
+
+    @property
+    def percent(self) -> float | None:
+        """% занятости: 100 * (size − free) / size — формула из igcl_api.h."""
+        if self.size <= 0:
+            return None
+        return 100.0 * self.used / self.size
+
+
+@dataclass(frozen=True)
 class TelemetrySnapshot:
     """Снимок телеметрии + причин ограничения."""
 
@@ -196,6 +242,14 @@ class TelemetrySnapshot:
     vram_energy_counter_j: float | None = None
     # Средняя мощность памяти (Вт); заполняется PowerMeter, в api — None.
     vram_power_w: float | None = None
+    # Загрузка ядра (%) — из ctlEngineGetActivity (дельта двух снимков);
+    # заполняется LoadMeter в telemetry, в api — всегда None.
+    gpu_load_percent: float | None = None
+    # Память: занято/всего (байты) и % — из ctlMemoryGetState;
+    # заполняется LoadMeter в telemetry, в api — всегда None.
+    vram_used_bytes: int | None = None
+    vram_total_bytes: int | None = None
+    vram_percent: float | None = None
 
     def limit_summary(self) -> str:
         """Человекочитаемая строка причин ограничения."""
@@ -340,6 +394,48 @@ class IgclApi:
                 ctypes.POINTER(T.CtlVoltageFrequencyPoint),
             ]
             dll.ctlOverclockWriteCustomVFCurve.restype = ctypes.c_uint32
+
+        # --- Движки: загрузка ядра % (ctlEngineGetActivity) ---
+        if self.loader.has("ctlEnumEngineGroups"):
+            dll.ctlEnumEngineGroups.argtypes = [
+                CtlDeviceHandle,
+                ctypes.POINTER(ctypes.c_uint32),
+                ctypes.POINTER(CtlEngineHandle),
+            ]
+            dll.ctlEnumEngineGroups.restype = ctypes.c_uint32
+        if self.loader.has("ctlEngineGetProperties"):
+            dll.ctlEngineGetProperties.argtypes = [
+                CtlEngineHandle,
+                ctypes.POINTER(T.CtlEngineProperties),
+            ]
+            dll.ctlEngineGetProperties.restype = ctypes.c_uint32
+        if self.loader.has("ctlEngineGetActivity"):
+            dll.ctlEngineGetActivity.argtypes = [
+                CtlEngineHandle,
+                ctypes.POINTER(T.CtlEngineStats),
+            ]
+            dll.ctlEngineGetActivity.restype = ctypes.c_uint32
+
+        # --- Память: занято/всего и % (ctlMemoryGetState) ---
+        if self.loader.has("ctlEnumMemoryModules"):
+            dll.ctlEnumMemoryModules.argtypes = [
+                CtlDeviceHandle,
+                ctypes.POINTER(ctypes.c_uint32),
+                ctypes.POINTER(CtlMemHandle),
+            ]
+            dll.ctlEnumMemoryModules.restype = ctypes.c_uint32
+        if self.loader.has("ctlMemoryGetProperties"):
+            dll.ctlMemoryGetProperties.argtypes = [
+                CtlMemHandle,
+                ctypes.POINTER(T.CtlMemProperties),
+            ]
+            dll.ctlMemoryGetProperties.restype = ctypes.c_uint32
+        if self.loader.has("ctlMemoryGetState"):
+            dll.ctlMemoryGetState.argtypes = [
+                CtlMemHandle,
+                ctypes.POINTER(T.CtlMemState),
+            ]
+            dll.ctlMemoryGetState.restype = ctypes.c_uint32
 
     def initialize(self) -> None:
         """ctlInit — инициализация API. Требует USE_LEVEL_ZERO для телеметрии."""
@@ -520,6 +616,104 @@ class IgclApi:
         # Для float/double-счётчиков отдаём округлённое.
         f = T.read_item_value(item)
         return int(f) if f is not None else None
+
+    # --- Движки: загрузка ядра % ---
+
+    def enumerate_engine_groups(self, handle: CtlDeviceHandle) -> list[CtlEngineHandle]:
+        """ctlEnumEngineGroups — handle'ы групп движков (GT/RENDER/MEDIA).
+
+        Принимает handle устройства (hDAhandle), а не handle API.
+        """
+        count = ctypes.c_uint32(0)
+        _check(
+            self.loader.dll.ctlEnumEngineGroups(handle, ctypes.byref(count), None),
+            "ctlEnumEngineGroups",
+        )
+        n = count.value
+        if n == 0:
+            return []
+        arr = (CtlEngineHandle * n)()
+        _check(
+            self.loader.dll.ctlEnumEngineGroups(handle, ctypes.byref(count), arr),
+            "ctlEnumEngineGroups",
+        )
+        return [CtlEngineHandle(h) for h in arr if h]
+
+    def get_engine_properties(self, engine: CtlEngineHandle) -> int:
+        """ctlEngineGetProperties — группа движка (ctl_engine_group_t)."""
+        props = T.CtlEngineProperties()
+        props.Size = ctypes.sizeof(T.CtlEngineProperties)
+        props.Version = 0
+        _check(
+            self.loader.dll.ctlEngineGetProperties(engine, ctypes.byref(props)),
+            "ctlEngineGetProperties",
+        )
+        return int(props.type)
+
+    def read_engine_activity(self, engine: CtlEngineHandle) -> EngineActivity:
+        """ctlEngineGetActivity — счётчики активности (read-only).
+
+        %загрузки здесь не считается: нужны два снимка (дельта), расчёт делает
+        слой telemetry (см. LoadMeter) — низкий слой только повторяет структуру.
+        """
+        stats = T.CtlEngineStats()
+        stats.Size = ctypes.sizeof(T.CtlEngineStats)
+        stats.Version = 0
+        _check(
+            self.loader.dll.ctlEngineGetActivity(engine, ctypes.byref(stats)),
+            "ctlEngineGetActivity",
+        )
+        return EngineActivity(
+            active_time_us=int(stats.activeTime),
+            timestamp_us=int(stats.timestamp),
+        )
+
+    # --- Память: занято/всего и % ---
+
+    def enumerate_memory_modules(self, handle: CtlDeviceHandle) -> list[CtlMemHandle]:
+        """ctlEnumMemoryModules — handle'ы модулей памяти (принимает hDAhandle)."""
+        count = ctypes.c_uint32(0)
+        _check(
+            self.loader.dll.ctlEnumMemoryModules(handle, ctypes.byref(count), None),
+            "ctlEnumMemoryModules",
+        )
+        n = count.value
+        if n == 0:
+            return []
+        arr = (CtlMemHandle * n)()
+        _check(
+            self.loader.dll.ctlEnumMemoryModules(handle, ctypes.byref(count), arr),
+            "ctlEnumMemoryModules",
+        )
+        return [CtlMemHandle(h) for h in arr if h]
+
+    def get_memory_properties(self, mem: CtlMemHandle) -> MemoryModuleInfo:
+        """ctlMemoryGetProperties — тип/расположение/объём модуля памяти."""
+        props = T.CtlMemProperties()
+        props.Size = ctypes.sizeof(T.CtlMemProperties)
+        props.Version = 0
+        _check(
+            self.loader.dll.ctlMemoryGetProperties(mem, ctypes.byref(props)),
+            "ctlMemoryGetProperties",
+        )
+        return MemoryModuleInfo(
+            mem_type=int(props.type),
+            location=int(props.location),
+            physical_size=int(props.physicalSize),
+            bus_width=int(props.busWidth),
+            num_channels=int(props.numChannels),
+        )
+
+    def read_memory_state(self, mem: CtlMemHandle) -> MemoryState:
+        """ctlMemoryGetState — свободно/всего памяти (read-only, байты)."""
+        state = T.CtlMemState()
+        state.Size = ctypes.sizeof(T.CtlMemState)
+        state.Version = 0
+        _check(
+            self.loader.dll.ctlMemoryGetState(mem, ctypes.byref(state)),
+            "ctlMemoryGetState",
+        )
+        return MemoryState(free=int(state.free), size=int(state.size))
 
     def read_oc_properties(self, handle: CtlDeviceHandle) -> dict[str, OcControlInfo | bool]:
         """ctlOverclockGetProperties — диапазоны пунктов разгона (read-only)."""

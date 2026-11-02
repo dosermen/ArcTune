@@ -511,6 +511,117 @@ class CtlVoltageFrequencyPoint(ctypes.Structure):
     ]
 
 
+# --- Движки и память (ctlEngine*, ctlMemory*) — загрузка GPU/памяти ---
+
+
+class CtlEngineGroup(IntEnum):
+    """_ctl_engine_group_t — группы движков (ctlEngineGetProperties.type)."""
+
+    GT = 0  # все движки вместе (для итоговой загрузки ядра)
+    RENDER = 1  # render + compute
+    MEDIA = 2  # media
+
+
+class CtlMemType(IntEnum):
+    """_ctl_mem_type_t — тип модуля памяти."""
+
+    HBM = 0
+    DDR = 1
+    DDR3 = 2
+    DDR4 = 3
+    DDR5 = 4
+    LPDDR = 5
+    LPDDR3 = 6
+    LPDDR4 = 7
+    LPDDR5 = 8
+    GDDR4 = 9
+    GDDR5 = 10
+    GDDR5X = 11
+    GDDR6 = 12
+    GDDR6X = 13
+    GDDR7 = 14
+    UNKNOWN = 15
+
+
+class CtlMemLoc(IntEnum):
+    """_ctl_mem_loc_t — расположение модуля памяти."""
+
+    SYSTEM = 0
+    DEVICE = 1  # на плате (для B580 — GDDR6)
+
+
+class CtlEngineProperties(ctypes.Structure):
+    """_ctl_engine_properties_t — свойства группы движков."""
+
+    _fields_ = [
+        ("Size", ctypes.c_uint32),
+        ("Version", ctypes.c_uint8),
+        ("type", ctypes.c_int32),  # ctl_engine_group_t
+    ]
+
+
+class CtlEngineStats(ctypes.Structure):
+    """_ctl_engine_stats_t — счётчики активности движков (для load %).
+
+    По igcl_api.h: %util = (s2.activeTime - s1.activeTime) /
+    (s2.timestamp - s1.timestamp). Оба поля — монотонные счётчики в
+    микросекундах; timestamp годится только для дельты между двумя снимками
+    ОДНОГО и того же объекта (база у каждого своя).
+    """
+
+    _fields_ = [
+        ("Size", ctypes.c_uint32),
+        ("Version", ctypes.c_uint8),
+        ("activeTime", ctypes.c_uint64),  # мкс, монотонный счётчик активности
+        ("timestamp", ctypes.c_uint64),  # мкс, момент сэмпла
+    ]
+
+
+class CtlMemProperties(ctypes.Structure):
+    """_ctl_mem_properties_t — свойства модуля памяти."""
+
+    _fields_ = [
+        ("Size", ctypes.c_uint32),
+        ("Version", ctypes.c_uint8),
+        ("type", ctypes.c_int32),  # ctl_mem_type_t
+        ("location", ctypes.c_int32),  # ctl_mem_loc_t
+        ("physicalSize", ctypes.c_uint64),  # байты; 0 = неизвестно
+        ("busWidth", ctypes.c_int32),  # бит; -1 = неизвестно
+        ("numChannels", ctypes.c_int32),  # -1 = неизвестно
+    ]
+
+
+class CtlMemState(ctypes.Structure):
+    """_ctl_mem_state_t — свободно/всего памяти (байты).
+
+    По igcl_api.h: %alloc = 100 * (size - free) / size;
+    %free = 100 * size... — см. docstring в read_memory_state.
+    """
+
+    _fields_ = [
+        ("Size", ctypes.c_uint32),
+        ("Version", ctypes.c_uint8),
+        ("free", ctypes.c_uint64),  # свободно, байты
+        ("size", ctypes.c_uint64),  # всего выделяемого, байты (≤ physicalSize)
+    ]
+
+
+class CtlMemBandwidth(ctypes.Structure):
+    """_ctl_mem_bandwidth_t — пропускная способность памяти.
+
+    readCounter/writeCounter валидны только при Version > 0.
+    """
+
+    _fields_ = [
+        ("Size", ctypes.c_uint32),
+        ("Version", ctypes.c_uint8),
+        ("maxBandwidth", ctypes.c_uint64),  # байт/с
+        ("timestamp", ctypes.c_uint64),  # мкс (база только для дельты)
+        ("readCounter", ctypes.c_uint64),  # Version > 0
+        ("writeCounter", ctypes.c_uint64),  # Version > 0
+    ]
+
+
 def read_item_value(item: CtlOcTelemetryItem) -> float | None:
     """Возвращает значение телеметрии как float по полю type, либо None."""
     if not item.bSupported:

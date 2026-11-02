@@ -63,7 +63,7 @@ def cmd_telemetry(args: argparse.Namespace) -> int:
     from arctuner.device_profile import profile_status_note
     from arctuner.igcl.api import IgclApi
     from arctuner.replay import IncidentReplay
-    from arctuner.telemetry import PowerMeter, find_arc_adapter
+    from arctuner.telemetry import LoadMeter, PowerMeter, find_arc_adapter
 
     # Колонки CSV (стабильный порядок для анализа).
     csv_fields = [
@@ -89,6 +89,10 @@ def cmd_telemetry(args: argparse.Namespace) -> int:
         "current_limited",
         "voltage_limited",
         "utilization_limited",
+        "gpu_load_percent",
+        "vram_used_bytes",
+        "vram_total_bytes",
+        "vram_percent",
     ]
 
     def snapshot_row(t) -> dict[str, object]:
@@ -115,6 +119,10 @@ def cmd_telemetry(args: argparse.Namespace) -> int:
             "current_limited": t.current_limited,
             "voltage_limited": t.voltage_limited,
             "utilization_limited": t.utilization_limited,
+            "gpu_load_percent": t.gpu_load_percent,
+            "vram_used_bytes": t.vram_used_bytes,
+            "vram_total_bytes": t.vram_total_bytes,
+            "vram_percent": t.vram_percent,
         }
 
     def emit_csv(path: str, row: dict[str, object]) -> None:
@@ -156,6 +164,12 @@ def cmd_telemetry(args: argparse.Namespace) -> int:
             if watch_sec:
                 print(f"Наблюдение каждые {watch_sec} сек (Ctrl+C для выхода)...")
             meter = PowerMeter()  # ватты из счётчиков энергии; первый тик — база
+            load_meter: LoadMeter | None = None
+            if getattr(args, "load", False):
+                load_meter = LoadMeter(api, handle)
+                # Первый снимок LoadMeter — база для %: даём интервал, чтобы уже
+                # первый тик показал честный % (иначе % появился бы со 2-го).
+                time.sleep(0.25)
             if replay_size:
                 replay = IncidentReplay(max_samples=replay_size, device=info.name)
                 print(
@@ -164,6 +178,8 @@ def cmd_telemetry(args: argparse.Namespace) -> int:
                 )
             while True:
                 t = meter.enrich(api.read_power_telemetry(handle))
+                if load_meter is not None:
+                    t = load_meter.enrich(t)
                 if replay is not None:
                     trigger = replay.push(t)
                     if trigger:
@@ -192,6 +208,18 @@ def cmd_telemetry(args: argparse.Namespace) -> int:
                     f"запись {_fmt(t.vram_write_bandwidth_mbps, ' МБ/с')}"
                 )
                 print(f"  Память, фактическая скорость: {bw}")
+                if load_meter is not None:
+                    load_s = "—" if t.gpu_load_percent is None else f"{t.gpu_load_percent:.0f} %"
+                    if t.vram_used_bytes is not None and t.vram_total_bytes:
+                        vram_s = (
+                            f"{t.vram_used_bytes / 1024**3:.2f} / "
+                            f"{t.vram_total_bytes / 1024**3:.2f} ГиБ"
+                        )
+                        if t.vram_percent is not None:
+                            vram_s += f" ({t.vram_percent:.0f} %)"
+                    else:
+                        vram_s = "—"
+                    print(f"  Загрузка: ядро {load_s:>7}   память {vram_s}")
                 vr = "/".join(
                     "—" if v is None else f"{v:.0f}"
                     for v in (t.gpu_vr_temp_c, t.vram_vr_temp_c, t.sa_vr_temp_c)
@@ -1070,6 +1098,14 @@ def build_parser() -> argparse.ArgumentParser:
             "энергии или Ctrl+C пишет дамп в ~/.arctune/incidents",
             "buffer of the last N snapshots (default 600); energy-counter reset "
             "or Ctrl+C writes a dump to ~/.arctune/incidents",
+        ),
+    )
+    ptelem.add_argument(
+        "--load",
+        action="store_true",
+        help=tr(
+            "загрузка ядра (%%) и память (байты/%%/ГиБ) из IGCL",
+            "GPU load (%%) and memory usage (bytes/%%/GiB) from IGCL",
         ),
     )
     ptelem.set_defaults(func=cmd_telemetry)

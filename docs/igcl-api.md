@@ -164,13 +164,61 @@ igdkmdnd64.sys      ← ядерный драйвер Arc (B580)
 
 | Функция | Назначение | В ArcTune |
 |---|---|---|
-| `ctlEnumMemoryModules` | перечислить модули памяти | не обёрнута |
-| `ctlMemoryGetProperties` | свойства (макс. частота, ReBAR) | не обёрнута |
-| `ctlMemoryGetState` | текущая частота / состояние | не обёрнута |
+| `ctlEnumMemoryModules` | перечислить модули памяти | обёрнута |
+| `ctlMemoryGetProperties` | свойства (тип, объём, шина, каналы) | обёрнута |
+| `ctlMemoryGetState` | занято/свободно (байты) → load % памяти | обёрнута |
 | `ctlMemoryGetBandwidth` | пропускная способность | не обёрнута |
 
 Текущую эффективную частоту памяти ArcTune читает не через `ctlMemoryGetState`, а из
 телеметрии: `vramCurrentEffectiveFrequency` (см. `arctune telemetry`).
+
+Занятое место VRAM — `ctlMemoryGetState`: `used = size − free`,
+`% = 100 · used / size` (формула из `igcl_api.h`). Проверено на живой B580:
+`physicalSize` = 12 884 901 888 (12 ГиБ), bus=192, channels=6, type=12 (GDDR6).
+
+---
+
+## Загрузка GPU и памяти (load %)
+
+Данные читает `arctuner.telemetry.LoadMeter` (флаг `arctune telemetry --load`),
+источник выбирается настройкой `~/.arctune/load_source` (см. `arctuner.loadsource`).
+
+**Реализован источник `igcl` (проверен на живой B580):**
+
+| Метрика | Функция | Формула (из `igcl_api.h`) |
+|---|---|---|
+| Загрузка ядра, % | `ctlEngineGetActivity` (группа `CTL_ENGINE_GROUP_GT`) | `%util = ΔactiveTime / Δtimestamp` двух снимков (мкс-счётчики) |
+| Память, % / байты | `ctlMemoryGetState` | `used = size − free`, `% = 100 · used / size` |
+
+`ctlEnumEngineGroups` возвращает 3 группы (GT/RENDER/MEDIA); итоговая загрузка
+ядра — **GT** («все движки вместе»). RENDER/MEDIA доступны для детализации.
+
+### Альтернативные источники (зарезервировано, для знания)
+
+Настройка `load_source` допускает `pdh` и `dxgi` — эти пути **пока не
+реализованы** (`LoadMeter` честно выбрасывает `NotImplementedError`, без тихого
+отката на igcl). Зафиксировано здесь, чтобы решение о реализации принималось со
+знанием фактов:
+
+- **`pdh` — Windows-счётчики производительности.** Счётчик
+  `\GPU Engine(*)\Utilization Percentage` (PDH- API `PdhAddEnglishCounter` +
+  `PdhCollectQueryData`). Даёт % по каждому engine-инстансу (pid + engine type);
+  для итога по адаптеру Intel надо отфильтровать инстансы своего adapter LUID и
+  корректно агрегировать (сумма/нормировка по инстансам — нюанс, из-за которого
+  путь и отложен). Плюс: работает с любыми GPU, минус: вне IGCL, агрегация
+  и дробность по процессам.
+- **`dxgi` — DXGI `QueryVideoMemoryInfo`** (`IDXGIAdapter3`, локальный сегмент
+  `DXGI_MEMORY_SEGMENT_GROUP_LOCAL`): `CurrentUsage` / `Budget` — то, что Диспетчер
+  задач показывает как «Выделенная память GPU». Раскладки подтверждены заголовками
+  Windows SDK (`dxgi1_4.h`): `IID_IDXGIAdapter3 = {645967a4-1392-4310-a798-8053ce3e93fd}`,
+  структура `{UINT64 Budget, CurrentUsage, AvailableForReservation, CurrentReservation}`.
+  Это **уровень ОС** (бюджет), не физический модуль — цифры отличаются от
+  `ctlMemoryGetState` (бюджет может быть меньше физического объёма из-за
+  shared-memory/резервирования). Для load % DXGI не даёт эквивалента — только память.
+
+**Вывод:** IGCL-путь закрывает обе метрики нативно (один слой, без COM/PDH),
+поэтому `pdh`/`dxgi` — резерв на случай проблем с IGCL-драйвером, а не
+основной путь.
 
 ---
 
@@ -202,6 +250,7 @@ igdkmdnd64.sys      ← ядерный драйвер Arc (B580)
 
 ## Ссылки
 
-- Заголовок публичного API: `igcl_api.h` (есть в open-source проектах Intel, напр.
-  репозитории Level Zero / compute-runtime)
+- Заголовок публичного API: `igcl_api.h` (v1-r1, Copyright 2025 Intel; встречается
+  в open-source проектах — например, GameTechDev/PresentMon и CXWorld/CapFrameX:
+  `IntelPresentMon/ControlLib/igcl/igcl_api.h`)
 - Документация по IOCTL, если нужен уровень ниже: см. [architecture.md](architecture.md)

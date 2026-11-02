@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import pytest
 
-from arctuner.igcl.api import ExtendedDeviceInfo, TelemetrySnapshot
-from arctuner.telemetry import PowerMeter
+from arctuner.igcl.api import ExtendedDeviceInfo, MemoryState, TelemetrySnapshot
+from arctuner.telemetry import LoadMeter, PowerMeter
 
 
 def test_driver_version_str_decodes_all_four_parts() -> None:
@@ -135,3 +135,113 @@ def test_snapshot_watts_default_none() -> None:
     """Слой api не считает сам: ватты по умолчанию None."""
     assert _snap().gpu_power_w is None
     assert _snap().card_power_w is None
+
+
+# --- LoadMeter: % загрузки ядра из двух снимков ctlEngineGetActivity ---
+
+
+def _bare_load_meter() -> LoadMeter:
+    """LoadMeter без железа: __init__ требует api/handle, здесь они не нужны.
+
+    Тестируется только математика _step (как у PowerMeter — время передаётся
+    явно), поэтому объект создаётся мимо конструктора.
+    """
+    meter = LoadMeter.__new__(LoadMeter)
+    meter._prev = None
+    return meter
+
+
+def test_load_first_sample_is_baseline_only() -> None:
+    """Первый снимок — база: % нет (не выдумываем)."""
+    meter = _bare_load_meter()
+    assert meter._step(active_us=1000, ts_us=10_000) is None
+    assert meter._prev == (1000, 10_000)
+
+
+def test_load_percent_from_deltas() -> None:
+    """Формула igcl_api.h: %util = ΔactiveTime / Δtimestamp."""
+    meter = _bare_load_meter()
+    meter._step(active_us=1000, ts_us=10_000)
+    # 50_000 мкс активности за 100_000 мкс = 50 %.
+    assert meter._step(active_us=51_000, ts_us=110_000) == pytest.approx(50.0)
+
+
+def test_load_fast_polling_accumulates_interval() -> None:
+    """Снимок чаще min_gap не двигает базу — интервал накапливается."""
+    meter = _bare_load_meter()
+    meter._step(active_us=0, ts_us=0)
+    # 5 мс активности за 10 мс (100 %) — но интервал 50 мс < min_gap (100 мс).
+    assert meter._step(active_us=5_000, ts_us=50_000) is None
+    # База осталась на 0: 55_000 активности за 150_000 мкс от исходной точки.
+    out = meter._step(active_us=55_000, ts_us=150_000)
+    assert out == pytest.approx(100.0 * 55_000 / 150_000)
+
+
+def test_load_counter_rollback_rebaselines() -> None:
+    """Откат счётчика (рестарт драйвера) — % нет, база переустанавливается."""
+    meter = _bare_load_meter()
+    meter._step(active_us=100_000, ts_us=100_000)
+    assert meter._step(active_us=500, ts_us=200_000) is None
+    out = meter._step(active_us=55_500, ts_us=300_000)
+    assert out == pytest.approx(55.0)
+
+
+def test_load_zero_delta_returns_none() -> None:
+    """Нулевой/отрицательный интервал (ts не растёт) — % нет."""
+    meter = _bare_load_meter()
+    meter._step(active_us=1000, ts_us=10_000)
+    assert meter._step(active_us=2000, ts_us=10_000) is None
+    assert meter._step(active_us=3000, ts_us=9_000) is None
+
+
+def test_load_percent_clamped_to_0_100() -> None:
+    """Шум квантования не даёт выйти за 0..100 %."""
+    meter = _bare_load_meter()
+    meter._step(active_us=0, ts_us=0)
+    # Δactive в 3 раза больше Δts — аномалия → 100 %, а не 300 %.
+    assert meter._step(active_us=300_000, ts_us=100_000) == 100.0
+
+
+def test_load_rejects_unimplemented_source() -> None:
+    """pdh/dxgi ещё не реализованы — честное исключение, без тихого отката."""
+
+    class _FakeApi:
+        loader = None
+
+    with pytest.raises(NotImplementedError):
+        LoadMeter(_FakeApi(), None, source="dxgi")  # type: ignore[arg-type]
+    with pytest.raises(NotImplementedError):
+        LoadMeter(_FakeApi(), None, source="pdh")  # type: ignore[arg-type]
+
+
+# --- MemoryState: used/percent из ctlMemoryGetState ---
+
+
+def test_memory_state_used_and_percent() -> None:
+    """Формула igcl_api.h: used = size − free, % = 100 · used / size."""
+    st = MemoryState(free=4_000_000_000, size=12_000_000_000)
+    assert st.used == 8_000_000_000
+    assert st.percent == pytest.approx(66.666, abs=0.01)
+
+
+def test_memory_state_empty_size_has_no_percent() -> None:
+    """size == 0 (неизвестно) — % нет, деления на ноль избегаем."""
+    st = MemoryState(free=0, size=0)
+    assert st.used == 0
+    assert st.percent is None
+
+
+def test_memory_state_free_exceeding_size_clamps_used() -> None:
+    """Аномалия free > size — used не уходит в минус (max(0, …))."""
+    st = MemoryState(free=200, size=100)
+    assert st.used == 0
+    assert st.percent == pytest.approx(0.0)
+
+
+def test_new_snapshot_load_fields_default_none() -> None:
+    """Load-поля снимка — None по умолчанию: api их не заполняет."""
+    snap = _snap()
+    assert snap.gpu_load_percent is None
+    assert snap.vram_used_bytes is None
+    assert snap.vram_total_bytes is None
+    assert snap.vram_percent is None
