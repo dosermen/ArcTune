@@ -19,7 +19,7 @@
 | 2 | **CSV-экспорт телеметрии из GUI** | `GpuWorker.export_vf` ✅; telemetry-CSV в GUI — ❌ | С · 20 мин | `GpuWorker.export_telemetry` + UI-кнопка в вкладке «Мониторинг» |
 | 3 | **Вкладка «Об устройстве» в GUI** | 7 вкладок (Мониторинг/Разгон/Вентиляторы/VF/Журнал/Авторазгон/Оверлей), device-табы нет; данные есть в `arctune info` | С · 30 мин | Новая вкладка `gui/tabs/device.py` + card widgets |
 | 4 | **Постоянный watchdog** (вне авторазгона) | Watchdog wired только в `autotune/engine` flow → в poll-цикле нет | С · 1–2 ч | Fallback-мониторинг в poll-цикле: TDR, заморозка, 85 °C, авто-откат OC (с явной опцией) |
-| 5 | **Отображение уровня загрузки GPU и памяти** | GPU load % (activity/utilization) + memory load %, memory в МБ/ГБ; вкладка «Мониторинг», overlay, CLI (`telemetry --load`) | С · 30–60 мин | ✅ CLI (`telemetry --load`) + `load_source=igcl` готовы; ⏳ GUI (вкладка/overlay) |
+| 5 | **Отображение уровня загрузки GPU и памяти** | GPU load % (activity/utilization) + memory load %, memory в МБ/ГБ; вкладка «Мониторинг», overlay, CLI (`telemetry --load`) | С · 30–60 мин | ✅ CLI + вкладка «Мониторинг» (карточки + график); ⏳ overlay |
 
 ## Желательно (Ж)
 

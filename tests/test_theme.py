@@ -28,6 +28,8 @@ def test_qss_contains_semantic_targets() -> None:
             '[accent="temp"]',
             '[accent="power"]',
             '[accent="freq"]',
+            '[accent="load"]',
+            '[accent="vram"]',
             "QLabel#metricValue",
             "QLabel#hintLabel",
             "QLabel#limitsLabel",
@@ -84,3 +86,19 @@ def test_series_colors_are_shared_constants() -> None:
     assert theme.ACCENT_BY_KIND["temp"] == theme.SERIES_TEMP
     assert theme.ACCENT_BY_KIND["power"] == theme.SERIES_POWER
     assert theme.ACCENT_BY_KIND["freq"] == theme.SERIES_FREQ
+    assert theme.ACCENT_BY_KIND["load"] == theme.SERIES_LOAD
+    assert theme.ACCENT_BY_KIND["vram"] == theme.SERIES_VRAM
+    # Линии одного графика должны различаться глазом — все пять цветов уникальны.
+    colors = {
+        theme.SERIES_TEMP,
+        theme.SERIES_POWER,
+        theme.SERIES_FREQ,
+        theme.SERIES_LOAD,
+        theme.SERIES_VRAM,
+    }
+    assert len(colors) == 5
+    # charts.py берёт цвета отсюда, а не дублирует литералы.
+    from arctuner.gui import charts
+
+    assert charts._LOAD_COLOR.name() == theme.SERIES_LOAD
+    assert charts._VRAM_COLOR.name() == theme.SERIES_VRAM

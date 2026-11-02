@@ -36,6 +36,13 @@ _NOTES: dict[str, str] = {
     "activity": "Накопленное время занятости GPU (секунды активной работы). Растёт "
     "только под нагрузкой; в простое счётчик может стоять на месте — это норма, "
     "а не сбой. Нужен для дельт и реплея инцидентов.",
+    "load": "Загрузка ядра в % — доля времени, когда GPU реально работал за период "
+    "опроса (формула igcl_api.h: ΔactiveTime/Δtimestamp по группе GT, все движки "
+    "вместе). Появляется со 2-го тика: первый снимок — база для расчёта. Это "
+    "занятость самого GPU, не процессора.",
+    "vram_used": "Занято памяти: использовано / доступно (ГиБ) из ctlMemoryGetState "
+    "(used = size − free). Процент — при наведении. «Доступно» чуть меньше "
+    "физических 12 ГиБ: драйвер резервирует часть под себя.",
     "gpu_vr": "Температура фаз питания (VRM) ядра — мосфеты на плате. Греются от тока, а "
     "не от вычислений: перегрев фаз по кристаллу не виден.",
     "vram_vr": "Температура фаз питания памяти. В простое часто самая горячая из пяти "
@@ -68,6 +75,11 @@ class MonitoringTab(QWidget):
         self._vram_vr = MetricCard("VR памяти", "°C", accent="temp", note=_NOTES["vram_vr"])
         self._sa_vr = MetricCard("VR SA", "°C", accent="temp", note=_NOTES["sa_vr"])
 
+        self._load = MetricCard("Загрузка", "%", accent="load", note=_NOTES["load"])
+        self._vram_used = MetricCard(
+            "Память занято", "ГиБ", accent="vram", note=_NOTES["vram_used"]
+        )
+
         grid = QGridLayout()
         grid.setSpacing(8)
         for col, card in enumerate((self._freq, self._voltage, self._temp, self._power)):
@@ -78,6 +90,8 @@ class MonitoringTab(QWidget):
             grid.addWidget(card, 1, col)
         for col, card in enumerate((self._activity, self._gpu_vr, self._vram_vr, self._sa_vr)):
             grid.addWidget(card, 2, col)
+        for col, card in enumerate((self._load, self._vram_used)):
+            grid.addWidget(card, 3, col)
 
         self._limits = QLabel("Ограничение: —")
         self._limits.setObjectName("limitsLabel")
@@ -92,7 +106,12 @@ class MonitoringTab(QWidget):
         self._chart.setMinimumHeight(220)
 
         chart_row = QHBoxLayout()
-        chart_row.addWidget(QLabel("График (°C / % слева, МГц справа, окно 5 мин):"))
+        chart_row.addWidget(
+            QLabel(
+                "График (слева °C / %, справа МГц, окно 5 мин; % — мощность, "
+                "загрузка ядра, память):"
+            )
+        )
         chart_row.addStretch(1)
 
         hint = QLabel("Наведите на карточку — подсказка; клик по карточке — подробное окно.")
@@ -134,9 +153,21 @@ class MonitoringTab(QWidget):
         counter = snap.activity_counter
         self._activity.set_value(None if counter is None else f"{counter:,}".replace(",", " "))
 
+        # Загрузка ядра и занятость памяти — LoadMeter (источник igcl): % ядра
+        # появляется со 2-го тика (первый снимок — база), память — сразу.
+        self._load.set_value(snap.gpu_load_percent)
+        if snap.vram_used_bytes is not None and snap.vram_total_bytes:
+            used_gib = snap.vram_used_bytes / 1024**3
+            total_gib = snap.vram_total_bytes / 1024**3
+            pct = f"{snap.vram_percent:.0f} %" if snap.vram_percent is not None else ""
+            self._vram_used.set_value(f"{used_gib:.2f} / {total_gib:.2f}", unit="ГиБ", tooltip=pct)
+        else:
+            self._vram_used.set_value(None)
+
         self._limits.setText(f"Ограничение: {snap.limit_summary()}")
 
         # На график кладём только полные снимки — частичные точки соврали бы картинку.
+        # load/vram (% из LoadMeter) могут быть None — LiveChart их пропускает.
         gpu_temp = snap.gpu_temp_c
         gpu_power = snap.gpu_power_percent
         gpu_freq = snap.gpu_freq_mhz
@@ -145,7 +176,9 @@ class MonitoringTab(QWidget):
             if self._t_last is not None and t - self._t_last > GAP_MAX_S:
                 # Долгий перерыв (сон/занятый воркер): линия через паузу — ложь.
                 self._chart.clear()
-            self._chart.push(t, gpu_temp, gpu_power, gpu_freq)
+            self._chart.push(
+                t, gpu_temp, gpu_power, gpu_freq, snap.gpu_load_percent, snap.vram_percent
+            )
             self._t_last = t
 
 

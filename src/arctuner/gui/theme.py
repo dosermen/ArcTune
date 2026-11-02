@@ -24,12 +24,16 @@ from PySide6.QtWidgets import QApplication
 SERIES_TEMP: Final = "#e05555"  # температура
 SERIES_POWER: Final = "#e0a13a"  # мощность
 SERIES_FREQ: Final = "#4a90d9"  # частота
+SERIES_LOAD: Final = "#57c266"  # загрузка ядра (%)
+SERIES_VRAM: Final = "#a06cd5"  # занятость памяти (%)
 
 #: kind → цвет маркера карточки (тот же цвет, что у линии графика)
 ACCENT_BY_KIND: Final[dict[str, str]] = {
     "temp": SERIES_TEMP,
     "power": SERIES_POWER,
     "freq": SERIES_FREQ,
+    "load": SERIES_LOAD,
+    "vram": SERIES_VRAM,
 }
 
 # --- палитры UI ---
@@ -130,6 +134,8 @@ QFrame#metricCard {{
 QFrame#metricCard[accent="temp"]  {{ border-top-color: {ACCENT_BY_KIND["temp"]}; }}
 QFrame#metricCard[accent="power"] {{ border-top-color: {ACCENT_BY_KIND["power"]}; }}
 QFrame#metricCard[accent="freq"]  {{ border-top-color: {ACCENT_BY_KIND["freq"]}; }}
+QFrame#metricCard[accent="load"]  {{ border-top-color: {ACCENT_BY_KIND["load"]}; }}
+QFrame#metricCard[accent="vram"]  {{ border-top-color: {ACCENT_BY_KIND["vram"]}; }}
 QLabel#metricValue {{
     font-size: 21px; font-weight: 600; color: {p["text"]}; background: transparent;
 }}
@@ -341,8 +347,10 @@ __all__ = [
     "ACCENT_BY_KIND",
     "DEFAULT_THEME",
     "SERIES_FREQ",
+    "SERIES_LOAD",
     "SERIES_POWER",
     "SERIES_TEMP",
+    "SERIES_VRAM",
     "THEMES",
     "apply_theme",
     "flame_icon",

@@ -118,7 +118,7 @@
 | **CSV-экспорт из GUI** | Экспорт телеметрии из GUI (в worker уже есть `export_vf`, нужна общая `export_telemetry`) |
 | **Вкладка «Об устройстве» в GUI** | PCIe / firmware / ECC / режим вентиляторов — данные уже отдаёт `arctune info`, нужна UI-часть (card widgets) |
 | **Постоянный watchdog** | Fallback-мониторинг вне авторазгона: TDR (Event ID 4101), заморозка телеметрии, аварийная 85 °C, авто-откат OC (только с явной опцией). Каждый — в logbook |
-| **Отображение уровня загрузки GPU/памяти** | ✅ CLI (`telemetry --load`), источник `load_source=igcl` (`ctlEngineGetActivity` + `ctlMemoryGetState`, проверено на B580); pdh/dxgi зарезервированы (см. docs/igcl-api.md). ⏳ осталось: вкладка «Мониторинг» + overlay |
+| **Отображение уровня загрузки GPU/памяти** | ✅ CLI (`telemetry --load`), GUI: карточки «Загрузка»/«Память занято» + 2 серии на графике вкладки «Мониторинг» (`load_source=igcl`, `ctlEngineGetActivity` + `ctlMemoryGetState`, проверено на B580); pdh/dxgi зарезервированы (см. docs/igcl-api.md). ⏳ осталось: overlay |
 
 ### Ж — желательно (~4.5 часа)
 

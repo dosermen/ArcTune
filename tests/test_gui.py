@@ -102,7 +102,7 @@ def test_metric_card_accent_property(qapp) -> None:
 
 
 def test_monitoring_cards_have_notes(qapp) -> None:
-    """Все 12 карточек мониторинга несут подсказку; температурные — по смыслу."""
+    """Все 14 карточек мониторинга несут подсказку; температурные — по смыслу."""
     tab = MonitoringTab()
     cards = (
         tab._freq,
@@ -117,6 +117,8 @@ def test_monitoring_cards_have_notes(qapp) -> None:
         tab._gpu_vr,
         tab._vram_vr,
         tab._sa_vr,
+        tab._load,
+        tab._vram_used,
     )
     for card in cards:
         assert card.toolTip(), f"нет подсказки: {card._title.text()}"
@@ -127,6 +129,10 @@ def test_monitoring_cards_have_notes(qapp) -> None:
     # Прожитый факт: счётчик активности НЕ аптайм — в простое стоит на месте.
     assert "занятости" in tab._activity.toolTip()
     assert "норма" in tab._activity.toolTip()
+    # Load-карточки: честно про формулу/базу и про то, что «доступно» < 12 ГиБ.
+    assert "ΔactiveTime" in tab._load.toolTip()
+    assert "2-го тика" in tab._load.toolTip()
+    assert "12 ГиБ" in tab._vram_used.toolTip()
 
 
 def test_metric_card_click_shows_note_window(qapp, monkeypatch) -> None:
@@ -399,6 +405,75 @@ def test_gpu_context_field_grid() -> None:
     assert ctx.field_grid("absent") is None
 
 
+def _fake_api(*, engines_broken: bool = False) -> tuple[object, object]:
+    """Фейковый IgclApi для GpuContext.telemetry: loader.has() → False (нет IGCL)."""
+    from arctuner.igcl.api import IgclError
+
+    class _Loader:
+        @staticmethod
+        def has(name: str) -> bool:
+            # «Движки есть» — но перечисление ниже всегда падает (см. тесты).
+            return engines_broken and name in {"ctlEnumEngineGroups", "ctlEngineGetActivity"}
+
+    class _Api:
+        loader = _Loader()
+
+        def read_power_telemetry(self, handle):
+            raise AssertionError("тест подставит снимок через monkeypatch")
+
+        def enumerate_engine_groups(self, handle):
+            raise IgclError(0x80000001, "ctlEnumEngineGroups")
+
+        def shutdown(self) -> None:
+            pass
+
+    return _Api(), object()
+
+
+def test_gpu_context_telemetry_creates_loadmeter_once(
+    monkeypatch, snapshot: TelemetrySnapshot
+) -> None:
+    """LoadMeter создаётся лениво при первом опросе и переиспользуется."""
+    from arctuner.gui.context import GpuContext
+
+    ctx = GpuContext()
+    api, handle = _fake_api()
+    ctx._api, ctx._handle = api, handle  # type: ignore[assignment]
+    monkeypatch.setattr(api, "read_power_telemetry", lambda h: snapshot, raising=False)
+
+    first = ctx.telemetry()
+    assert ctx._load_meter is not None  # создан, но движков нет (has() → False)
+    assert first.gpu_load_percent is None  # данных нет — честный None, не 0
+    second = ctx.telemetry()
+    assert second is not first
+    assert ctx._load_meter is not None
+
+    ctx.close()
+    assert ctx._load_meter is None  # handle'ы невалидны — база пересоздастся
+
+
+def test_gpu_context_telemetry_survives_load_failure(
+    monkeypatch, snapshot: TelemetrySnapshot
+) -> None:
+    """Сбой LoadMeter (нет движков) не роняет опрос и не повторяется каждый тик."""
+    from arctuner.gui.context import GpuContext
+
+    ctx = GpuContext()
+    api, handle = _fake_api(engines_broken=True)
+    ctx._api, ctx._handle = api, handle  # type: ignore[assignment]
+    monkeypatch.setattr(api, "read_power_telemetry", lambda h: snapshot, raising=False)
+
+    first = ctx.telemetry()  # раньше бы вылетел IgclError из слота опроса
+    assert first.gpu_load_percent is None
+    assert ctx._load_failed is True
+    assert ctx._load_meter is None
+
+    ctx.telemetry()  # ошибка запомнена — перечисление не дёргается снова
+    assert ctx._load_meter is None
+    ctx.close()
+    assert ctx._load_failed is False  # после close() попытка повторяется
+
+
 # --- масштаб интерфейса ---
 
 
@@ -644,6 +719,34 @@ def test_monitoring_vram_watts_and_vr_temps(qapp, snapshot: TelemetrySnapshot) -
     assert tab._gpu_vr._value.text() == "—"
 
 
+def test_monitoring_shows_load_and_vram_usage(qapp, snapshot: TelemetrySnapshot) -> None:
+    """Загрузка ядра (%) и занятость памяти (ГиБ + % в подсказке) из LoadMeter."""
+    from dataclasses import replace
+
+    tab = MonitoringTab()
+    # Первый тик: база LoadMeter не накоплена — честное «—», не ноль.
+    tab.on_telemetry(snapshot)
+    assert tab._load._value.text() == "—"
+    assert tab._vram_used._value.text() == "—"
+
+    tab.on_telemetry(
+        replace(
+            snapshot,
+            gpu_load_percent=10.3,
+            vram_used_bytes=8 * 1024**3,
+            vram_total_bytes=12 * 1024**3,
+            vram_percent=68.0,
+        )
+    )
+    assert tab._load._value.text() == "10 %"
+    assert tab._vram_used._value.text() == "8.00 / 12.00 ГиБ"
+    # Процент занятости — во всплывающей подсказке (на карточке основной объём).
+    assert tab._vram_used._value.toolTip() == "68 %"
+    # Точки ушли в новые серии графика.
+    assert tab._chart._load_series.count() == 1
+    assert tab._chart._vram_series.count() == 1
+
+
 def test_fans_tab_refresh_button_fires_signal(qapp) -> None:
     """Кнопка «Обновить» перечитывает RPM (после записи RPM не проходил по сигналу)."""
     tab = FansTab()
@@ -719,6 +822,30 @@ def test_livechart_axis_grows_beyond_fixed_ranges(qapp) -> None:
     chart.push(3.0, 50.0, 40.0, 2400.0)
     assert chart._axis_right.max() >= 3400.0
     assert chart._axis_left.max() >= 110.0
+
+
+def test_livechart_skips_missing_load_points(qapp) -> None:
+    """load/vram=None (база не накоплена) — точки пропускаются, а не равны нулю."""
+    chart = LiveChart(window_s=60)
+    chart.push(1.0, 55.0, 70.0, 2500.0)  # без load/vram — база LoadMeter
+    assert chart._temp_series.count() == 1
+    assert chart._load_series.count() == 0
+    assert chart._vram_series.count() == 0
+
+    chart.push(2.0, 56.0, 71.0, 2510.0, load=12.0, vram=68.0)
+    assert chart._load_series.count() == 1
+    assert chart._vram_series.count() == 1
+
+    # Пропуск посередине: память есть, ядро ещё нет — колонки независимы.
+    chart.push(3.0, 57.0, 72.0, 2520.0, load=None, vram=69.0)
+    assert chart._load_series.count() == 1
+    assert chart._vram_series.count() == 2
+
+    chart.clear()
+    assert len(chart._samples) == 0
+    assert chart._load_series.count() == 0
+    assert chart._vram_series.count() == 0
+    assert chart._temp_series.count() == 0
 
 
 _VF_STOCK = [(700, 400), (800, 1200), (900, 2000), (1100, 3000)]  # (мВ, МГц)

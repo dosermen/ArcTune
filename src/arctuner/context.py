@@ -35,7 +35,7 @@ from arctuner.logbook import (
     Logbook,
     default_logbook_path,
 )
-from arctuner.telemetry import PowerMeter, find_arc_adapter
+from arctuner.telemetry import LoadMeter, PowerMeter, find_arc_adapter
 from arctuner.tuner import SafetyLimitError, VfPoint, WriteReport
 
 
@@ -64,6 +64,11 @@ class GpuContext:
         self._log = Logbook(default_logbook_path())
         # Расчёт ватт из счётчиков энергии: одна база на всю сессию опроса.
         self._power_meter = PowerMeter()
+        # Загрузка ядра/% памяти (LoadMeter): создаётся лениво при первом опросе —
+        # источник берётся из настройки load_source, и её сбой не должен ронять
+        # старт сессии (см. telemetry).
+        self._load_meter: LoadMeter | None = None
+        self._load_failed = False
 
     # --- жизненный цикл ---
 
@@ -122,6 +127,10 @@ class GpuContext:
         self._api = None
         self._handle = None
         self._info = None
+        # Handle'ы движков/памяти стали невалидны — при следующем open()
+        # LoadMeter создастся заново и заново возьмёт базу дельты.
+        self._load_meter = None
+        self._load_failed = False
 
     def _require(self) -> tuple[IgclApi, CtlDeviceHandle]:
         if self._api is None or self._handle is None:
@@ -133,7 +142,18 @@ class GpuContext:
     def telemetry(self) -> TelemetrySnapshot:
         api, handle = self._require()
         # enrich добавляет среднюю мощность (Вт) из счётчиков энергии.
-        return self._power_meter.enrich(api.read_power_telemetry(handle))
+        snap = self._power_meter.enrich(api.read_power_telemetry(handle))
+        # Загрузка ядра/% памяти (LoadMeter): ленивое создание, чтобы сбой
+        # источника (не реализован pdh/dxgi, нет прав, нет движков) не ронял
+        # опрос — метрики честно останутся «—», а не обнулятся.
+        if self._load_meter is None and not self._load_failed:
+            try:
+                self._load_meter = LoadMeter(api, handle)
+            except (NotImplementedError, IgclError):
+                self._load_failed = True
+        if self._load_meter is not None:
+            snap = self._load_meter.enrich(snap)
+        return snap
 
     def oc_ranges(self) -> dict[str, OcControlInfo | bool]:
         api, handle = self._require()
