@@ -211,7 +211,9 @@ python -m arctuner telemetry           # снимок датчиков + при�
 python -m arctuner telemetry --csv out.csv   # + сохранить снимок в CSV
 python -m arctuner telemetry -w 1      # наблюдать каждую секунду
 python -m arctuner telemetry --replay  # буфер снимков + дамп при сбросе счётчика/Ctrl+C
+python -m arctuner telemetry --load    # загрузка ядра (%) и память (занято/%) из IGCL
 python -m arctuner status              # диапазоны пунктов разгона (min/max/step)
+python -m arctuner state               # сверка текущих значений с журналом + версия драйвера
 python -m arctuner info                # PCIe/ReBAR, ECC, прошивка, режимы вентиляторов
 python -m arctuner fans                # скорость/свойства вентиляторов
 python -m arctuner vf                  # кривая V/F (чтение)

@@ -4,6 +4,7 @@
     doctor      — проверка окружения (драйвер, IGCL, функции)
     telemetry   — снимок телеметрии (read-only)
     status      — диапазоны пунктов разгона (read-only)
+    state       — сверка состояния с журналом + версия драйвера (read-only)
     set         — установка настроек (⚠️ меняет состояние карты)
 
 Запись настроек (set) изолирована в tuner.py и проходит проверки диапазонов.
@@ -304,6 +305,65 @@ def cmd_status(_: argparse.Namespace) -> int:
         print(f"[FAIL] {e}")
         return 1
     return 0
+
+
+def cmd_state(_: argparse.Namespace) -> int:
+    """Сверка состояния карты с журналом + версия драйвера (read-only)."""
+    from arctuner import state_doctor, tuner
+    from arctuner.igcl.api import ExtendedDeviceInfo, IgclApi, IgclError, OcControlInfo
+    from arctuner.logbook import Logbook, default_logbook_path
+    from arctuner.telemetry import find_arc_adapter
+
+    findings: list[state_doctor.StateFinding] = []
+    try:
+        with IgclApi() as api:
+            found = find_arc_adapter(api)
+            if not found:
+                print(
+                    tr(
+                        "[FAIL] Дискретная Intel Arc не найдена.",
+                        "[FAIL] Discrete Intel Arc not found.",
+                    )
+                )
+                return 1
+            handle, _dev = found
+
+            # Допуск = половина шага: драйвер округляет запись до step.
+            oc = api.read_oc_properties(handle)
+            tolerances = {k: v.step / 2 for k, v in oc.items() if isinstance(v, OcControlInfo)}
+            actual = tuner.current_values(api, handle)
+            expected = Logbook(default_logbook_path()).latest_values()
+            findings = state_doctor.compare_state(actual, expected, tolerances)
+
+            print("=== Сверка состояния с журналом ===")
+            marks = {"ok": "[OK]   ", "drift": "[DRIFT]", "no_log": "[—]    ", "unknown": "[?]    "}
+            for f in findings:
+                print(f"  {marks[f.status]} {f.message}")
+            if not findings:
+                print("  [—]    журнал пуст, сверять нечего")
+
+            info = api.get_device_properties(handle)
+            props = api.read_raw_device_properties(handle)
+            version = ExtendedDeviceInfo.from_properties(info, props).driver_version_str
+            try:
+                status, previous = state_doctor.check_driver_version(version)
+            except OSError as e:
+                print(f"[WARN] файл версии драйвера недоступен: {e}")
+                return 0 if not any(f.status == "drift" for f in findings) else 1
+            print("=== Версия драйвера ===")
+            if status == "saved":
+                print(f"  [OK]    {version} — первый запуск, версия сохранена")
+            elif status == "same":
+                print(f"  [OK]    {version} — не менялась с прошлой сессии")
+            else:
+                print(
+                    f"  [DRIFT] {previous} → {version} — драйвер обновился между "
+                    "сессиями, разгон мог сброситься"
+                )
+    except IgclError as e:
+        print(f"[FAIL] {e}")
+        return 1
+    return 1 if any(f.status == "drift" for f in findings) else 0
 
 
 def cmd_set(args: argparse.Namespace) -> int:
@@ -1112,6 +1172,13 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser(
         "status", help=tr("диапазоны разгона (read-only)", "overclock ranges (read-only)")
     ).set_defaults(func=cmd_status)
+    sub.add_parser(
+        "state",
+        help=tr(
+            "сверка состояния с журналом (read-only)",
+            "state vs journal check (read-only)",
+        ),
+    ).set_defaults(func=cmd_state)
 
     plog = sub.add_parser("log", help=tr("журнал изменений / откат", "change log / rollback"))
     plog.add_argument(
