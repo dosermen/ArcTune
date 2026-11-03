@@ -119,6 +119,17 @@ def test_read_only_commands_return_zero(cli_env: _FakeApi) -> None:
     assert main(["log"]) == 0  # пустой журнал — не ошибка, просто нечего показывать
 
 
+def test_telemetry_csv_writes_file(cli_env: _FakeApi, tmp_path: Path, capsys) -> None:
+    """telemetry --csv: общий export_telemetry пишет header + строку снимка."""
+    out = tmp_path / "snap.csv"
+    assert main(["telemetry", "--csv", str(out)]) == 0
+    lines = out.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 2  # header + один снимок
+    assert lines[0].startswith("timestamp,gpu_freq_mhz")
+    assert "2500" in lines[1]  # gpu_freq_mhz из _snap
+    assert "-> CSV" in capsys.readouterr().out
+
+
 def test_doctor_success_returns_zero(monkeypatch, capsys) -> None:
     import arctuner.igcl.loader as loader_mod
 

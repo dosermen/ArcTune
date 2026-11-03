@@ -6,8 +6,11 @@
 
 from __future__ import annotations
 
+import csv
 import time
+from collections.abc import Iterable
 from dataclasses import replace
+from pathlib import Path
 
 from arctuner.igcl import types as T
 from arctuner.igcl.api import (
@@ -211,4 +214,118 @@ class LoadMeter:
         return max(0.0, min(100.0, 100.0 * d_active / d_ts))
 
 
-__all__ = ["LoadMeter", "PowerMeter", "find_arc_adapter", "read_snapshot"]
+#: Колонки CSV телеметрии (стабильный порядок для анализа — не переставлять).
+TELEMETRY_CSV_FIELDS: list[str] = [
+    "timestamp",
+    "gpu_freq_mhz",
+    "gpu_voltage_v",
+    "gpu_temp_c",
+    "gpu_power_percent",
+    "gpu_power_w",
+    "card_power_w",
+    "vram_power_w",
+    "gpu_vr_temp_c",
+    "vram_vr_temp_c",
+    "sa_vr_temp_c",
+    "vram_read_bandwidth_mbps",
+    "vram_write_bandwidth_mbps",
+    "gpu_over_voltage_percent",
+    "vram_eff_freq_mbps",
+    "vram_voltage_v",
+    "vram_temp_c",
+    "power_limited",
+    "temperature_limited",
+    "current_limited",
+    "voltage_limited",
+    "utilization_limited",
+    "gpu_load_percent",
+    "vram_used_bytes",
+    "vram_total_bytes",
+    "vram_percent",
+]
+
+
+def snapshot_csv_row(snap: TelemetrySnapshot, wall: float | None = None) -> dict[str, object]:
+    """Строка CSV из снимка (ключи — ровно ``TELEMETRY_CSV_FIELDS``).
+
+    Общая форма для CLI (``telemetry --csv``) и GUI-экспорта буфера реплея:
+    одна колонка — один смысл, порядок стабилен.
+
+    Args:
+        snap: снимок телеметрии.
+        wall: epoch-метка времени (по умолчанию — момент вызова).
+    """
+    if wall is None:
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%S")
+    else:
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(wall))
+    return {
+        "timestamp": stamp,
+        "gpu_freq_mhz": snap.gpu_freq_mhz,
+        "gpu_voltage_v": snap.gpu_voltage_v,
+        "gpu_temp_c": snap.gpu_temp_c,
+        "gpu_power_percent": snap.gpu_power_percent,
+        "gpu_power_w": snap.gpu_power_w,
+        "card_power_w": snap.card_power_w,
+        "vram_power_w": snap.vram_power_w,
+        "gpu_vr_temp_c": snap.gpu_vr_temp_c,
+        "vram_vr_temp_c": snap.vram_vr_temp_c,
+        "sa_vr_temp_c": snap.sa_vr_temp_c,
+        "vram_read_bandwidth_mbps": snap.vram_read_bandwidth_mbps,
+        "vram_write_bandwidth_mbps": snap.vram_write_bandwidth_mbps,
+        "gpu_over_voltage_percent": snap.gpu_over_voltage_percent,
+        "vram_eff_freq_mbps": snap.vram_eff_freq_mbps,
+        "vram_voltage_v": snap.vram_voltage_v,
+        "vram_temp_c": snap.vram_temp_c,
+        "power_limited": snap.power_limited,
+        "temperature_limited": snap.temperature_limited,
+        "current_limited": snap.current_limited,
+        "voltage_limited": snap.voltage_limited,
+        "utilization_limited": snap.utilization_limited,
+        "gpu_load_percent": snap.gpu_load_percent,
+        "vram_used_bytes": snap.vram_used_bytes,
+        "vram_total_bytes": snap.vram_total_bytes,
+        "vram_percent": snap.vram_percent,
+    }
+
+
+def export_telemetry(path: Path | str, rows: Iterable[dict[str, object]]) -> int:
+    """Дописывает строки телеметрии в CSV (формат ``telemetry --csv``).
+
+    Заголовок пишется, если файла нет или он пуст: повторный вызов
+    продолжает тот же файл (семантика ``--watch``), а батч из буфера
+    реплея создаёт файл целиком.
+
+    Args:
+        path: файл назначения (каталог создаётся).
+        rows: строки из :func:`snapshot_csv_row`.
+
+    Returns:
+        Число записанных строк (без заголовка).
+
+    Raises:
+        OSError: диск/права — исключение не глотается.
+    """
+    p = Path(path)
+    write_header = not p.exists() or p.stat().st_size == 0
+    p.parent.mkdir(parents=True, exist_ok=True)
+    written = 0
+    with p.open("a", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=TELEMETRY_CSV_FIELDS)
+        if write_header:
+            w.writeheader()
+        for row in rows:
+            w.writerow(row)
+            written += 1
+    return written
+
+
+__all__ = [
+    "TELEMETRY_CSV_FIELDS",
+    "LoadMeter",
+    "PowerMeter",
+    "export_telemetry",
+    "find_arc_adapter",
+    "read_snapshot",
+    "snapshot_csv_row",
+]

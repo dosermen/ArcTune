@@ -19,6 +19,7 @@ from PySide6.QtCore import QObject, QThread, Signal, Slot
 from arctuner.gui.context import GpuContext
 from arctuner.igcl.api import IgclError
 from arctuner.replay import IncidentReplay
+from arctuner.telemetry import export_telemetry, snapshot_csv_row
 from arctuner.tuner import SafetyLimitError, VfPoint, WriteReport
 
 if TYPE_CHECKING:
@@ -288,6 +289,26 @@ class GpuWorker(QObject):
                 w.writerow(["voltage_mv", "freq_mhz"])
                 w.writerows(points)
             self.write_done.emit(f"V/F экспортирован: {out} ({len(points)} точек)")
+
+        self._guarded(run)
+
+    @Slot(str)
+    def export_telemetry_csv(self, path: str) -> None:
+        """Пишет буфер телеметрии (последние ~10 мин наблюдения) в CSV.
+
+        Формат общий с CLI ``telemetry --csv`` (export_telemetry из telemetry.py):
+        буфер копируется без очистки, инцидентные дампы не затрагиваются.
+        """
+
+        def run() -> None:
+            if self._replay is None or not self._replay.samples:
+                # Не ошибка записи, а пустой буфер: сообщение без модального диалога.
+                self.error.emit("нет данных для экспорта — сначала понаблюдайте за телеметрией")
+                return
+            rows = [snapshot_csv_row(snap, wall) for wall, snap in self._replay.iter_samples()]
+            out = Path(path)
+            written = export_telemetry(out, rows)
+            self.write_done.emit(f"телеметрия экспортирована: {out} ({written} строк)")
 
         self._guarded(run)
 

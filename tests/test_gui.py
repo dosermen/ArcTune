@@ -1458,3 +1458,87 @@ def test_language_reselect_same_language_no_dialog(qapp, monkeypatch, tmp_path) 
 
     win.close()
     assert _wait_worker_stopped(win)
+
+
+# --- экспорт телеметрии из GUI (буфер реплея -> CSV) ---
+
+
+def test_monitoring_export_button_emits_path(qapp, monkeypatch, tmp_path) -> None:
+    """Кнопка «Экспорт CSV…» на вкладке «Мониторинг» выбирает файл и эмитит путь."""
+    from PySide6.QtWidgets import QFileDialog
+
+    tab = MonitoringTab()
+    chosen = str(tmp_path / "telemetry.csv")
+    monkeypatch.setattr(
+        QFileDialog,
+        "getSaveFileName",
+        lambda *a, **k: (chosen, "CSV (*.csv)"),
+    )
+    paths: list[str] = []
+    tab.export_requested.connect(paths.append)
+    tab._export_btn.click()
+    assert paths == [chosen]
+    assert tab._export_btn.isEnabled()  # экспорт доступен всегда (read-only)
+
+
+def test_worker_export_telemetry_csv_writes_buffer(qapp, tmp_path) -> None:
+    """Воркер пишет буфер реплея в CSV тем же форматом, что CLI --csv."""
+    from types import SimpleNamespace
+
+    from arctuner.gui.worker import GpuWorker
+    from arctuner.igcl.api import TelemetrySnapshot
+    from arctuner.replay import IncidentReplay
+
+    def _snap(energy: float) -> TelemetrySnapshot:
+        return TelemetrySnapshot(
+            gpu_voltage_v=1.0,
+            gpu_freq_mhz=2500.0,
+            gpu_temp_c=55.0,
+            gpu_power_percent=70.0,
+            vram_voltage_v=1.35,
+            vram_eff_freq_mbps=19.75,
+            vram_temp_c=48.0,
+            power_limited=False,
+            temperature_limited=False,
+            current_limited=False,
+            voltage_limited=False,
+            utilization_limited=False,
+            activity_counter=1,
+            gpu_energy_counter_j=energy,
+        )
+
+    worker = GpuWorker()  # без start(): IGCL не грузится
+    worker._ctx = SimpleNamespace()
+    worker._replay = IncidentReplay(directory=tmp_path / "inc", device="B580")
+    worker._replay.push(_snap(1000.0), t=0.0, wall=1700000000.0)
+    worker._replay.push(_snap(1100.0), t=1.0, wall=1700000001.0)
+
+    done: list[str] = []
+    errors: list[str] = []
+    worker.write_done.connect(done.append)
+    worker.error.connect(errors.append)
+
+    out = tmp_path / "out" / "telemetry.csv"
+    worker.export_telemetry_csv(str(out))
+
+    assert out.exists()
+    lines = out.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 3  # header + 2 снимка
+    assert len(done) == 1 and not errors
+    assert worker._replay.samples == 2  # буфер не потрачен на экспорт
+
+
+def test_worker_export_telemetry_csv_empty_buffer_reports_error(qapp, tmp_path) -> None:
+    """Пустой буфер — честная ошибка без модального диалога и без файла."""
+    from arctuner.gui.worker import GpuWorker
+
+    worker = GpuWorker()  # _replay is None — сессия не открывалась
+    errors: list[str] = []
+    worker.error.connect(errors.append)
+
+    out = tmp_path / "telemetry.csv"
+    worker.export_telemetry_csv(str(out))
+
+    assert not out.exists()
+    assert len(errors) == 1
+    assert "нет данных" in errors[0]

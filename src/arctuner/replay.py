@@ -16,6 +16,7 @@ import json
 import os
 import time
 from collections import deque
+from collections.abc import Iterator
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -183,6 +184,15 @@ class IncidentReplay:
     def samples(self) -> int:
         """Сколько снимков сейчас в буфере (для статуса в poll-цикле)."""
         return len(self._buf)
+
+    def iter_samples(self) -> Iterator[tuple[float, TelemetrySnapshot]]:
+        """Снимки буфера в хронологии: (epoch-время, снимок) — для экспорта.
+
+        Read-only вид на буфер: данные не копируются и не удаляются;
+        после :meth:`dump` буфер пуст и генератор не выдаст ничего.
+        """
+        for _mono, wall, snap in self._buf:
+            yield wall, snap
 
 
 __all__ = [

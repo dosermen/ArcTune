@@ -4,8 +4,16 @@ from __future__ import annotations
 
 import time
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import (
+    QFileDialog,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 from arctuner.gui.charts import LiveChart
 from arctuner.gui.widgets import MetricCard
@@ -54,6 +62,9 @@ _NOTES: dict[str, str] = {
 
 class MonitoringTab(QWidget):
     """Показывает текущую телеметрию и скроллящийся график последних минут."""
+
+    #: экспорт буфера телеметрии (путь к CSV) — воркер пишет replay-буфер
+    export_requested = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -105,6 +116,13 @@ class MonitoringTab(QWidget):
         self._chart = LiveChart(window_s=300)
         self._chart.setMinimumHeight(220)
 
+        self._export_btn = QPushButton("Экспорт CSV…")
+        self._export_btn.setToolTip(
+            "Сохранить буфер наблюдения (последние ~10 минут телеметрии, тот же "
+            "формат, что arctune telemetry --csv) в файл."
+        )
+        self._export_btn.clicked.connect(self._on_export)
+
         chart_row = QHBoxLayout()
         chart_row.addWidget(
             QLabel(
@@ -113,6 +131,7 @@ class MonitoringTab(QWidget):
             )
         )
         chart_row.addStretch(1)
+        chart_row.addWidget(self._export_btn)
 
         hint = QLabel("Наведите на карточку — подсказка; клик по карточке — подробное окно.")
         hint.setObjectName("hintLabel")
@@ -180,6 +199,13 @@ class MonitoringTab(QWidget):
                 t, gpu_temp, gpu_power, gpu_freq, snap.gpu_load_percent, snap.vram_percent
             )
             self._t_last = t
+
+    def _on_export(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Экспорт телеметрии", "telemetry.csv", "CSV (*.csv)"
+        )
+        if path:
+            self.export_requested.emit(path)
 
 
 __all__ = ["MonitoringTab"]

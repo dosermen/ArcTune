@@ -330,3 +330,25 @@ def test_dump_empty_buffer_does_not_create_directory(tmp_path: Path) -> None:
     replay = IncidentReplay(directory=incidents)
     assert replay.dump("energy_counter_reset_gpu") is None
     assert not incidents.exists()
+
+
+# --- iter_samples: read-only вид на буфер для CSV-экспорта ---
+
+
+def test_iter_samples_yields_wall_and_snapshots_in_order(tmp_path: Path) -> None:
+    """(epoch, снимок) в хронологии push; буфер не очищается."""
+    replay = IncidentReplay(directory=tmp_path)
+    replay.push(_snap(gpu_j=1000.0), t=0.0, wall=1700000000.0)
+    replay.push(_snap(gpu_j=1100.0), t=1.0, wall=1700000001.0)
+    got = list(replay.iter_samples())
+    assert [wall for wall, _ in got] == [1700000000.0, 1700000001.0]
+    assert [s.gpu_energy_counter_j for _, s in got] == [1000.0, 1100.0]
+    assert replay.samples == 2  # вид на буфер, не потребление
+
+
+def test_iter_samples_after_dump_is_empty(tmp_path: Path) -> None:
+    """После дампа буфер очищен — экспортировать нечего (честная пустота)."""
+    replay = IncidentReplay(directory=tmp_path)
+    replay.push(_snap(), t=0.0, wall=1700000000.0)
+    assert replay.dump("manual_interrupt") is not None
+    assert list(replay.iter_samples()) == []

@@ -211,6 +211,9 @@ class MainWindow(QMainWindow):
         v.apply_requested.connect(self._worker.apply_vf)
         v.refresh_requested.connect(self._worker.reload_static)
 
+        m = self._monitoring
+        m.export_requested.connect(self._worker.export_telemetry_csv)
+
         lg = self._log
         lg.rollback_requested.connect(self._worker.rollback)
         lg.refresh_requested.connect(self._worker.reload_static)

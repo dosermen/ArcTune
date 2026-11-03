@@ -245,3 +245,55 @@ def test_new_snapshot_load_fields_default_none() -> None:
     assert snap.vram_used_bytes is None
     assert snap.vram_total_bytes is None
     assert snap.vram_percent is None
+
+
+# --- CSV-экспорт телеметрии (общий для CLI --csv и GUI) ---
+
+
+def test_snapshot_csv_row_keys_match_fields_constant() -> None:
+    """Строка содержит ровно колонки TELEMETRY_CSV_FIELDS — порядок стабилен."""
+    from arctuner.telemetry import TELEMETRY_CSV_FIELDS, snapshot_csv_row
+
+    row = snapshot_csv_row(_snap())
+    assert list(row) == TELEMETRY_CSV_FIELDS
+    assert row["gpu_freq_mhz"] == 2500.0
+    assert row["gpu_temp_c"] == 55.0
+
+
+def test_snapshot_csv_row_uses_wall_time() -> None:
+    """Метка времени берётся из wall (epoch) — буфер реплея экспортируется честно."""
+    import time
+
+    from arctuner.telemetry import snapshot_csv_row
+
+    wall = 1_700_000_000.0
+    row = snapshot_csv_row(_snap(), wall)
+    assert row["timestamp"] == time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(wall))
+
+
+def test_export_telemetry_writes_header_and_rows(tmp_path) -> None:
+    """Новый файл: заголовок + строки; значения читаются обратно."""
+    import csv as csv_mod
+
+    from arctuner.telemetry import export_telemetry, snapshot_csv_row
+
+    path = tmp_path / "sub" / "tel.csv"
+    rows = [snapshot_csv_row(_snap()), snapshot_csv_row(_snap())]
+    assert export_telemetry(path, rows) == 2
+    with path.open(encoding="utf-8") as f:
+        got = list(csv_mod.DictReader(f))
+    assert len(got) == 2
+    assert got[0]["gpu_freq_mhz"] == "2500.0"
+    assert got[0]["gpu_temp_c"] == "55.0"
+
+
+def test_export_telemetry_appends_without_second_header(tmp_path) -> None:
+    """Повторный вызов продолжает файл (семантика telemetry --watch)."""
+    from arctuner.telemetry import TELEMETRY_CSV_FIELDS, export_telemetry, snapshot_csv_row
+
+    path = tmp_path / "tel.csv"
+    export_telemetry(path, [snapshot_csv_row(_snap())])
+    export_telemetry(path, [snapshot_csv_row(_snap())])
+    lines = path.read_text(encoding="utf-8").splitlines()
+    assert lines.count(",".join(TELEMETRY_CSV_FIELDS)) == 1  # заголовок один
+    assert len(lines) == 3  # header + 2 строки

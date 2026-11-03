@@ -57,84 +57,18 @@ def _fmt(v: float | None, unit: str = "") -> str:
 
 def cmd_telemetry(args: argparse.Namespace) -> int:
     """Снимок телеметрии (read-only). --csv для сохранения, --watch для опроса."""
-    import csv
     import time
-    from pathlib import Path
 
     from arctuner.device_profile import profile_status_note
     from arctuner.igcl.api import IgclApi
     from arctuner.replay import IncidentReplay
-    from arctuner.telemetry import LoadMeter, PowerMeter, find_arc_adapter
-
-    # Колонки CSV (стабильный порядок для анализа).
-    csv_fields = [
-        "timestamp",
-        "gpu_freq_mhz",
-        "gpu_voltage_v",
-        "gpu_temp_c",
-        "gpu_power_percent",
-        "gpu_power_w",
-        "card_power_w",
-        "vram_power_w",
-        "gpu_vr_temp_c",
-        "vram_vr_temp_c",
-        "sa_vr_temp_c",
-        "vram_read_bandwidth_mbps",
-        "vram_write_bandwidth_mbps",
-        "gpu_over_voltage_percent",
-        "vram_eff_freq_mbps",
-        "vram_voltage_v",
-        "vram_temp_c",
-        "power_limited",
-        "temperature_limited",
-        "current_limited",
-        "voltage_limited",
-        "utilization_limited",
-        "gpu_load_percent",
-        "vram_used_bytes",
-        "vram_total_bytes",
-        "vram_percent",
-    ]
-
-    def snapshot_row(t) -> dict[str, object]:
-        return {
-            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
-            "gpu_freq_mhz": t.gpu_freq_mhz,
-            "gpu_voltage_v": t.gpu_voltage_v,
-            "gpu_temp_c": t.gpu_temp_c,
-            "gpu_power_percent": t.gpu_power_percent,
-            "gpu_power_w": t.gpu_power_w,
-            "card_power_w": t.card_power_w,
-            "vram_power_w": t.vram_power_w,
-            "gpu_vr_temp_c": t.gpu_vr_temp_c,
-            "vram_vr_temp_c": t.vram_vr_temp_c,
-            "sa_vr_temp_c": t.sa_vr_temp_c,
-            "vram_read_bandwidth_mbps": t.vram_read_bandwidth_mbps,
-            "vram_write_bandwidth_mbps": t.vram_write_bandwidth_mbps,
-            "gpu_over_voltage_percent": t.gpu_over_voltage_percent,
-            "vram_eff_freq_mbps": t.vram_eff_freq_mbps,
-            "vram_voltage_v": t.vram_voltage_v,
-            "vram_temp_c": t.vram_temp_c,
-            "power_limited": t.power_limited,
-            "temperature_limited": t.temperature_limited,
-            "current_limited": t.current_limited,
-            "voltage_limited": t.voltage_limited,
-            "utilization_limited": t.utilization_limited,
-            "gpu_load_percent": t.gpu_load_percent,
-            "vram_used_bytes": t.vram_used_bytes,
-            "vram_total_bytes": t.vram_total_bytes,
-            "vram_percent": t.vram_percent,
-        }
-
-    def emit_csv(path: str, row: dict[str, object]) -> None:
-        p = Path(path)
-        write_header = not p.exists() or p.stat().st_size == 0
-        p.parent.mkdir(parents=True, exist_ok=True)
-        with p.open("a", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=csv_fields)
-            if write_header:
-                w.writeheader()
-            w.writerow(row)
+    from arctuner.telemetry import (
+        LoadMeter,
+        PowerMeter,
+        export_telemetry,
+        find_arc_adapter,
+        snapshot_csv_row,
+    )
 
     watch_sec = getattr(args, "watch", None)
     csv_path = getattr(args, "csv", None)
@@ -189,7 +123,7 @@ def cmd_telemetry(args: argparse.Namespace) -> int:
                             f"  [INCIDENT] Счётчик энергии сброшен ({trigger}) — "
                             f"драйвер перезагрузился. Дамп: {dump_path}"
                         )
-                row = snapshot_row(t)
+                row = snapshot_csv_row(t)
                 print("=== Телеметрия (read-only) ===")
                 print(
                     f"  Ядро:   {_fmt(t.gpu_freq_mhz, ' МГц'):>12}  "
@@ -234,7 +168,7 @@ def cmd_telemetry(args: argparse.Namespace) -> int:
                 print(f"\n  Ограничение: {t.limit_summary()}")
 
                 if csv_path:
-                    emit_csv(csv_path, row)
+                    export_telemetry(csv_path, [row])
                     print(f"  -> CSV: {csv_path}")
 
                 if not watch_sec:
