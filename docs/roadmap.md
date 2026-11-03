@@ -84,24 +84,25 @@
 
 ### Инфраструктура и устойчивость
 
-- [x] **CI** (`.github/workflows/ci.yml`): ruff format/check + pytest `-m "not hardware"`
-  + smoke + PyInstaller — python 3.10–3.12, windows-latest. **✅ подтверждено аудитом
-  2026-10-23**: workflow существует. **❌ открытые пробелы**: шаг mypy в workflow
-  отсутствует; job сборки exe и release-публикация — отсутствуют
+- [x] **CI** (`.github/workflows/ci.yml`): ruff format/check + mypy + pytest `-m "not hardware"`
+  + smoke + PyInstaller — python 3.10–3.12, windows-latest. **✅ сверено 2026-11-03**:
+  все шаги на месте (на аудите 2026-10-23 mypy-шага ещё не было)
 - [ ] **mypy строгий** — конфиг `pyproject.toml` есть (`strict = false`,
-  `check_untyped_defs = true`), ошибок пока нет (62 → 0 по файлам); строгий режим —
-  перспектива. **❌ открыт**: строгий mypy + CI-шаг
-- [ ] **Release по тегу** — workflow `release.yml` не подтверждён/отсутствует → задача:
-  tag `v*` → сверка с `__version__` → сборка exe → GitHub Release с артефактами zip
-- [ ] **Единый источник версии** — версия дублируется (`pyproject.toml` 0.1.0 +
-  `src/arctuner/__init__.py` `__version__ = "0.1.0"`) → задача: `dynamic = ["version"]`
-- [ ] **Покрытие pytest** — конфиг `--cov=arctuner` / branch coverage отсутствует;
-  pytest-cov заявлен, но не настроен → задача
-- [ ] **pre-commit** — `.pre-commit-config.yaml` отсутствует → задача (ruff format/check + mypy)
-- [ ] **ADR-журнал** — `docs/adr/` отсутствует → задача (6 ADR + указатель)
+  `check_untyped_defs = true`), ошибок пока нет (62 → 0 по файлам); CI-шаг есть →
+  открыт только сам строгий режим (перспектива, раздел «К»)
+- [x] **Release по тегу** — `.github/workflows/release.yml`: при теге `v*` сверяет
+  тег с `__version__` (расхождение = ошибка), собирает CLI/GUI exe, smoke-проверяет,
+  публикует GitHub Release с `arctune-cli-x64.zip` / `arctune-gui-x64.zip`
+- [x] **Единый источник версии** — `pyproject.toml`: `dynamic = ["version"]` →
+  `version = { attr = "arctuner.__version__" }`; дублирования нет
+- [x] **Покрытие pytest** — `addopts = "-q --cov=arctuner --cov-report=term-missing"`,
+  `[tool.coverage.run] branch = true`, `show_missing = true`
+- [x] **pre-commit** — `.pre-commit-config.yaml` (local-хуки: ruff format,
+  ruff check --fix, mypy src/arctuner)
+- [x] **ADR-журнал** — `docs/adr/`: ADR-0001…0006 + README-указатель
 - [x] **Рестарт onefile-exe** — ✅ (очистка `_PYI*` через `restart_env`: второй инстанс
   не стартует из чужого `_MEIxxxx`)
-- [ ] **requirements.lock** — lock-файл отсутствует → задача (uv.lock / requirements.lock)
+- [x] **requirements.lock** — файл есть (зафиксированные версии зависимостей)
 
 ---
 
@@ -200,12 +201,15 @@
 
 ## Сводка задач
 
-| Приоритет | Задач | Сложность | Время |
+| Приоритет | Задач (открыто) | Сложность | Время |
 |---|---|---|---|
-| **С** (критично) | 5 | С (1 функция/вкладка) | **~3.5 ч** |
-| **Ж** (желательно) | 5 | С–М (модуль/обёртка) | **~3.5 ч** |
-| **К** (перспектива) | 14 | М–Л (новый слой) | **~12.5 ч** |
-| **Итого** | **23** |  | **~19 ч** |
+| **С** (критично) | 5 (4) | С (1 функция/вкладка) | **~3 ч** |
+| **Ж** (желательно) | 5 (5) | С–М (модуль/обёртка) | **~4.5 ч** |
+| **К** (перспектива) | 21 (21) | М–Л (новый слой) | **~20 ч** (оценка) |
+| **Итого** | **31 (30)** |  | **~27.5 ч** |
+
+Оценка времени для «К» пересчитана пропорционально числу задач (~1 ч/задачу);
+в разделах выше у каждой задачи своя сложность.
 
 | Сложность | Время | Описание |
 |---|---|---|
@@ -218,14 +222,13 @@
 ## Версия и релиз
 
 - Версия: **0.1.0** — единый источник `src/arctuner/__init__.py` (`__version__`);
-  `pyproject.toml` подключает её через `dynamic = ["version"]` → **❌ открыт**
-  (версия дублируется: `pyproject.toml` + `src/arctuner/__init__.py`)
+  `pyproject.toml` подключает её через `dynamic = ["version"]` → **✅**
 - Semver: **MAJOR** — API-ломы; **MINOR** — новые фичи; **PATCH** — исправления — **✅**
 - CHANGELOG.md: Keep a Changelog v1.0.0 — **✅**
 - CI: `.github/workflows/ci.yml` — ruff + mypy + pytest (с покрытием) + сборка exe
-  (python 3.10–3.12, windows-latest) — **✅ CI существует**; mypy-шаг/coverage — **❌ открытые пробелы**
+  (python 3.10–3.12, windows-latest) — **✅, все шаги на месте (сверено 2026-11-03)**
 - Release: `.github/workflows/release.yml` — при теге `v*` сверяет тег с
   `__version__` (расхождение = ошибка, не релиз), собирает exe и публикует
-  GitHub Release с артефактами zip → **❌ открыт**
+  GitHub Release с артефактами zip → **✅ workflow готов**
 - `git tag` пуст, remote не настроен — релизы ещё не оформлялись (первый тег
-  поставить после публикации репозитория)
+  поставить после публикации репозитория) → **открыто**
