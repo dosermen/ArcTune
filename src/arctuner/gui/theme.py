@@ -237,6 +237,8 @@ QLabel#overlayValue {{
 QLabel#overlayValue[accent="temp"]  {{ color: {ACCENT_BY_KIND["temp"]}; }}
 QLabel#overlayValue[accent="power"] {{ color: {ACCENT_BY_KIND["power"]}; }}
 QLabel#overlayValue[accent="freq"]  {{ color: {ACCENT_BY_KIND["freq"]}; }}
+QLabel#overlayValue[accent="load"]  {{ color: {ACCENT_BY_KIND["load"]}; }}
+QLabel#overlayValue[accent="vram"]  {{ color: {ACCENT_BY_KIND["vram"]}; }}
 QLabel#overlayTitle {{
     font-size: 9px; color: {p["hint"]}; background: transparent;
 }}

@@ -97,10 +97,14 @@ class OverlayTab(QWidget):
         for index, key in enumerate(CELL_KEYS):
             box = QCheckBox(CELL_CHOICES[key], cells_box)
             box.toggled.connect(lambda checked, k=key: self._on_cell_toggled(checked, k))
-            cells_grid.addWidget(box, index // 2, index % 2)  # 2 колонки → 4 ряда
+            cells_grid.addWidget(box, index // 2, index % 2)  # 2 колонки → 5 рядов
             self._cell_boxes[key] = box
         cells_grid.addWidget(
-            self._hint("Минимум одна метрика — пустой HUD бессмыслен."), 4, 0, 1, 2
+            self._hint("Минимум одна метрика — пустой HUD бессмыслен."),
+            -(-len(CELL_KEYS) // 2),  # подсказка после последнего ряда галочек
+            0,
+            1,
+            2,
         )
         root.addWidget(cells_box)
 

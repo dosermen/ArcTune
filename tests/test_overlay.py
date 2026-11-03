@@ -101,7 +101,7 @@ def _close_window(win) -> None:
 
 
 def test_overlay_constructs_with_defaults(settings, qapp) -> None:
-    """Без настроек — полоса 1×4 и 85 %; окно само по себе не показывается."""
+    """Без настроек — полоса 1×6 и 85 %; окно само по себе не показывается."""
     win = OverlayWindow()
     assert win.layout_name() in LAYOUTS
     assert win.layout_name() == overlay.DEFAULT_LAYOUT
@@ -177,15 +177,15 @@ def test_overlay_custom_cells_rebuild_grid(settings, qapp) -> None:
 
 
 def test_overlay_layout_preset_restores_cells(settings, qapp) -> None:
-    """Пресет макета возвращает свой набор метрик — подписи «1×4» и т.п. не врут."""
+    """Пресет макета возвращает свой набор метрик — подписи «1×6» и т.п. не врут."""
     win = OverlayWindow()
     win.set_visible_cells(["temp"])
 
     win.set_layout("grid")
-    assert win.visible_cells() == ("temp", "power", "freq", "vram")
-    assert settings._store["overlay/cells"] == "temp,power,freq,vram"
+    assert win.visible_cells() == ("temp", "power", "freq", "load", "vram", "vram_used")
+    assert settings._store["overlay/cells"] == "temp,power,freq,load,vram,vram_used"
     assert not win._cells["temp"].isHidden()
-    assert not win._cells["vram"].isHidden()  # (isHidden, т.к. окно не показано)
+    assert not win._cells["vram_used"].isHidden()  # (isHidden, т.к. окно не показано)
     win.deleteLater()
 
 
@@ -234,6 +234,29 @@ def test_overlay_shows_watts_when_available(settings, qapp, snapshot) -> None:
 
     assert win._cells["power"].text() == "145 Вт"
     assert win._cells["power"]._value.toolTip() == "70 %"
+    win.deleteLater()
+
+
+def test_overlay_shows_load_and_vram_usage(settings, qapp, snapshot) -> None:
+    """Ячейки load/vram_used: % LoadMeter и занятость в ГиБ, итог — в подсказке."""
+    win = OverlayWindow()
+    win.show()
+    win.on_telemetry(snapshot)  # база LoadMeter не накоплена — честное «—», не ноль
+    assert win._cells["load"].text() == "—"
+    assert win._cells["vram_used"].text() == "—"
+
+    win.on_telemetry(
+        replace(
+            snapshot,
+            gpu_load_percent=10.3,
+            vram_used_bytes=8 * 1024**3,
+            vram_total_bytes=12 * 1024**3,
+            vram_percent=68.7,
+        )
+    )
+    assert win._cells["load"].text() == "10 %"  # в HUD дробь не нужна
+    assert win._cells["vram_used"].text() == "8.00 ГиБ"
+    assert win._cells["vram_used"]._value.toolTip() == "всего 12.00 ГиБ · 69 %"
     win.deleteLater()
 
 
@@ -332,6 +355,8 @@ def test_overlay_label_texts_present(settings, qapp) -> None:
     titles = [cell.findChild(QLabel, "overlayTitle").text() for cell in win._cells.values()]
     assert all(titles)
     assert "Температура" in titles
+    assert "Загрузка" in titles
+    assert "Память занято" in titles
     win.deleteLater()
 
 
@@ -447,8 +472,8 @@ def test_overlay_tab_keeps_at_least_one_cell(settings, qapp) -> None:
     for box in tab._cell_boxes.values():
         box.setChecked(False)
 
-    assert win.visible_cells() == ("vram",)  # осталась последняя галочка
-    assert tab._cell_boxes["vram"].isChecked()
+    assert win.visible_cells() == ("vram_used",)  # осталась последняя галочка
+    assert tab._cell_boxes["vram_used"].isChecked()
     win.deleteLater()
 
 

@@ -9,7 +9,7 @@
 что масштаб и тема):
 
 * ``overlay/enabled``   — включён ли оверлей (вкладка «Оверлей», меню «Вид»);
-* ``overlay/layout``    — макет: полоса 1×4, сетка 2×2, подробный 2×4;
+* ``overlay/layout``    — макет: полоса 1×6, сетка 3×2, подробный 2×5;
 * ``overlay/cells``     — какие метрики показывать (можно снять/поставить
   галочки вручную — пресет макета возвращает свой набор);
 * ``overlay/opacity``   — непрозрачность (50/70/85/100 %);
@@ -46,18 +46,19 @@ from arctuner.igcl.api import TelemetrySnapshot
 #: макеты HUD (выбор пользователя; хранится в настройках)
 LAYOUTS: tuple[str, ...] = ("compact", "grid", "detailed")
 
-#: подписи макетов для меню (главного окна и контекстного меню оверлея)
+#: подписи макетов для меню (главного окна и контекстного меню оверлея);
+#: размер честный: строки × колонки под текущий пресет метрик
 LAYOUT_LABELS: dict[str, str] = {
-    "compact": "Полоса 1×4",
-    "grid": "Сетка 2×2",
-    "detailed": "Подробный 2×4",
+    "compact": "Полоса 1×6",
+    "grid": "Сетка 3×2",
+    "detailed": "Подробный 2×5",
 }
 
 #: английские подписи макетов (см. LAYOUT_LABELS)
 LAYOUT_LABELS_EN: dict[str, str] = {
-    "compact": "Bar 1×4",
-    "grid": "Grid 2×2",
-    "detailed": "Detailed 2×4",
+    "compact": "Bar 1×6",
+    "grid": "Grid 3×2",
+    "detailed": "Detailed 2×5",
 }
 
 
@@ -77,7 +78,9 @@ _CELLS: tuple[tuple[str, str, str, str | None], ...] = (
     ("temp", "Температура", "°C", "temp"),
     ("power", "Питание", "Вт", "power"),
     ("freq", "Ядро", "МГц", "freq"),
+    ("load", "Загрузка", "%", "load"),
     ("vram", "Память", "Гбит/с", "freq"),
+    ("vram_used", "Память занято", "ГиБ", "vram"),
     ("vram_temp", "Память, T", "°C", "temp"),
     ("gpu_vr", "VR ядра", "°C", "temp"),
     ("vram_vr", "VR памяти", "°C", "temp"),
@@ -85,12 +88,26 @@ _CELLS: tuple[tuple[str, str, str, str | None], ...] = (
 )
 
 #: макет → (порядок ключей ячеек, число колонок)
+#: Пресеты подписаны честно (LAYOUT_LABELS = строки × колонки): полоса — все
+#: шесть основных метрик в один ряд, сетка — те же шесть в 3×2, подробный —
+#: все десять метрик в 2×5 плюс плашка ограничений.
 _LAYOUT_SPECS: dict[str, tuple[tuple[str, ...], int]] = {
-    "compact": (("temp", "power", "freq", "vram"), 4),
-    "grid": (("temp", "power", "freq", "vram"), 2),
+    "compact": (("temp", "power", "freq", "load", "vram", "vram_used"), 6),
+    "grid": (("temp", "power", "freq", "load", "vram", "vram_used"), 2),
     "detailed": (
-        ("temp", "power", "freq", "vram", "vram_temp", "gpu_vr", "vram_vr", "sa_vr"),
-        4,
+        (
+            "temp",
+            "power",
+            "freq",
+            "load",
+            "vram",
+            "vram_used",
+            "vram_temp",
+            "gpu_vr",
+            "vram_vr",
+            "sa_vr",
+        ),
+        5,
     ),
 }
 
@@ -348,7 +365,7 @@ class OverlayWindow(QWidget):
     def set_layout(self, name: str) -> None:
         """Переключает макет: колонки и пресет-набор метрик, затем пересборка.
 
-        Пресет намеренно возвращает свой набор метрик — подписи «Полоса 1×4»
+        Пресет намеренно возвращает свой набор метрик — подписи «Полоса 1×6»
         и т.п. должны соответствовать тому, что реально на экране. Свой набор
         настраивается отдельно — ``set_visible_cells``.
 
@@ -442,7 +459,21 @@ class OverlayWindow(QWidget):
         else:
             self._cells["power"].set_value(snap.gpu_power_percent, unit="%")
         self._cells["freq"].set_value(snap.gpu_freq_mhz)
+        # Загрузка ядра: % приходит из LoadMeter (ΔactiveTime/Δtimestamp), у
+        # него же база — до 2-го тика честное «—», а не ноль.
+        self._cells["load"].set_value(snap.gpu_load_percent)
         self._cells["vram"].set_value(snap.vram_eff_freq_mbps, digits=2)
+        # Занятость памяти: значение — занято в ГиБ, а сколько это от
+        # доступного объёма — в подсказке (на узкой ячейке нет места дроби).
+        if snap.vram_used_bytes is None or not snap.vram_total_bytes:
+            self._cells["vram_used"].set_value(None)
+        else:
+            used_gib = snap.vram_used_bytes / 1024**3
+            total_gib = snap.vram_total_bytes / 1024**3
+            pct = "" if snap.vram_percent is None else f" · {snap.vram_percent:.0f} %"
+            self._cells["vram_used"].set_value(
+                used_gib, digits=2, tooltip=f"всего {total_gib:.2f} ГиБ{pct}"
+            )
         self._cells["vram_temp"].set_value(snap.vram_temp_c)
         self._cells["gpu_vr"].set_value(snap.gpu_vr_temp_c)
         self._cells["vram_vr"].set_value(snap.vram_vr_temp_c)
