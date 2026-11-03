@@ -486,7 +486,8 @@ def test_main_window_overlay_tab_stays_in_sync(settings, qapp, monkeypatch) -> N
     win = MainWindow()
 
     assert isinstance(win._overlay_tab, OverlayTab)
-    assert win._tabs.tabText(6) == "Оверлей"
+    # Позиция не захардкожена: добавление вкладок не ломает тест.
+    assert win._tabs.tabText(win._tabs.indexOf(win._overlay_tab)) == "Оверлей"
 
     # вкладка включила оверлей → меню «Вид» подхватило
     win._overlay_tab._enable.setChecked(True)

@@ -79,7 +79,7 @@ jobs:
             **ArcTune ${{ github.ref_name }}** — мониторинг и разгон Intel Arc (проверено на B580).
 
             - `arctune-cli-x64.zip` — CLI (`arctune.exe doctor|telemetry|status|set|…`)
-            - `arctune-gui-x64.zip` — GUI (`arctune-gui.exe`, 7 вкладок + оверлей)
+            - `arctune-gui-x64.zip` — GUI (`arctune-gui.exe`, 8 вкладок + оверлей)
 
             Разгон — на ваш страх и риск. Требуется установленный драйвер Intel Arc
             с IGCL.dll. Инварианты: нет обхода лимитов, никаких страпов/vBIOS.

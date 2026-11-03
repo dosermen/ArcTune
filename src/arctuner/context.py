@@ -21,10 +21,13 @@ from arctuner import tuner
 from arctuner.igcl.api import (
     CtlDeviceHandle,
     DeviceInfo,
+    EccStateInfo,
     ExtendedDeviceInfo,
+    FirmwareInfo,
     IgclApi,
     IgclError,
     OcControlInfo,
+    PciStateInfo,
     TelemetrySnapshot,
 )
 from arctuner.igcl.types import CtlFanProperties
@@ -46,6 +49,21 @@ class FanInfo:
     index: int
     rpm: int
     props: CtlFanProperties
+
+
+@dataclass(frozen=True)
+class DeviceReport:
+    """Сводка «Об устройстве» для GUI (read-only, как `arctune info`).
+
+    Секции читаются независимо: недоступная (ECC не поддерживается, драйвер
+    не отвечает) остаётся None с пояснением в ``errors`` — остальные поля
+    при этом заполняются.
+    """
+
+    pci: PciStateInfo | None = None
+    firmware: FirmwareInfo | None = None
+    ecc: EccStateInfo | None = None
+    errors: tuple[str, ...] = ()  # секции, которые не прочитались (честный текст)
 
 
 #: Жёсткий пол фиксации: ниже лопасти могут не стартовать или встать под
@@ -187,6 +205,21 @@ class GpuContext:
         """Кривая V/F как пары (мВ, МГц)."""
         api, handle = self._require()
         return [(p.voltage, p.frequency) for p in api.read_vf_curve(handle)]
+
+    def pci_state(self) -> PciStateInfo:
+        """PCIe: ген/ширина/ReBAR/адрес (read-only)."""
+        api, handle = self._require()
+        return api.get_pci_state(handle)
+
+    def firmware_info(self) -> FirmwareInfo:
+        """Имя/версия базовой прошивки (read-only)."""
+        api, handle = self._require()
+        return api.get_firmware_properties(handle)
+
+    def ecc_state(self) -> EccStateInfo:
+        """Состояние ECC (read-only; на consumer-картах может быть не поддержано)."""
+        api, handle = self._require()
+        return api.get_ecc_state(handle)
 
     # --- запись (только через tuner + журнал) ---
 
@@ -429,4 +462,4 @@ class GpuContext:
 #: последнего сброса OC». Вентиляторы откатываются кнопкой «Вернуть в авто».
 ROLLBACKABLE_FIELDS: frozenset[str] = frozenset(GpuContext._ROLLBACK_MAP)
 
-__all__ = ["ROLLBACKABLE_FIELDS", "FanInfo", "GpuContext"]
+__all__ = ["ROLLBACKABLE_FIELDS", "DeviceReport", "FanInfo", "GpuContext"]

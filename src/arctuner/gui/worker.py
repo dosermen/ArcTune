@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, ClassVar
 
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 
-from arctuner.gui.context import GpuContext
+from arctuner.gui.context import DeviceReport, GpuContext
 from arctuner.igcl.api import IgclError
 from arctuner.replay import IncidentReplay
 from arctuner.telemetry import export_telemetry, snapshot_csv_row
@@ -32,6 +32,7 @@ class GpuWorker(QObject):
 
     device_ready = Signal(object)  # DeviceInfo
     device_info_ready = Signal(object, object)  # (DeviceInfo, ExtendedDeviceInfo)
+    device_report_ready = Signal(object)  # DeviceReport (PCIe/прошивка/ECC)
     telemetry_ready = Signal(object)  # TelemetrySnapshot
     oc_ready = Signal(object, object)  # ranges: dict, currents: dict
     fans_ready = Signal(object)  # list[FanInfo]
@@ -88,6 +89,7 @@ class GpuWorker(QObject):
         self._replay = IncidentReplay(device=info.name)
         self.device_ready.emit(info)
         self.reload_static()
+        self.reload_device()  # статус-бар + вкладка «Об устройстве» сразу при старте
         self.poll_telemetry()
 
     @Slot()
@@ -144,24 +146,46 @@ class GpuWorker(QObject):
             self.error.emit(f"реплей инцидента: {e}")
 
     @Slot()
-    def poll_device_info(self) -> None:
-        """Обновляет информацию об устройстве (имя, ID, драйвер, частота, ядра).
+    def reload_device(self) -> None:
+        """Читает всё для вкладки «Об устройстве» и статус-бара (read-only).
 
-        Читает ``info`` и ``extended_info`` из ``GpuContext``,
-        эмитит ``device_info_ready`` при успехе.
+        info + extended → ``device_info_ready``; PCIe / прошивка / ECC →
+        ``device_report_ready`` (DeviceReport). Секции независимы: сбой одной
+        (ECC не поддерживается, драйвер не отвечает) попадает в report.errors,
+        остальные поля при этом заполняются.
         """
         if not self._ctx.is_open:
-            self.error.emit("poll_device_info: сессия не открыта")
+            self.error.emit("reload_device: сессия не открыта")
             return
         try:
             info = self._ctx.info
             extended = self._ctx.extended_info  # ExtendedDeviceInfo
             if info is None or extended is None:
-                self.error.emit("poll_device_info: данные не получены")
-                return
-            self.device_info_ready.emit(info, extended)
+                self.error.emit("reload_device: данные не получены")
+            else:
+                self.device_info_ready.emit(info, extended)
         except (IgclError, SafetyLimitError) as e:
             self.error.emit(f"информация устройства: {e}")
+
+        errors: list[str] = []
+        pci = None
+        firmware = None
+        ecc = None
+        try:
+            pci = self._ctx.pci_state()
+        except (IgclError, SafetyLimitError) as e:
+            errors.append(f"PCIe: нет данных ({e})")
+        try:
+            firmware = self._ctx.firmware_info()
+        except (IgclError, SafetyLimitError) as e:
+            errors.append(f"прошивка: драйвер не сообщает ({e})")
+        try:
+            ecc = self._ctx.ecc_state()
+        except (IgclError, SafetyLimitError) as e:
+            errors.append(f"ECC: не поддерживается ({e})")
+        self.device_report_ready.emit(
+            DeviceReport(pci=pci, firmware=firmware, ecc=ecc, errors=tuple(errors))
+        )
 
     @Slot()
     def reload_static(self) -> None:

@@ -28,6 +28,8 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 from arctuner.gui.charts import LiveChart, VfChart  # noqa: E402
 from arctuner.gui.context import FanInfo  # noqa: E402
 from arctuner.gui.tabs import (  # noqa: E402
+    AutoTuneTab,
+    DeviceTab,
     FansTab,
     LogTab,
     MonitoringTab,
@@ -35,7 +37,12 @@ from arctuner.gui.tabs import (  # noqa: E402
     VfTab,
 )
 from arctuner.gui.widgets import MetricCard  # noqa: E402
-from arctuner.igcl.api import DeviceInfo, OcControlInfo, TelemetrySnapshot  # noqa: E402
+from arctuner.igcl.api import (  # noqa: E402
+    DeviceInfo,
+    ExtendedDeviceInfo,
+    OcControlInfo,
+    TelemetrySnapshot,
+)
 from arctuner.logbook import LogEntry  # noqa: E402
 
 
@@ -74,7 +81,7 @@ def _info(**kw) -> OcControlInfo:
 
 
 def test_all_tabs_construct(qapp) -> None:
-    for cls in (MonitoringTab, OverclockTab, FansTab, VfTab, LogTab):
+    for cls in (MonitoringTab, OverclockTab, FansTab, VfTab, LogTab, DeviceTab, AutoTuneTab):
         widget = cls()
         widget.deleteLater()
     assert True
@@ -1542,3 +1549,201 @@ def test_worker_export_telemetry_csv_empty_buffer_reports_error(qapp, tmp_path) 
     assert not out.exists()
     assert len(errors) == 1
     assert "нет данных" in errors[0]
+
+
+# --- вкладка «Об устройстве» (PCIe / прошивка / ECC, read-only) ---
+
+
+def _device_info(**kw) -> DeviceInfo:
+    base = dict(
+        name="Intel Arc B580",
+        vendor_id=0x8086,
+        device_id=0xE20B,
+        subsystem_id=0x1038,
+        subsystem_vendor_id=0x8086,
+        is_integrated=False,
+        rev_id=0x08,
+        frequency_mhz=2670,
+        num_xe_cores=20,
+    )
+    base.update(kw)
+    return DeviceInfo(**base)
+
+
+def _extended(info: DeviceInfo | None = None) -> ExtendedDeviceInfo:
+    return ExtendedDeviceInfo(
+        info=info or _device_info(),
+        driver_version=0x00200000006523BE,  # 32.0.101.9150 (живой драйвер)
+        firmware_version_major=1,
+        firmware_version_minor=0,
+    )
+
+
+def test_device_tab_fills_device_section(qapp) -> None:
+    """Секция «Устройство»: имя, ID, драйвер, прошивка, частота/ядра."""
+    tab = DeviceTab()
+    tab.set_device_info(_device_info(), _extended())
+    assert tab._dev["name"].text() == "Intel Arc B580"
+    assert tab._dev["ids"].text() == "0X8086:0XE20B / 0X8086:0X1038"
+    assert tab._dev["driver"].text() == "32.0.101.9150"
+    assert tab._dev["firmware_ver"].text() == "1.0"
+    assert tab._dev["freq"].text() == "2670 МГц / 20 Xe-ядер"
+    tab.deleteLater()
+
+
+def test_device_tab_report_sections(qapp) -> None:
+    """Отчёт заполняет PCIe (ReBAR вкл), прошивку и ECC; ошибок нет — блок скрыт."""
+    from arctuner.context import DeviceReport
+    from arctuner.igcl.api import EccStateInfo, FirmwareInfo, PciStateInfo
+
+    tab = DeviceTab()
+    # До отчёта секции честно «—», а не пустые/угаданные.
+    assert tab._pci["link"].text() == "—"
+    assert not tab._errors.isVisibleTo(tab)
+
+    tab.set_report(
+        DeviceReport(
+            pci=PciStateInfo(
+                gen=5,
+                width=16,
+                max_bandwidth_mbps=32000.0,
+                rebar_supported=True,
+                rebar_enabled=True,
+                address="0000:03:00.0",
+            ),
+            firmware=FirmwareInfo(name="unknown", version="unknown"),
+            ecc=EccStateInfo(
+                supported=False, can_control=False, current="default", pending="default"
+            ),
+            errors=(),
+        )
+    )
+    assert tab._pci["link"].text() == "Gen 5 x16"
+    assert tab._pci["rebar"].text() == "включён"
+    assert tab._pci["address"].text() == "0000:03:00.0"
+    assert tab._fw["fw_name"].text() == "unknown"
+    assert tab._ecc["ecc_state"].text() == "выключен (default)"
+    assert not tab._errors.isVisibleTo(tab)  # ошибок нет — блок не показываем
+    tab.deleteLater()
+
+
+def test_device_tab_report_partial_and_errors(qapp) -> None:
+    """Сбой секции (ECC не поддерживается): её поле остаётся «—», текст ошибки виден."""
+    from arctuner.context import DeviceReport
+    from arctuner.igcl.api import PciStateInfo
+
+    tab = DeviceTab()
+    tab.set_report(
+        DeviceReport(
+            pci=PciStateInfo(
+                gen=4,
+                width=8,
+                max_bandwidth_mbps=None,  # драйвер не сообщил
+                rebar_supported=False,
+                rebar_enabled=False,
+                address="0000:03:00.0",
+            ),
+            firmware=None,
+            ecc=None,
+            errors=("ECC: не поддерживается (0x…)", "прошивка: драйвер не сообщает (0x…)"),
+        )
+    )
+    assert tab._pci["bandwidth"].text() == "—"  # неизвестное — прочерк, не выдумка
+    assert tab._pci["rebar"].text() == "не поддержан"
+    assert tab._fw["fw_name"].text() == "—"  # секция не прочиталась
+    assert tab._errors.isVisibleTo(tab)
+    assert "ECC" in tab._errors.text()
+    tab.deleteLater()
+
+
+def test_device_tab_refresh_button_emits(qapp) -> None:
+    """Кнопка «Обновить» шлёт refresh_requested (читает воркер, не UI)."""
+    tab = DeviceTab()
+    calls: list[int] = []
+    tab.refresh_requested.connect(lambda: calls.append(1))
+    tab._refresh_btn.click()
+    assert calls == [1]
+    tab.deleteLater()
+
+
+def test_worker_reload_device_emits_both_signals(qapp) -> None:
+    """reload_device: info+extended → device_info_ready, секции → device_report_ready.
+
+    Секции независимы: падение ECC (IgclError) попадает в errors, остальные
+    заполняются. Контекст — SimpleNamespace-фейк, IGCL не грузится.
+    """
+    from types import SimpleNamespace
+
+    from arctuner.context import DeviceReport
+    from arctuner.gui.worker import GpuWorker
+    from arctuner.igcl.api import EccStateInfo, FirmwareInfo, IgclError, PciStateInfo
+
+    class _FakeCtx:
+        is_open = True
+        info = _device_info()
+        extended_info = _extended()
+
+        @staticmethod
+        def pci_state() -> PciStateInfo:
+            return PciStateInfo(
+                gen=5,
+                width=16,
+                max_bandwidth_mbps=32000.0,
+                rebar_supported=True,
+                rebar_enabled=False,
+                address="0000:03:00.0",
+            )
+
+        @staticmethod
+        def firmware_info() -> FirmwareInfo:
+            raise IgclError(0x80860001, "ctlFirmwareGetProperties")  # драйвер молчит
+
+        @staticmethod
+        def ecc_state() -> EccStateInfo:
+            return EccStateInfo(
+                supported=False, can_control=False, current="default", pending="default"
+            )
+
+    worker = GpuWorker()  # без start(): IGCL не грузится
+    worker._ctx = SimpleNamespace(
+        is_open=True,
+        info=_device_info(),
+        extended_info=_extended(),
+        pci_state=_FakeCtx.pci_state,
+        firmware_info=_FakeCtx.firmware_info,
+        ecc_state=_FakeCtx.ecc_state,
+    )
+
+    infos: list[tuple[object, object]] = []
+    reports: list[DeviceReport] = []
+    worker.device_info_ready.connect(lambda i, e: infos.append((i, e)))
+    worker.device_report_ready.connect(reports.append)
+
+    worker.reload_device()
+
+    assert len(infos) == 1
+    assert infos[0][0].name == "Intel Arc B580"
+    assert len(reports) == 1
+    rep = reports[0]
+    assert rep.pci is not None and rep.pci.gen == 5
+    assert rep.ecc is not None
+    assert rep.firmware is None  # секция упала — честный None
+    assert len(rep.errors) == 1 and "прошивка" in rep.errors[0]
+
+
+def test_worker_reload_device_closed_session_reports_error(qapp) -> None:
+    """Сессия не открыта — ошибка и ни одного сигнала данных (ничего не выдумываем)."""
+    from arctuner.gui.worker import GpuWorker
+
+    worker = GpuWorker()  # _ctx.is_open False по умолчанию
+    errors: list[str] = []
+    infos: list[object] = []
+    reports: list[object] = []
+    worker.error.connect(errors.append)
+    worker.device_info_ready.connect(lambda *_: infos.append(1))
+    worker.device_report_ready.connect(reports.append)
+
+    worker.reload_device()
+
+    assert len(errors) == 1 and "reload_device" in errors[0]
+    assert infos == [] and reports == []

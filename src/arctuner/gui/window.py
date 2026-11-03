@@ -36,6 +36,7 @@ from arctuner.gui.scale import (
 )
 from arctuner.gui.tabs import (
     AutoTuneTab,
+    DeviceTab,
     FansTab,
     LogTab,
     MonitoringTab,
@@ -79,6 +80,7 @@ class MainWindow(QMainWindow):
         self._fans = FansTab()
         self._vf = VfTab()
         self._log = LogTab()
+        self._device = DeviceTab()
         self._autotune = AutoTuneTab()
         self._overlay_tab = OverlayTab(self._overlay)  # настройки HUD (без IGCL)
         style = self.style()  # иконки вкладок и окна — стандартные Qt, без ресурсов
@@ -109,6 +111,11 @@ class MainWindow(QMainWindow):
                     self._log,
                     style.standardIcon(QStyle.StandardPixmap.SP_FileIcon),
                     tr("Журнал", "Journal"),
+                ),
+                (
+                    self._device,
+                    style.standardIcon(QStyle.StandardPixmap.SP_MessageBoxInformation),
+                    tr("Об устройстве", "Device"),
                 ),
                 (
                     self._autotune,
@@ -181,6 +188,9 @@ class MainWindow(QMainWindow):
         w.fans_ready.connect(self._fans.set_fans)
         w.vf_ready.connect(self._vf.set_curve)
         w.log_ready.connect(self._log.set_entries)
+        # Вкладка «Об устройстве»: секция «Устройство» и отчёт PCIe/прошивка/ECC.
+        w.device_info_ready.connect(self._device.set_device_info)
+        w.device_report_ready.connect(self._device.set_report)
         w.write_done.connect(self._on_write_done)
         w.error.connect(self._on_error)
         w.write_error.connect(self._on_write_error)
@@ -217,6 +227,9 @@ class MainWindow(QMainWindow):
         lg = self._log
         lg.rollback_requested.connect(self._worker.rollback)
         lg.refresh_requested.connect(self._worker.reload_static)
+
+        d = self._device
+        d.refresh_requested.connect(self._worker.reload_device)
 
         at = self._autotune
         at.search_requested.connect(self._on_autotune_start)
@@ -341,9 +354,7 @@ class MainWindow(QMainWindow):
         прямо в GUI-потоке (заморозка интерфейса) — invokeMethod гарантирует
         исполнение в потоке воркера.
         """
-        QMetaObject.invokeMethod(
-            self._worker, "poll_device_info", Qt.ConnectionType.QueuedConnection
-        )
+        QMetaObject.invokeMethod(self._worker, "reload_device", Qt.ConnectionType.QueuedConnection)
 
     def _on_scale_selected(self, value: float) -> None:
         save_scale(value)

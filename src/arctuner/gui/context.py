@@ -8,6 +8,6 @@ CLI ``autofind`` использует тот же путь записи/журн
 
 from __future__ import annotations
 
-from arctuner.context import ROLLBACKABLE_FIELDS, FanInfo, GpuContext
+from arctuner.context import ROLLBACKABLE_FIELDS, DeviceReport, FanInfo, GpuContext
 
-__all__ = ["ROLLBACKABLE_FIELDS", "FanInfo", "GpuContext"]
+__all__ = ["ROLLBACKABLE_FIELDS", "DeviceReport", "FanInfo", "GpuContext"]
