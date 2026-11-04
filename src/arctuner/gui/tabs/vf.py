@@ -38,7 +38,6 @@ class VfTab(QWidget):
         self._busy = False  # воркер занят: устаревшие данные не снимают блок
 
         self._chart = VfChart()
-        self._chart.setMinimumHeight(260)
         self._chart.curve_edited.connect(self._on_chart_edit)
 
         self._info = QLabel("Точек: —")

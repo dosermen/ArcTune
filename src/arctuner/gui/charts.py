@@ -44,6 +44,10 @@ _FREQ_COLOR = QColor(SERIES_FREQ)
 _LOAD_COLOR = QColor(SERIES_LOAD)
 _VRAM_COLOR = QColor(SERIES_VRAM)
 
+#: минимум высоты графика с осями-заголовками: ниже ~250 px QtCharts обрезает
+#: заголовок оси в «…» (место оси сжимается под подписи) — 280 с запасом.
+_AXIS_MIN_H = 280
+
 
 class LiveChart(QChartView):
     """Прокручиваемый график телеметрии в реальном времени.
@@ -81,6 +85,12 @@ class LiveChart(QChartView):
         self._axis_right.setRange(0.0, 3300.0)
         self._axis_right.setTitleText("МГц")
 
+        # Подписи всегда полные: QAbstractAxis по умолчанию (truncateLabels=true)
+        # заменяет текст на «…», как только места не хватает — на сжатом графике
+        # это «…» вместо чисел на ВСЕХ осях сразу (живой баг).
+        for axis in (self._axis_x, self._axis_left, self._axis_right):
+            axis.setTruncateLabels(False)
+
         chart = QChart()
         chart.setAnimationOptions(QChart.AnimationOption.NoAnimation)  # иначе лаги при 1 Гц
         for series in (
@@ -108,6 +118,9 @@ class LiveChart(QChartView):
         chart.legend().setAlignment(Qt.AlignmentFlag.AlignBottom)
         self.setChart(chart)
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
+        # Минимум, при котором оси не сжимаются: заголовок оси («секунды»)
+        # обрезается в «…» ниже ~250 px высоты (измерено на Qt 6.12) — 280 с запасом.
+        self.setMinimumHeight(_AXIS_MIN_H)
 
     @staticmethod
     def _make_series(name: str, color: QColor) -> QLineSeries:
@@ -209,6 +222,9 @@ class VfChart(QChartView):
         self._axis_x.setTitleText("МГц")
         self._axis_y = QValueAxis()
         self._axis_y.setTitleText("мВ")
+        # Подписи всегда полные — та же причина, что у LiveChart (см. выше).
+        for axis in (self._axis_x, self._axis_y):
+            axis.setTruncateLabels(False)
 
         # Отдельный scatter-серия для отображения маркеров точек (не сливается с линией)
         self._scatter = QScatterSeries()
@@ -227,6 +243,8 @@ class VfChart(QChartView):
         chart.legend().setVisible(False)
         self.setChart(chart)
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
+        # Минимум под заголовки осей — та же причина, что у LiveChart.
+        self.setMinimumHeight(_AXIS_MIN_H)
 
         self._points: list[tuple[float, float]] = []  # (мВ, МГц), отсортированы по МГц
         self._editable = False

@@ -114,7 +114,6 @@ class MonitoringTab(QWidget):
         )
 
         self._chart = LiveChart(window_s=300)
-        self._chart.setMinimumHeight(220)
 
         self._export_btn = QPushButton("Экспорт CSV…")
         self._export_btn.setToolTip(

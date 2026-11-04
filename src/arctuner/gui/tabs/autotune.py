@@ -114,7 +114,6 @@ class AutoTuneTab(QWidget):
         result_scroll.setWidget(self._result)
 
         self._live = LiveChart(window_s=120)
-        self._live.setMinimumHeight(200)
         self._live.setMaximumHeight(300)
         live_caption = QLabel("Живая телеметрия поиска (°C / % слева, МГц справа, окно 2 мин):")
         live_caption.setObjectName("hintLabel")

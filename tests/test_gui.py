@@ -23,7 +23,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 PySide6 = pytest.importorskip("PySide6", reason="GUI-тесты требуют PySide6 (extra gui)")
 
 from PySide6.QtCore import Qt  # noqa: E402
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication, QGraphicsTextItem  # noqa: E402
 
 from arctuner.gui.charts import LiveChart, VfChart  # noqa: E402
 from arctuner.gui.context import FanInfo  # noqa: E402
@@ -96,6 +96,30 @@ def test_metric_card_none_shows_dash(qapp) -> None:
 def test_charts_construct(qapp) -> None:
     LiveChart()
     VfChart()
+
+
+def test_chart_axis_labels_never_truncated(qapp) -> None:
+    """Подписи осей не обрезаются в «…» — у графиков выключен truncateLabels.
+
+    QtCharts по умолчанию заменяет текст подписи на «…», как только места не
+    хватает: на сжатом графике мониторинга все три оси показывали «…» вместо
+    чисел (живой баг). Вторая часть — на минимальной высоте остаётся полным
+    заголовок оси «секунды»: он обрезается независимо от truncateLabels.
+    """
+    for chart in (LiveChart(), VfChart()):
+        for axis in chart.chart().axes():
+            assert axis.truncateLabels() is False
+
+    tab = MonitoringTab()
+    tab.show()
+    tab._chart.resize(900, tab._chart.minimumHeight())
+    for _ in range(5):
+        qapp.processEvents()
+    scene = tab._chart.chart().scene()
+    texts = {item.toPlainText() for item in scene.items() if isinstance(item, QGraphicsTextItem)}
+    assert "..." not in texts, f"обрезанная подпись: {sorted(texts)}"
+    assert "секунды" in texts
+    tab.close()
 
 
 def test_metric_card_accent_property(qapp) -> None:
