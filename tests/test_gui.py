@@ -1771,3 +1771,204 @@ def test_worker_reload_device_closed_session_reports_error(qapp) -> None:
 
     assert len(errors) == 1 and "reload_device" in errors[0]
     assert infos == [] and reports == []
+
+
+# --- постоянный watchdog (вне авторазгона) ---
+
+
+def _wd_snap(temp: float = 55.0, activity: int = 100, energy: float = 1000.0) -> TelemetrySnapshot:
+    """Снимок для watchdog-тестов: температура и счётчики управляемы."""
+    return TelemetrySnapshot(
+        gpu_voltage_v=1.0,
+        gpu_freq_mhz=2500.0,
+        gpu_temp_c=temp,
+        gpu_power_percent=70.0,
+        vram_voltage_v=1.35,
+        vram_eff_freq_mbps=19.75,
+        vram_temp_c=48.0,
+        power_limited=False,
+        temperature_limited=False,
+        current_limited=False,
+        voltage_limited=False,
+        utilization_limited=False,
+        activity_counter=activity,
+        gpu_energy_counter_j=energy,
+    )
+
+
+def _wd_worker(monkeypatch, tmp_path, ctx_extra: dict | None = None) -> object:
+    """Воркер с фейк-контекстом и постоянным watchdog; TDR-запрос отключён.
+
+    Без start(): IGCL не грузится, watchdog создаётся вручную — так же,
+    как делает start() при открытии сессии.
+    """
+    from types import SimpleNamespace
+
+    from arctuner.autotune.watchdog import Watchdog
+    from arctuner.gui.worker import GpuWorker
+    from arctuner.logbook import Logbook
+
+    monkeypatch.setattr(Watchdog, "_query_tdr_events", lambda self: [])  # PowerShell не нужен
+    state = {"snap": _wd_snap()}
+    ctx = dict(
+        is_open=True,
+        info=SimpleNamespace(name="Intel Arc B580"),
+        telemetry=lambda: state["snap"],
+        log=Logbook(tmp_path / "logbook.jsonl"),
+    )
+    ctx.update(ctx_extra or {})
+    worker = GpuWorker()
+    worker._ctx = SimpleNamespace(**ctx)
+    worker._watchdog = Watchdog(device="B580")
+    worker._wd_state = state  # тест двигает снимки через state["snap"]
+    return worker
+
+
+def test_worker_watchdog_constant_mode_logs_and_dedups(qapp, tmp_path, monkeypatch) -> None:
+    """Постоянный watchdog: событие → запись в журнал + сигнал, один раз на инцидент.
+
+    Дедуп по типу: пока check() возвращает событие того же типа, повторных
+    записей нет; после нормализации (_wd_logged сбрасывается) инцидент
+    логируется заново.
+    """
+    worker = _wd_worker(monkeypatch, tmp_path)
+    state = worker._wd_state
+    events: list[tuple[str, str]] = []
+    worker.watchdog_event.connect(lambda t, d: events.append((t, d)))
+
+    # Норма — ни события, ни записи.
+    worker.poll_telemetry()
+    assert events == []
+    assert worker._ctx.log.read_all() == []
+
+    # Аварийная температура: одно событие, одна запись; повторный тик молчит.
+    state["snap"] = _wd_snap(temp=90.0)
+    worker.poll_telemetry()
+    worker.poll_telemetry()
+    assert len(events) == 1 and events[0][0] == "TEMP_EMERGENCY"
+    entries = worker._ctx.log.read_all()
+    assert len(entries) == 1
+    assert entries[0].field == "watchdog"
+    assert "TEMP_EMERGENCY" in entries[0].note
+
+    # Инцидент закрылся (нормальная температура/счётчики) — дедуп сброшен.
+    state["snap"] = _wd_snap(temp=55.0, activity=200, energy=2000.0)
+    worker.poll_telemetry()
+    assert len(events) == 1
+
+    # Повторный аварийный тик — снова событие и запись.
+    state["snap"] = _wd_snap(temp=91.0)
+    worker.poll_telemetry()
+    assert len(events) == 2
+    assert len(worker._ctx.log.read_all()) == 2
+
+
+def test_worker_watchdog_rollback_only_with_explicit_option(qapp, tmp_path, monkeypatch) -> None:
+    """Авто-откат OC — только при явно включённой опции (по умолчанию выкл.)."""
+    rollbacks: list[object] = []
+
+    def _rollback() -> list[tuple[str, float]]:
+        done = [("gpuFrequencyOffset", 160.0)]
+        rollbacks.append(done)
+        return done
+
+    worker = _wd_worker(
+        monkeypatch,
+        tmp_path,
+        ctx_extra={
+            "rollback_targets": lambda: {"gpuFrequencyOffset": 160.0},
+            "rollback": _rollback,
+            "oc_ranges": lambda: {},
+            "current_values": lambda: {},
+            "fans": lambda: [],
+            "vf_curve": lambda: [],
+        },
+    )
+    state = worker._wd_state
+    events: list[tuple[str, str]] = []
+    worker.watchdog_event.connect(lambda t, d: events.append((t, d)))
+
+    # Опция выключена: событие пишется, карта не трогается.
+    state["snap"] = _wd_snap(temp=90.0)
+    worker.poll_telemetry()
+    assert rollbacks == []
+    assert events and "авто-откат" not in events[0][1]
+
+    # Явно включили: откат performed, суффикс в событии и в журнале.
+    worker.set_auto_rollback(True)
+    state["snap"] = _wd_snap(temp=55.0, activity=200, energy=2000.0)  # закрыть инцидент
+    worker.poll_telemetry()
+    state["snap"] = _wd_snap(temp=91.0)
+    worker.poll_telemetry()
+    assert rollbacks == [[("gpuFrequencyOffset", 160.0)]]
+    assert "авто-откат" in events[-1][1]
+    assert any("авто-откат" in e.note for e in worker._ctx.log.read_all())
+
+
+def test_worker_watchdog_telemetry_frozen_event(qapp, tmp_path, monkeypatch) -> None:
+    """Заморозка телеметрии (счётчик активности стоит) — событие, не ошибка опроса."""
+    worker = _wd_worker(monkeypatch, tmp_path)
+    state = worker._wd_state
+    events: list[tuple[str, str]] = []
+    errors: list[str] = []
+    worker.watchdog_event.connect(lambda t, d: events.append((t, d)))
+    worker.error.connect(errors.append)
+
+    worker.poll_telemetry()  # база: первый снимок — данных для сравнения нет
+    state["snap"] = _wd_snap(temp=55.0, activity=100, energy=1000.0)  # activity стоит
+    worker.poll_telemetry()
+
+    assert [t for t, _ in events] == ["TELEMETRY_FROZEN"]
+    assert errors == []  # сбой не роняет и не шумит в опросе
+
+
+def test_tools_menu_auto_rollback_option(qapp, monkeypatch) -> None:
+    """Меню «Инструменты»: опция авто-отката читается из настроек и уходит воркеру.
+
+    Опция выключена по умолчанию; включение — явное действие пользователя
+    (triggered сохраняет настройки и обновляет воркер сразу).
+    """
+    from arctuner.gui import window as window_mod
+    from arctuner.gui.window import MainWindow
+
+    _silence_no_device_dialog(monkeypatch)
+    monkeypatch.setattr(window_mod, "load_auto_rollback", lambda: True)  # сохранено раньше
+    saved: list[bool] = []
+    monkeypatch.setattr(window_mod, "save_auto_rollback", lambda on=False: saved.append(on))
+
+    win = MainWindow()
+    win._timer.stop()
+
+    tools = next(a for a in win.menuBar().actions() if a.text() == "Инструменты")
+    action = next(a for a in tools.menu().actions() if "Авто-откат" in a.text())
+    assert action.isChecked()  # прочитано из настроек
+    assert win._worker._auto_rollback is True  # начальное значение ушло воркеру
+
+    action.trigger()  # реальный путь пользователя: переключает флажок и шлёт checked
+    assert not action.isChecked()
+    assert saved == [False]  # настройки сохранены сразу (слот в UI-потоке)
+
+    # set_auto_rollback — queued в поток воркера: он исполнится до shutdown
+    # (FIFO одной очереди), поэтому дожидаемся через штатный teardown.
+    win.close()
+    assert _wait_worker_stopped(win)
+    assert win._worker._auto_rollback is False
+
+
+def test_auto_rollback_setting_roundtrip(qapp, tmp_path, monkeypatch) -> None:
+    """Опция авто-отката: по умолчанию False, сохранённое True читается обратно.
+
+    Грязь в настройках не включает откат молча — безопасность важнее удобства.
+    """
+    from arctuner.gui import safety
+
+    monkeypatch.setattr(safety, "_settings", _isolated_settings(tmp_path))
+
+    assert safety.load_auto_rollback() is False
+    safety.save_auto_rollback(True)
+    safety._settings().sync()
+    assert safety.load_auto_rollback() is True
+
+    safety._settings().setValue("safety/auto_rollback", "может быть")
+    safety._settings().sync()
+    assert safety.load_auto_rollback() is False

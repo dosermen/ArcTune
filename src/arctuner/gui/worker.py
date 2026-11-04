@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, ClassVar
 
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 
+from arctuner.autotune.watchdog import Watchdog
 from arctuner.gui.context import DeviceReport, GpuContext
 from arctuner.igcl.api import IgclError
 from arctuner.replay import IncidentReplay
@@ -43,6 +44,9 @@ class GpuWorker(QObject):
     write_error = Signal(str)  # ошибка ЗАПИСИ — показывается модально
     busy_changed = Signal(bool)
     incident_replay = Signal(str)  # записан дамп реплея инцидента (путь к JSONL)
+    #: Событие постоянного watchdog: (тип, описание) — статус-бар окна; запись
+    #: в журнал воркер делает сам (внутри потока, до эмита).
+    watchdog_event = Signal(str, str)
     #: ctlClose выполнен в потоке воркера (или упал — сигнал всё равно уходит).
     #: Окно останавливает QThread только после него.
     shutdown_done = Signal()
@@ -70,6 +74,11 @@ class GpuWorker(QObject):
         # Реплей инцидента: буфер создаётся после открытия сессии (нужно имя
         # устройства). Read-only: ни один звонок реплея не меняет карту.
         self._replay: IncidentReplay | None = None
+        # Постоянный watchdog (вне авторазгона): живёт вместе с открытой
+        # сессией; до старта None — poll-цикл его не трогает.
+        self._watchdog: Watchdog | None = None
+        self._wd_logged: set[str] = set()  # записанные типы: один инцидент — одна запись
+        self._auto_rollback = False  # включается только явной опцией меню
         # self-сигнал → слот в этом же потоке: emit из UI-потока встаёт в очередь
         # воркера и не выполняет поиск в UI-потоке.
         self.autotune_start.connect(self.autotune_search)
@@ -87,6 +96,8 @@ class GpuWorker(QObject):
             self.error.emit(str(e))
             return
         self._replay = IncidentReplay(device=info.name)
+        self._watchdog = Watchdog(device=info.name)
+        self._wd_logged.clear()
         self.device_ready.emit(info)
         self.reload_static()
         self.reload_device()  # статус-бар + вкладка «Об устройстве» сразу при старте
@@ -127,6 +138,7 @@ class GpuWorker(QObject):
             return
         self.telemetry_ready.emit(snap)
         self._replay_telemetry(snap)
+        self._watchdog_poll(snap)
 
     def _replay_telemetry(self, snap: TelemetrySnapshot) -> None:
         """Толкает снимок в буфер реплея; при инциденте пишет дамп и извещает UI.
@@ -144,6 +156,72 @@ class GpuWorker(QObject):
                 self.incident_replay.emit(str(path))
         except OSError as e:
             self.error.emit(f"реплей инцидента: {e}")
+
+    # --- постоянный watchdog (вне авторазгона) ---
+
+    @Slot(bool)
+    def set_auto_rollback(self, on: bool) -> None:
+        """Явная опция: авто-откат OC при событии watchdog (по умолчанию выкл.).
+
+        Приходит из меню «Инструменты»; воркер читает флаг только в своём
+        потоке (queued-слот), поэтому гонки с записью нет.
+        """
+        self._auto_rollback = on
+
+    def _watchdog_poll(self, snap: TelemetrySnapshot) -> None:
+        """Событие постоянного watchdog → журнал (+ авто-откат) → сигнал UI.
+
+        Работает на каждом тике опроса, пока открыта сессия. Один инцидент —
+        одна запись: повторных событий того же типа нет, пока check() не
+        вернёт None (дедуп по _wd_logged). Сбой проверки не роняет опрос:
+        watchdog — наблюдатель, а не условие жизни poll-цикла.
+
+        TDR-запрос (PowerShell) идёт не чаще TDR_CHECK_INTERVAL и занимает
+        поток воркера доли секунды — UI при этом не блокируется.
+        """
+        if self._watchdog is None:
+            return
+        try:
+            evt = self._watchdog.check(snap)
+        except Exception as e:  # широкий перехват осознан: watchdog не должен ронять опрос
+            self.error.emit(f"watchdog: сбой проверки ({e!r})")
+            return
+        if evt is None:
+            self._wd_logged.clear()  # инцидент закрылся — будем логировать заново
+            return
+        if evt.type in self._wd_logged:
+            return
+        self._wd_logged.add(evt.type)
+        detail = evt.detail
+        if self._auto_rollback:
+            detail += self._watchdog_rollback()
+        note = f"{evt.type}: {detail}"
+        try:
+            device = self._ctx.info.name if self._ctx.info else ""
+            self._ctx.log.record("watchdog", None, None, device=device, note=note)
+            self.log_ready.emit(self._ctx.log.read_all())  # вкладка «Журнал» сразу
+        except OSError as e:
+            self.error.emit(f"watchdog: журнал не записан ({e})")
+        self.watchdog_event.emit(evt.type, detail)
+
+    def _watchdog_rollback(self) -> str:
+        """Авто-откат OC при событии — только при явно включённой опции.
+
+        Returns:
+            Суффикс для записи журнала: что откатилось или почему не откатилось.
+        """
+        try:
+            if not self._ctx.rollback_targets():
+                return " — откат не требуется (целей нет)"
+            done = self._ctx.rollback()
+        except (IgclError, SafetyLimitError, OSError) as e:
+            return f" — авто-откат не удался: {e}"
+        if not done:
+            return " — откат не требуется (целей нет)"
+        # «Сейчас» и диапазоны в UI могли устареть после отката.
+        self.reload_static()
+        summary = ", ".join(f"{name}={value:g}" for name, value in done)
+        return f" — авто-откат: {summary}"
 
     @Slot()
     def reload_device(self) -> None:

@@ -27,6 +27,7 @@ from arctuner.gui.overlay import (
     layout_label,
     load_overlay_enabled,
 )
+from arctuner.gui.safety import load_auto_rollback, save_auto_rollback
 from arctuner.gui.scale import (
     SCALE_CHOICES,
     load_scale,
@@ -159,6 +160,7 @@ class MainWindow(QMainWindow):
         self._worker = GpuWorker()
         self._worker.attach_thread(self._thread)
 
+        self._build_tools_menu()
         self._build_info_menu()
         self._wire_worker()
         self._wire_tabs()
@@ -196,6 +198,7 @@ class MainWindow(QMainWindow):
         w.write_error.connect(self._on_write_error)
         w.busy_changed.connect(self._on_busy)
         w.incident_replay.connect(self._on_incident)
+        w.watchdog_event.connect(self._on_watchdog)
         w.shutdown_done.connect(self._on_shutdown_done)
         w.autotune_progress.connect(self._autotune.update_progress)
         # Живая телеметрия поиска: общий график «Мониторинга» + мини-график
@@ -338,6 +341,34 @@ class MainWindow(QMainWindow):
         self._overlay.layout_changed.connect(self._sync_overlay_layout)
         self._overlay.opacity_changed.connect(self._sync_overlay_opacity)
         self._overlay.visibility_changed.connect(self._sync_overlay_visibility)
+
+    def _build_tools_menu(self) -> None:
+        """Меню «Инструменты»: явные опции, влияющие на запись на карту.
+
+        Авто-откат watchdog выключен по умолчанию: опция сохраняется в
+        настройках и применяется к воркеру сразу (queued-слот) и при каждом
+        старте — включают только осознанно.
+        """
+        menu = self.menuBar().addMenu(tr("Инструменты", "Tools"))
+        self._auto_rollback_action = QAction(
+            tr(
+                "Авто-откат OC при срабатывании watchdog",
+                "Auto-rollback OC on watchdog",
+            ),
+            self,
+            checkable=True,
+        )
+        self._auto_rollback_action.setToolTip(
+            "При срабатывании постоянного watchdog (аварийная температура, заморозка "
+            "телеметрии, TDR) вернуть настройки к исходным значениям журнала. По "
+            "умолчанию выключено: событие тогда только пишется в журнал."
+        )
+        self._auto_rollback_action.setChecked(load_auto_rollback())
+        self._auto_rollback_action.triggered.connect(save_auto_rollback)
+        self._auto_rollback_action.triggered.connect(self._worker.set_auto_rollback)
+        menu.addAction(self._auto_rollback_action)
+        # Начальное значение из настроек — воркер уже в своём потоке (queued).
+        self._worker.set_auto_rollback(self._auto_rollback_action.isChecked())
 
     def _build_info_menu(self) -> None:
         """Меню «Информация»: обновление данных об устройстве."""
@@ -577,6 +608,17 @@ class MainWindow(QMainWindow):
         в пилюле danger и надолго; полный путь — в дампе.
         """
         self._set_pill("danger", f"🚨 Инцидент (драйвер перезагрузился?) — дамп: {path}")
+
+    def _on_watchdog(self, event_type: str, detail: str) -> None:
+        """Событие постоянного watchdog: пилюля состояния, без модального диалога.
+
+        Диалог во время игры отнял бы фокус, а событий бывает несколько
+        (дедуп по типу — в воркере). Полная запись — вкладка «Журнал».
+        """
+        if event_type == "TELEMETRY_FROZEN":
+            self._set_pill("warn", f"⚠️ watchdog: {detail}")
+        else:
+            self._set_pill("danger", f"🚨 watchdog: {detail}")
 
     def _on_busy(self, busy: bool) -> None:
         """Воркер занят записью/поиском: блокируем кнопки и гасим опрос.
