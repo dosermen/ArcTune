@@ -26,7 +26,11 @@ _SIZE_DIMENSIONS: dict[str, tuple[int, int]] = {
 _GAP_MAX_S = 5.0
 _MAX_SAMPLES = max(MINI_CHART_WINDOWS) * 2
 _MAX_EVENTS = 100
-_EVENT_COLORS = {"watchdog": QColor("#ef5350"), "limiter": QColor("#ffb74d")}
+_EVENT_COLORS = {
+    "watchdog": QColor("#ef5350"),
+    "limiter": QColor("#ffb74d"),
+    "setting": QColor("#64b5f6"),
+}
 
 _METRICS: dict[str, tuple[str, str, QColor, bool]] = {
     "temp": ("Temperature, °C", "Температура, °C", QColor(SERIES_TEMP), False),

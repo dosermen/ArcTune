@@ -360,12 +360,14 @@ def test_mini_chart_event_markers_render_and_clear(qapp, snapshot) -> None:
     chart.push(1.0, snapshot)
     chart.add_event_marker(1.5, "Limit: Power", "limiter")
     chart.add_event_marker(2.0, "WATCHDOG: frozen telemetry", "watchdog")
+    chart.add_event_marker(2.0, "gpuFrequencyOffset: 100 -> 150", "setting")
     chart.push(2.0, replace(snapshot, gpu_temp_c=61.0))
 
-    assert len(chart._event_series) == 2
+    assert len(chart._event_series) == 3
     inspected = chart.inspect_at_time(2.0)
     assert "Limit: Power" in inspected
     assert "WATCHDOG: frozen telemetry" in inspected
+    assert "gpuFrequencyOffset: 100 -> 150" in inspected
     with pytest.raises(ValueError, match="неизвестный тип события"):
         chart.add_event_marker(2.0, "Unknown", "other")
     with pytest.raises(ValueError, match="не должна быть пустой"):
@@ -506,10 +508,12 @@ def test_overlay_marks_watchdog_and_new_limiter_events(settings, qapp, snapshot)
     win.on_telemetry(replace(snapshot, voltage_limited=True))
     win.on_watchdog_event("TDR", "driver reset")
 
+    win.on_setting_applied("powerLimit: 100 -> 110")
     kinds = [event[2] for event in win._mini_chart._events]
-    assert kinds == ["limiter", "watchdog"]
+    assert kinds == ["limiter", "watchdog", "setting"]
     assert "Напряжение" in win._mini_chart._events[0][1]
     assert "TDR: driver reset" in win._mini_chart._events[1][1]
+    assert "powerLimit: 100 -> 110" in win._mini_chart._events[2][1]
     win.deleteLater()
 
 
@@ -604,6 +608,8 @@ def test_main_window_forwards_telemetry_to_overlay(settings, qapp, monkeypatch, 
     win._overlay.set_mini_chart_enabled(True)
     win._worker.watchdog_event.emit("TDR", "driver reset")
     assert win._overlay._mini_chart._events[-1][1] == "TDR: driver reset"
+    win._worker.setting_applied.emit("gpuFrequencyOffset: 100 -> 150")
+    assert win._overlay._mini_chart._events[-1][1] == "gpuFrequencyOffset: 100 -> 150"
 
     _close_window(win)
 

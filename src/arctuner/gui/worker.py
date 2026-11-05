@@ -47,6 +47,7 @@ class GpuWorker(QObject):
     #: Событие постоянного watchdog: (тип, описание) — статус-бар окна; запись
     #: в журнал воркер делает сам (внутри потока, до эмита).
     watchdog_event = Signal(str, str)
+    setting_applied = Signal(str)  # успешное ручное изменение настроек GPU
     #: ctlClose выполнен в потоке воркера (или упал — сигнал всё равно уходит).
     #: Окно останавливает QThread только после него.
     shutdown_done = Signal()
@@ -347,6 +348,7 @@ class GpuWorker(QObject):
                     self.write_error.emit(f"вентиляторы: {exc}")
                 return
             self.write_done.emit(f"вентиляторы: {applied} шт. зафиксированы на {rpm} RPM")
+            self.setting_applied.emit(f"вентиляторы: {applied} шт. зафиксированы на {rpm} RPM")
             # Перечитываем RPM: иначе вкладка покажет старую скорость до окна опроса.
             self.reload_fans()
 
@@ -357,6 +359,7 @@ class GpuWorker(QObject):
         def run() -> None:
             self._ctx.reset_fans()
             self.write_done.emit("вентиляторы возвращены в авто")
+            self.setting_applied.emit("вентиляторы возвращены в авто")
             self.reload_fans()
 
         self._guarded(run)
@@ -372,6 +375,7 @@ class GpuWorker(QObject):
             else:
                 summary = ", ".join(f"{name}={value:g}" for name, value in done)
                 self.write_done.emit(f"откат: {summary}")
+                self.setting_applied.emit(f"откат: {summary}")
             self.reload_static()
 
         self._guarded(run)
@@ -536,6 +540,7 @@ class GpuWorker(QObject):
         if report.note:
             line += f" ({report.note})"
         self.write_done.emit(line)
+        self.setting_applied.emit(line)
         self.reload_static()
 
 

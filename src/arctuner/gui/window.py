@@ -194,6 +194,7 @@ class MainWindow(QMainWindow):
         w.device_info_ready.connect(self._device.set_device_info)
         w.device_report_ready.connect(self._device.set_report)
         w.write_done.connect(self._on_write_done)
+        w.setting_applied.connect(self._overlay.on_setting_applied)
         w.error.connect(self._on_error)
         w.write_error.connect(self._on_write_error)
         w.busy_changed.connect(self._on_busy)

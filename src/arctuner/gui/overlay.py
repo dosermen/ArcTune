@@ -668,6 +668,16 @@ class OverlayWindow(QWidget):
             label = f"{event_type}: {detail}"
             self._mini_chart.add_event_marker(time.monotonic() - self._chart_t0, label, "watchdog")
 
+    @Slot(str)
+    def on_setting_applied(self, detail: str) -> None:
+        """Добавляет подтверждённое ручное изменение на шкалу мини-графика."""
+        if self._chart_enabled:
+            self._mini_chart.add_event_marker(
+                time.monotonic() - self._chart_t0,
+                detail,
+                "setting",
+            )
+
     def reset_position(self) -> None:
         """Возвращает окно в правый верхний угол основного экрана."""
         self._place_default()
