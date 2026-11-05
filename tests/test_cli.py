@@ -369,6 +369,37 @@ def test_cmd_set_reverts_applied_on_partial_failure(monkeypatch, tmp_path, capsy
     assert fields == ["powerLimit", "powerLimit"]
 
 
+def test_cmd_set_reverts_when_journal_write_fails(monkeypatch, tmp_path, capsys) -> None:
+    """Сбой журнала после записи параметра тоже откатывает карту."""
+    monkeypatch.setenv("ARCTUNE_LOG", str(tmp_path / "logbook.jsonl"))
+    api = _PartialApi()
+    _fake_igcl(monkeypatch, api)
+
+    from arctuner import tuner
+
+    monkeypatch.setattr(tuner, "_read_current", lambda _api, _h, field: 100.0)
+
+    def fail_record(*_args: object, **_kwargs: object) -> None:
+        raise OSError("журнал недоступен")
+
+    monkeypatch.setattr(Logbook, "record", fail_record)
+    args = argparse.Namespace(
+        power_limit=115.0,
+        freq_offset=None,
+        voltage_offset=None,
+        temp_limit=None,
+        vram_speed=None,
+        yes=True,
+        force=False,
+    )
+
+    assert cmd_set(args) == 1
+    assert api.set_values == [115.0, 100.0]
+    output = capsys.readouterr().out
+    assert "журнал не записан" in output
+    assert "карта возвращена" in output
+
+
 # --- main(): последний рубеж ---
 
 

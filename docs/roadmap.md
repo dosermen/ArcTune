@@ -224,11 +224,11 @@
 
 Пять V2 Get-функций вызываются из `tuner.py` динамически через `loader`, без обёрток в `api.py`.
 
-### Не обёрнуто (96 из 128 функций)
+### Не обёрнуто (93 из 128 функций)
 
 | Категория | Кол-во | Функции | Статус |
 |---|---|---|---|
-| **Память** | 4 | `ctlEnumMemoryModules`, `ctlMemoryGetProperties`, `ctlMemoryGetState`, `ctlMemoryGetBandwidth` | Нужна реализация |
+| **Память** | 1 | `ctlMemoryGetBandwidth` | Измерение пропускной способности |
 | **ECC set** | 1 | `ctlEccSetState` | Не используется на B580 |
 | **Домены частот** | 3 | `ctlEnumFrequencyDomains`, `ctlFrequencyGetState`, `ctlFrequencyGetThrottleTime` | Диагностика тротлинга |
 | **GpuLock** | 2 | `ctlOverclockGpuLockGet`, `ctlOverclockGpuLockSet` | Фиксация частоты |

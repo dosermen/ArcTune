@@ -23,7 +23,13 @@ from arctuner.autotune import engine as engine_mod
 from arctuner.autotune import watchdog as watchdog_mod
 from arctuner.cli import main
 from arctuner.igcl.api import IgclError, TelemetrySnapshot
-from arctuner.logbook import RESET_OC_FIELD, JournalWriteError, Logbook, default_logbook_path
+from arctuner.logbook import (
+    RESET_FANS_FIELD,
+    RESET_OC_FIELD,
+    JournalWriteError,
+    Logbook,
+    default_logbook_path,
+)
 from arctuner.tuner import SafetyLimitError, WriteReport
 
 _DEV = SimpleNamespace(
@@ -409,6 +415,33 @@ def test_fans_journal_failure_returns_one_and_reverts_fan(
     assert main(["fans", "--set", "1800", "--yes"]) == 1
     assert reverted == [fan]  # карта возвращена в авто до падения
     assert "журнал не записан" in capsys.readouterr().out
+
+
+def test_fans_set_rolls_back_earlier_fans_on_later_failure(cli_env: _FakeApi, capsys) -> None:
+    """Сбой установки на втором вентиляторе возвращает оба затронутых в авто."""
+    fans = [object(), object()]
+    fixed: list[tuple[object, int]] = []
+    defaults: list[object] = []
+    cli_env.enum_fans = lambda _handle: fans  # type: ignore[method-assign]
+    cli_env.get_fan_properties = lambda _fan: SimpleNamespace(  # type: ignore[method-assign]
+        supportedModes=2, canControl=True, maxRPM=3000
+    )
+    cli_env.get_fan_speed = lambda _fan: 1200  # type: ignore[method-assign]
+
+    def set_fixed(fan: object, rpm: int) -> None:
+        fixed.append((fan, rpm))
+        if fan is fans[1]:
+            raise IgclError(0x44000001, "ctlFanSetFixedSpeedMode")
+
+    cli_env.set_fan_fixed_speed = set_fixed  # type: ignore[method-assign]
+    cli_env.set_fan_default = lambda fan: defaults.append(fan)  # type: ignore[method-assign]
+
+    assert main(["fans", "--set", "1800", "--yes"]) == 1
+    assert fixed == [(fans[0], 1800), (fans[1], 1800)]
+    assert defaults == [fans[1], fans[0]]
+    fields = [entry.field for entry in Logbook(default_logbook_path()).read_all()]
+    assert fields == ["fan[0]", RESET_FANS_FIELD]
+    assert "все затронутые вентиляторы возвращены в авто" in capsys.readouterr().out
 
 
 def test_reset_fans_igcl_error_returns_one(cli_env: _FakeApi, capsys) -> None:

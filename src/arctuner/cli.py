@@ -401,13 +401,21 @@ def cmd_set(args: argparse.Namespace) -> int:
                 if report.note:
                     line += f"  ({report.note})"
                 print(line)
-                log.record(
-                    report.field,
-                    report.old,
-                    report.new,
-                    device=device_name,
-                    note=report.note,
-                )
+                try:
+                    log.record(
+                        report.field,
+                        report.old,
+                        report.new,
+                        device=device_name,
+                        note=report.note,
+                    )
+                except OSError as exc:
+                    _revert_partial(api, handle, log, device_name, applied)
+                    print(
+                        f"[FAIL] журнал не записан ({exc}); выполнена попытка отката "
+                        "применённых настроек — проверьте сообщения выше"
+                    )
+                    return 1
             print("Готово. Проверьте: python -m arctuner telemetry")
             print(f"Журнал: {default_logbook_path()}")
     except SafetyLimitError as e:
@@ -449,6 +457,10 @@ def _revert_partial(
             continue
         try:
             report = fn(api, handle, old)
+        except (SafetyLimitError, IgclError, OSError) as rb_exc:
+            print(f"  [!] {field} <- {old:g}: откат не удался ({rb_exc})")
+            continue
+        try:
             log.record(
                 report.field,
                 report.old,
@@ -456,9 +468,12 @@ def _revert_partial(
                 device=device_name,
                 note="откат частичной записи (пункт не применился целиком)",
             )
+        except OSError as log_exc:
+            print(
+                f"  [!] {field} <- {old:g}: карта возвращена, но журнал отката не записан ({log_exc})"
+            )
+        else:
             print(f"  {field} <- {old:g}  (возвращено)")
-        except (SafetyLimitError, IgclError) as rb_exc:
-            print(f"  [!] {field} <- {old:g}: откат не удался ({rb_exc})")
 
 
 def cmd_vf(args: argparse.Namespace) -> int:
@@ -835,8 +850,12 @@ def _build_rollback_map() -> None:
 
 def cmd_fans(args: argparse.Namespace) -> int:
     """Вентиляторы: чтение (по умолчанию) / ⚠️ фиксация скорости с --set."""
-    from arctuner.igcl.api import IgclApi, IgclError
-    from arctuner.logbook import JournalWriteError, Logbook, default_logbook_path
+    from arctuner.igcl.api import CtlFanHandle, IgclApi, IgclError
+    from arctuner.logbook import (
+        RESET_FANS_FIELD,
+        Logbook,
+        default_logbook_path,
+    )
     from arctuner.telemetry import find_arc_adapter
     from arctuner.tuner import SafetyLimitError
 
@@ -890,20 +909,25 @@ def cmd_fans(args: argparse.Namespace) -> int:
                         print(tr("Отменено.", "Cancelled."))
                         return 1
                 log = Logbook(default_logbook_path())
-                for i, f in enumerate(fans):
-                    p = api.get_fan_properties(f)
-                    if not p.canControl:
-                        print(f"  [{i}] пропущен (не управляется)")
-                        continue
-                    if p.maxRPM <= 0:
-                        print(f"  [{i}] BLOCK: maxRPM неизвестен — запись заблокирована")
-                        continue
-                    if args.set > p.maxRPM:
-                        print(f"  [{i}] BLOCK: {args.set} > maxRPM {p.maxRPM}")
-                        continue
-                    old_rpm = api.get_fan_speed(f)
-                    api.set_fan_fixed_speed(f, args.set)
-                    try:
+                attempted: list[tuple[int, CtlFanHandle]] = []
+                try:
+                    for i, f in enumerate(fans):
+                        p = api.get_fan_properties(f)
+                        if not p.canControl:
+                            print(f"  [{i}] пропущен (не управляется)")
+                            continue
+                        if p.maxRPM <= 0:
+                            print(f"  [{i}] BLOCK: maxRPM неизвестен — запись заблокирована")
+                            continue
+                        if args.set > p.maxRPM:
+                            print(f"  [{i}] BLOCK: {args.set} > maxRPM {p.maxRPM}")
+                            continue
+                        old_rpm = api.get_fan_speed(f)
+                        # Добавляем до вызова: при ошибке драйвера результат
+                        # записи может быть неопределён, поэтому этот вентилятор
+                        # тоже переводим в безопасный режим.
+                        attempted.append((i, f))
+                        api.set_fan_fixed_speed(f, args.set)
                         log.record(
                             f"fan[{i}]",
                             float(old_rpm),
@@ -911,17 +935,42 @@ def cmd_fans(args: argparse.Namespace) -> int:
                             device=dev.name,
                             note="фиксация скорости",
                         )
-                    except OSError as exc:
-                        # Карта уже изменена — возвращаем авто, затем честно падаем.
+                        print(f"  [{i}] установлено {args.set} RPM (было {old_rpm})")
+                except (IgclError, OSError) as exc:
+                    rollback_errors: list[str] = []
+                    for fan_index, attempted_fan in reversed(attempted):
                         try:
-                            api.set_fan_default(f)
-                            detail = "вентилятор возвращён в авто — настройка отменена"
+                            api.set_fan_default(attempted_fan)
                         except (IgclError, OSError) as rb_exc:
-                            detail = f"вернуть авто не удалось — состояние неизвестно ({rb_exc})"
-                        raise JournalWriteError(
-                            f"fan[{i}]: журнал не записан ({exc}); {detail}"
-                        ) from exc
-                    print(f"  [{i}] установлено {args.set} RPM (было {old_rpm})")
+                            rollback_errors.append(f"[{fan_index}]: {rb_exc}")
+                    if not rollback_errors and attempted:
+                        try:
+                            log.record(
+                                RESET_FANS_FIELD,
+                                None,
+                                None,
+                                device=dev.name,
+                                note="частичная фиксация отменена; все вентиляторы возвращены в авто",
+                            )
+                        except OSError as log_exc:
+                            rollback_errors.append(f"журнал отката: {log_exc}")
+                    reason = (
+                        f"журнал не записан ({exc})"
+                        if isinstance(exc, OSError)
+                        else f"ошибка драйвера ({exc})"
+                    )
+                    if rollback_errors:
+                        details = "; ".join(rollback_errors)
+                        print(
+                            f"[FAIL] фиксация вентиляторов прервана: {reason}; "
+                            f"откат выполнен не полностью/не записан: {details}"
+                        )
+                    else:
+                        print(
+                            f"[FAIL] фиксация вентиляторов прервана: {reason}; "
+                            "все затронутые вентиляторы возвращены в авто"
+                        )
+                    return 1
                 print("Вернуть авто: python -m arctuner reset --fans")
     except (IgclError, SafetyLimitError, OSError) as e:
         print(f"[FAIL] {e}")

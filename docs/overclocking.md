@@ -48,8 +48,8 @@ legacy-функция отвечает `UNSUPPORTED_FEATURE`. Напряжени
 - `ctlOverclockVramMemSpeedLimitSetV2(20)`
 - **Перезагрузка**
 - Проверка: `arctune telemetry` — фактическая эффективная частота памяти
-  (`vramCurrentEffectiveFrequency`, Гбит/с). `ctlMemoryGetState` в ArcTune
-  **не обёрнута**, поэтому как встроенную проверку её использовать нельзя.
+  (`vramCurrentEffectiveFrequency`, Гбит/с). Занятость/доступный объём VRAM
+  также доступны через `arctune telemetry --load` (`ctlMemoryGetState`).
 - Тест стабильности 10–15 мин
 
 ### Шаг 2. Лимит питания → 120%
