@@ -9,7 +9,7 @@
 
 ```powershell
 pip install -e ".[build]"        # pyinstaller>=6.0
-pip install -e ".[gui]"          # только для сборки arctune-gui.exe (PySide6)
+pip install -e ".[gui]"          # PySide6 и psutil для сборки GUI
 ```
 
 На целевой машине Python не нужен — нужен только установленный Intel Arc Graphics

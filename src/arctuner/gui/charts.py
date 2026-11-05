@@ -67,12 +67,17 @@ class LiveChart(QChartView):
         self._samples: deque[tuple[float, float, float, float, float | None, float | None]] = deque(
             maxlen=window_s * 2
         )
+        self._cpu_samples: deque[tuple[float, float | None, float | None]] = deque(
+            maxlen=window_s * 2
+        )
 
         self._temp_series = self._make_series(tr("Температура, °C", "Temperature, °C"), _TEMP_COLOR)
         self._power_series = self._make_series(tr("Мощность, %", "Power, %"), _POWER_COLOR)
         self._freq_series = self._make_series(tr("Частота, МГц", "Frequency, MHz"), _FREQ_COLOR)
         self._load_series = self._make_series(tr("Загрузка, %", "GPU Load, %"), _LOAD_COLOR)
         self._vram_series = self._make_series(tr("Память, %", "VRAM Used, %"), _VRAM_COLOR)
+        self._cpu_load_series: QLineSeries | None = None
+        self._cpu_freq_series: QLineSeries | None = None
 
         self._axis_x = QValueAxis()
         self._axis_x.setRange(0.0, float(window_s))
@@ -170,6 +175,58 @@ class LiveChart(QChartView):
         if value > axis.max():
             axis.setMax(float(math.ceil(value / step) * step))
 
+    def set_cpu_series_visible(self, key: str, visible: bool) -> None:
+        """Показывает/скрывает CPU-серию."""
+        if key == "cpu_load":
+            series = self._cpu_load_series
+            if visible and series is None:
+                series = self._make_series(tr("CPU, %", "CPU Load, %"), QColor("#26a69a"))
+                self.chart().addSeries(series)
+                series.attachAxis(self._axis_x)
+                series.attachAxis(self._axis_left)
+                self._replace_cpu(series, 1)
+                self._cpu_load_series = series
+        elif key == "cpu_freq":
+            series = self._cpu_freq_series
+            if visible and series is None:
+                series = self._make_series(tr("CPU, МГц", "CPU Frequency, MHz"), QColor("#ab47bc"))
+                self.chart().addSeries(series)
+                series.attachAxis(self._axis_x)
+                series.attachAxis(self._axis_right)
+                self._replace_cpu(series, 2)
+                self._cpu_freq_series = series
+        else:
+            raise ValueError(f"неизвестная серия CPU: {key!r}")
+        if series is not None:
+            series.setVisible(visible)
+
+    def push_cpu(
+        self,
+        t: float,
+        usage_percent: float | None,
+        frequency_mhz: float | None,
+    ) -> None:
+        """Добавляет CPU-метрики к отдельным сериям без изменения GPU-снимков."""
+        self._cpu_samples.append((t, usage_percent, frequency_mhz))
+        if self._cpu_load_series is not None:
+            self._replace_cpu(self._cpu_load_series, 1)
+        if self._cpu_freq_series is not None:
+            self._replace_cpu(self._cpu_freq_series, 2)
+        self._axis_x.setMax(max(t, float(self._window_s)))
+        self._axis_x.setMin(max(0.0, t - self._window_s))
+        if usage_percent is not None:
+            self._raise_axis(self._axis_left, usage_percent, 10.0)
+        if frequency_mhz is not None:
+            self._raise_axis(self._axis_right, frequency_mhz, 100.0)
+
+    def _replace_cpu(self, series: QLineSeries, column: int) -> None:
+        points = []
+        for sample in self._cpu_samples:
+            value = sample[column]
+            if value is not None:
+                points.append(QPointF(sample[0], value))
+        series.replace(points)
+
     def _replace(self, series: QLineSeries, column: int) -> None:
         """Перерисовывает серию по колонке _samples, пропуская None-точки."""
         points: list[QPointF] = []
@@ -189,6 +246,15 @@ class LiveChart(QChartView):
             self._freq_series,
         ):
             series.clear()
+        self.clear_cpu()
+
+    def clear_cpu(self) -> None:
+        """Очищает историю только CPU-серий."""
+        self._cpu_samples.clear()
+        if self._cpu_load_series is not None:
+            self._cpu_load_series.clear()
+        if self._cpu_freq_series is not None:
+            self._cpu_freq_series.clear()
 
     def set_dark(self, dark: bool) -> None:
         """Интентионно no-op: вид графика мониторинга пользователь просил сохранить.

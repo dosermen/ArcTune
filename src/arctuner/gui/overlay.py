@@ -42,6 +42,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from arctuner.cpu import CpuSnapshot
 from arctuner.gui.minichart import (
     DEFAULT_MINI_CHART_SERIES,
     DEFAULT_MINI_CHART_SIZE,
@@ -85,6 +86,8 @@ CELL_LABELS_EN: dict[str, str] = {
     "gpu_vr": "Core VRM",
     "vram_vr": "Memory VRM",
     "sa_vr": "SA VRM",
+    "cpu_load": "CPU Load",
+    "cpu_freq": "CPU Frequency",
 }
 
 
@@ -130,6 +133,8 @@ _CELLS: tuple[tuple[str, str, str, str | None], ...] = (
     ("gpu_vr", "VR ядра", "°C", "temp"),
     ("vram_vr", "VR памяти", "°C", "temp"),
     ("sa_vr", "VR SA", "°C", "temp"),
+    ("cpu_load", "CPU загрузка", "%", "load"),
+    ("cpu_freq", "CPU частота", "МГц", "freq"),
 )
 
 #: макет → (порядок ключей ячеек, число колонок)
@@ -739,6 +744,18 @@ class OverlayWindow(QWidget):
             self._set_limits(snap)
         if self._chart_enabled and not self._chart_paused:
             self._mini_chart.push(time.monotonic() - self._chart_t0, snap)
+
+    @Slot(object)
+    def on_cpu(self, snapshot: CpuSnapshot) -> None:
+        """Обновляет выбранные CPU-ячейки; источник CPU независим от IGCL."""
+        if not self.isVisible():
+            return
+        per_core = ", ".join(f"{value:.0f} %" for value in snapshot.per_core_usage_percent)
+        self._cells["cpu_load"].set_value(
+            snapshot.usage_percent,
+            tooltip=tr(f"По ядрам: {per_core}", f"Per core: {per_core}") if per_core else "",
+        )
+        self._cells["cpu_freq"].set_value(snapshot.frequency_mhz)
 
     def _set_limits(self, snap: TelemetrySnapshot) -> None:
         """Плашка ограничений: жёлтая только когда что-то реально мешает карте."""

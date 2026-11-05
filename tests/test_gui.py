@@ -23,9 +23,10 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 PySide6 = pytest.importorskip("PySide6", reason="GUI-тесты требуют PySide6 (extra gui)")
 
 from PySide6.QtCore import QSettings, Qt  # noqa: E402
-from PySide6.QtWidgets import QApplication, QGraphicsTextItem  # noqa: E402
+from PySide6.QtWidgets import QGraphicsTextItem  # noqa: E402
 
 from arctuner import i18n  # noqa: E402
+from arctuner.cpu import CpuSnapshot  # noqa: E402
 from arctuner.gui import overlay as overlay_module  # noqa: E402
 from arctuner.gui.charts import LiveChart, VfChart  # noqa: E402
 from arctuner.gui.context import FanInfo  # noqa: E402
@@ -48,12 +49,6 @@ from arctuner.igcl.api import (  # noqa: E402
     TelemetrySnapshot,
 )
 from arctuner.logbook import LogEntry  # noqa: E402
-
-
-@pytest.fixture(scope="module")
-def qapp():
-    app = QApplication.instance() or QApplication([])
-    yield app
 
 
 @pytest.fixture()
@@ -269,6 +264,35 @@ def test_monitoring_accepts_snapshot(qapp, snapshot: TelemetrySnapshot) -> None:
     assert len(tab._chart._samples) == 2
 
 
+def test_monitoring_cpu_series_are_optional_and_persisted(qapp, monkeypatch) -> None:
+    """CPU-линии выключены по умолчанию и включаются независимо в настройках."""
+    values: dict[str, object] = {}
+
+    class Settings:
+        def value(self, key: str, default=None):
+            return values.get(key, default)
+
+        def setValue(self, key: str, value: object) -> None:  # noqa: N802
+            values[key] = value
+
+    monkeypatch.setattr("arctuner.gui.tabs.monitoring.QSettings", lambda *_a: Settings())
+    tab = MonitoringTab()
+    assert not tab._cpu_load_chart.isChecked()
+    assert not tab._cpu_freq_chart.isChecked()
+    assert tab._chart._cpu_load_series is None
+
+    tab._cpu_load_chart.setChecked(True)
+    tab._cpu_freq_chart.setChecked(True)
+    assert tab._chart._cpu_load_series.isVisible()
+    assert tab._chart._cpu_freq_series.isVisible()
+    assert values["monitoring/cpu_series"] == ["cpu_freq", "cpu_load"]
+    tab.on_cpu(CpuSnapshot(50.0, (25.0, 75.0), 2400.0))
+    assert tab._chart._cpu_load_series.count() == 1
+    assert tab._chart._cpu_freq_series.count() == 1
+    tab.deleteLater()
+    qapp.processEvents()
+
+
 def test_monitoring_breaks_line_on_long_pause(
     qapp, snapshot: TelemetrySnapshot, monkeypatch
 ) -> None:
@@ -395,6 +419,22 @@ def test_worker_writer_map_covers_all_oc_fields() -> None:
     from arctuner.gui.worker import GpuWorker
 
     assert set(GpuWorker._WRITERS) == set(OverclockTab.FIELDS)
+
+
+def test_worker_polls_cpu_without_an_open_gpu_session(qapp) -> None:
+    """CPU-источник продолжает опрашиваться, даже когда IGCL недоступен."""
+    from types import SimpleNamespace
+
+    from arctuner.gui.worker import GpuWorker
+
+    worker = GpuWorker()
+    worker._ctx = SimpleNamespace(is_open=False)
+    worker._cpu_sampler = SimpleNamespace(sample=lambda: CpuSnapshot(25.0, (25.0,), 2200.0))
+    samples: list[CpuSnapshot] = []
+    worker.cpu_ready.connect(samples.append)
+
+    worker.poll_telemetry()
+    assert samples == [CpuSnapshot(25.0, (25.0,), 2200.0)]
 
 
 def test_worker_replay_dumps_on_counter_reset(qapp, tmp_path) -> None:

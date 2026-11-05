@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, ClassVar
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 
 from arctuner.autotune.watchdog import Watchdog
+from arctuner.cpu import CpuReadError, CpuSampler, CpuSnapshot
 from arctuner.gui.context import DeviceReport, GpuContext
 from arctuner.igcl.api import IgclError
 from arctuner.replay import IncidentReplay
@@ -35,6 +36,7 @@ class GpuWorker(QObject):
     device_info_ready = Signal(object, object)  # (DeviceInfo, ExtendedDeviceInfo)
     device_report_ready = Signal(object)  # DeviceReport (PCIe/прошивка/ECC)
     telemetry_ready = Signal(object)  # TelemetrySnapshot
+    cpu_ready = Signal(object)  # CpuSnapshot
     oc_ready = Signal(object, object)  # ranges: dict, currents: dict
     fans_ready = Signal(object)  # list[FanInfo]
     vf_ready = Signal(object)  # list[tuple[int, int]] (мВ, МГц)
@@ -80,6 +82,8 @@ class GpuWorker(QObject):
         self._watchdog: Watchdog | None = None
         self._wd_logged: set[str] = set()  # записанные типы: один инцидент — одна запись
         self._auto_rollback = False  # включается только явной опцией меню
+        self._cpu_sampler = CpuSampler()
+        self._cpu_error: str | None = None
         # self-сигнал → слот в этом же потоке: emit из UI-потока встаёт в очередь
         # воркера и не выполняет поиск в UI-потоке.
         self.autotune_start.connect(self.autotune_search)
@@ -128,6 +132,7 @@ class GpuWorker(QObject):
 
     @Slot()
     def poll_telemetry(self) -> None:
+        self._poll_cpu()
         if not self._ctx.is_open:
             # Сессия не открыта: ошибка старта уже показана один раз. Молча
             # пропускаем тик, чтобы не спамить диалогом каждую секунду.
@@ -140,6 +145,20 @@ class GpuWorker(QObject):
         self.telemetry_ready.emit(snap)
         self._replay_telemetry(snap)
         self._watchdog_poll(snap)
+
+    def _poll_cpu(self) -> None:
+        """Передаёт CPU-телеметрию UI; сбой CPU-источника не прерывает опрос GPU."""
+        try:
+            snapshot = self._cpu_sampler.sample()
+        except CpuReadError as exc:
+            message = str(exc)
+            if message != self._cpu_error:
+                self.error.emit(message)
+            self._cpu_error = message
+            self.cpu_ready.emit(CpuSnapshot(None, (), None))
+            return
+        self._cpu_error = None
+        self.cpu_ready.emit(snapshot)
 
     def _replay_telemetry(self, snap: TelemetrySnapshot) -> None:
         """Толкает снимок в буфер реплея; при инциденте пишет дамп и извещает UI.
@@ -485,6 +504,7 @@ class GpuWorker(QObject):
         по таймеру: опрос в UI-потоке во время поиска остановлен, и только так
         график получает данные без второго конкурентного доступа к IGCL.
         """
+        self._poll_cpu()
         self.autotune_sample.emit(snap)
         self._replay_telemetry(snap)
 

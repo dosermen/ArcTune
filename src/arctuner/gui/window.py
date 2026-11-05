@@ -183,6 +183,8 @@ class MainWindow(QMainWindow):
         w.device_ready.connect(self._on_device)
         w.device_info_ready.connect(self._on_device_info)
         w.telemetry_ready.connect(self._monitoring.on_telemetry)
+        w.cpu_ready.connect(self._monitoring.on_cpu)
+        w.cpu_ready.connect(self._overlay.on_cpu)
         # Оверлей читает те же снимки (без второго опроса IGCL): 1 Гц в обычном
         # режиме и ~2 Гц через autotune_sample, пока идёт поиск.
         w.telemetry_ready.connect(self._overlay.on_telemetry)

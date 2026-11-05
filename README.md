@@ -127,7 +127,7 @@ python -m arctuner telemetry
 ### GUI (необязательный extra)
 
 ```powershell
-pip install -e ".[gui]"        # ставит PySide6
+pip install -e ".[gui]"        # ставит PySide6 и psutil для CPU-телеметрии
 python -m arctuner.gui.main    # или команда arctune-gui
 ```
 

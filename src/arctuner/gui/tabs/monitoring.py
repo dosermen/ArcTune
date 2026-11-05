@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import time
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSettings, Qt, Signal
 from PySide6.QtWidgets import (
+    QCheckBox,
     QFileDialog,
     QGridLayout,
     QHBoxLayout,
@@ -15,6 +16,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from arctuner.cpu import CpuSnapshot
 from arctuner.gui.charts import LiveChart
 from arctuner.gui.widgets import MetricCard
 from arctuner.i18n import tr
@@ -88,6 +90,7 @@ class MonitoringTab(QWidget):
         super().__init__(parent)
         self._t0 = time.monotonic()
         self._t_last: float | None = None
+        self._t_cpu_last: float | None = None
 
         def note(key: str) -> str:
             return tr(_NOTES[key], _NOTES_EN[key])
@@ -161,6 +164,22 @@ class MonitoringTab(QWidget):
         )
 
         self._chart = LiveChart(window_s=300)
+        settings = QSettings("ArcTune", "ArcTune")
+        raw_cpu_series = settings.value("monitoring/cpu_series", [])
+        selected_cpu_series = set(raw_cpu_series if isinstance(raw_cpu_series, list) else [])
+        self._cpu_load_chart = QCheckBox(tr("CPU, %", "CPU Load, %"))
+        self._cpu_load_chart.setChecked("cpu_load" in selected_cpu_series)
+        self._cpu_load_chart.toggled.connect(
+            lambda visible: self._set_cpu_chart_series("cpu_load", visible)
+        )
+        self._cpu_freq_chart = QCheckBox(tr("CPU, МГц", "CPU Frequency, MHz"))
+        self._cpu_freq_chart.setChecked("cpu_freq" in selected_cpu_series)
+        self._cpu_freq_chart.toggled.connect(
+            lambda visible: self._set_cpu_chart_series("cpu_freq", visible)
+        )
+        self._chart.set_cpu_series_visible("cpu_load", self._cpu_load_chart.isChecked())
+        self._chart.set_cpu_series_visible("cpu_freq", self._cpu_freq_chart.isChecked())
+        self._cpu_chart_series = selected_cpu_series & {"cpu_load", "cpu_freq"}
 
         self._export_btn = QPushButton(tr("Экспорт CSV…", "Export CSV…"))
         self._export_btn.setToolTip(
@@ -185,6 +204,8 @@ class MonitoringTab(QWidget):
             )
         )
         chart_row.addStretch(1)
+        chart_row.addWidget(self._cpu_load_chart)
+        chart_row.addWidget(self._cpu_freq_chart)
         chart_row.addWidget(self._export_btn)
 
         hint = QLabel(
@@ -265,6 +286,24 @@ class MonitoringTab(QWidget):
                 t, gpu_temp, gpu_power, gpu_freq, snap.gpu_load_percent, snap.vram_percent
             )
             self._t_last = t
+
+    def on_cpu(self, snapshot: CpuSnapshot) -> None:
+        """Добавляет CPU-метрики, не меняя формат TelemetrySnapshot."""
+        t = time.monotonic() - self._t0
+        if self._t_cpu_last is not None and t - self._t_cpu_last > GAP_MAX_S:
+            self._chart.clear_cpu()
+        self._chart.push_cpu(t, snapshot.usage_percent, snapshot.frequency_mhz)
+        self._t_cpu_last = t
+
+    def _set_cpu_chart_series(self, key: str, visible: bool) -> None:
+        self._chart.set_cpu_series_visible(key, visible)
+        if visible:
+            self._cpu_chart_series.add(key)
+        else:
+            self._cpu_chart_series.discard(key)
+        QSettings("ArcTune", "ArcTune").setValue(
+            "monitoring/cpu_series", sorted(self._cpu_chart_series)
+        )
 
     def _on_export(self) -> None:
         path, _ = QFileDialog.getSaveFileName(

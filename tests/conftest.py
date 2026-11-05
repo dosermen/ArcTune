@@ -13,6 +13,38 @@ from arctuner.gui.context import FanInfo
 from arctuner.igcl.api import OcControlInfo, TelemetrySnapshot
 
 
+@pytest.fixture(scope="session")
+def qapp():
+    """Единый QApplication для всех Qt-тестов в процессе."""
+    from PySide6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    yield app
+
+    from PySide6.QtCore import QEvent, QThread
+
+    running = [thread for thread in app.findChildren(QThread) if thread.isRunning()]
+    assert not running, f"{len(running)} Qt worker thread(s) still running at session end"
+    for widget in app.topLevelWidgets():
+        widget.close()
+        widget.deleteLater()
+    app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    app.processEvents()
+
+
+@pytest.fixture(autouse=True)
+def _process_qt_deferred_deletes():
+    """Удаляет виджеты, чьи deleteLater() вызваны тестом."""
+    yield
+    from PySide6.QtCore import QEvent
+    from PySide6.QtWidgets import QApplication
+
+    app = QApplication.instance()
+    if app is not None:
+        app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        app.processEvents()
+
+
 @pytest.fixture(autouse=True)
 def _pin_language_ru() -> None:
     """Изолирует язык: каждый тест стартует с русского (язык по умолчанию).

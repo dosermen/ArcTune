@@ -35,6 +35,8 @@ pluggy==1.7.0
     #   pytest-cov
 pygments==2.21.0
     # via pytest
+psutil==7.2.2
+    # via arctune (pyproject.toml)
 pyinstaller==6.22.3
     # via arctune (pyproject.toml)
 pyinstaller-hooks-contrib==2026.9

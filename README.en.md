@@ -127,7 +127,7 @@ Details — in [docs/development.md](docs/development.md) (Russian).
 ### GUI (optional extra)
 
 ```powershell
-pip install -e ".[gui]"        # installs PySide6
+pip install -e ".[gui]"        # installs PySide6 and psutil for CPU telemetry
 python -m arctuner.gui.main    # or the arctune-gui command
 ```
 

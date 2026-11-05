@@ -26,8 +26,9 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 PySide6 = pytest.importorskip("PySide6", reason="GUI-тесты требуют PySide6 (extra gui)")
 
 from PySide6.QtCore import QEventLoop, QTimer  # noqa: E402
-from PySide6.QtWidgets import QApplication, QLabel, QPushButton  # noqa: E402
+from PySide6.QtWidgets import QLabel, QPushButton  # noqa: E402
 
+from arctuner.cpu import CpuSnapshot  # noqa: E402
 from arctuner.gui import overlay  # noqa: E402
 from arctuner.gui.minichart import MiniChart  # noqa: E402
 from arctuner.gui.overlay import (  # noqa: E402
@@ -38,12 +39,6 @@ from arctuner.gui.overlay import (  # noqa: E402
     OverlayWindow,
 )
 from arctuner.igcl.api import TelemetrySnapshot  # noqa: E402
-
-
-@pytest.fixture(scope="module")
-def qapp():
-    app = QApplication.instance() or QApplication([])
-    yield app
 
 
 @pytest.fixture()
@@ -556,6 +551,23 @@ def test_overlay_label_texts_present(settings, qapp) -> None:
     win.deleteLater()
 
 
+def test_overlay_displays_optional_cpu_cells(settings, qapp) -> None:
+    """CPU-ячейки показывают только реально измеренные загрузку и частоту."""
+    win = OverlayWindow()
+    win.show()
+    win.set_visible_cells(("cpu_load", "cpu_freq"))
+    win.on_cpu(CpuSnapshot(37.5, (25.0, 50.0), 2400.0))
+
+    assert win._cells["cpu_load"].text() == "38 %"
+    assert win._cells["cpu_load"]._value.toolTip() == "По ядрам: 25 %, 50 %"
+    assert win._cells["cpu_freq"].text() == "2400 МГц"
+
+    win.on_cpu(CpuSnapshot(None, (), None))
+    assert win._cells["cpu_load"].text() == "—"
+    assert win._cells["cpu_freq"].text() == "—"
+    win.deleteLater()
+
+
 # --- связка с главным окном ---
 
 
@@ -604,6 +616,11 @@ def test_main_window_forwards_telemetry_to_overlay(settings, qapp, monkeypatch, 
 
     win._worker.autotune_sample.emit(replace(snapshot, gpu_temp_c=61.0))
     assert win._overlay._cells["temp"].text() == "61 °C"
+
+    win._monitoring._cpu_load_chart.setChecked(True)
+    win._worker.cpu_ready.emit(CpuSnapshot(40.0, (30.0, 50.0), 2400.0))
+    assert win._monitoring._chart._cpu_load_series.count() == 1
+    assert win._overlay._cells["cpu_load"].text() == "40 %"
 
     win._overlay.set_mini_chart_enabled(True)
     win._worker.watchdog_event.emit("TDR", "driver reset")
