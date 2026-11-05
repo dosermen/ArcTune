@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, ClassVar
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 
 from arctuner.autotune.watchdog import Watchdog
-from arctuner.cpu import CpuReadError, CpuSampler, CpuSnapshot
+from arctuner.cpu import CoreTempReader, CpuReadError, CpuSampler, CpuSnapshot
 from arctuner.gui.context import DeviceReport, GpuContext
 from arctuner.igcl.api import IgclError
 from arctuner.replay import IncidentReplay
@@ -84,6 +84,8 @@ class GpuWorker(QObject):
         self._auto_rollback = False  # включается только явной опцией меню
         self._cpu_sampler = CpuSampler()
         self._cpu_error: str | None = None
+        self._core_temp_reader = CoreTempReader()
+        self._core_temp_error: str | None = None
         # self-сигнал → слот в этом же потоке: emit из UI-потока встаёт в очередь
         # воркера и не выполняет поиск в UI-потоке.
         self.autotune_start.connect(self.autotune_search)
@@ -155,10 +157,27 @@ class GpuWorker(QObject):
             if message != self._cpu_error:
                 self.error.emit(message)
             self._cpu_error = message
-            self.cpu_ready.emit(CpuSnapshot(None, (), None))
-            return
-        self._cpu_error = None
-        self.cpu_ready.emit(snapshot)
+            snapshot = CpuSnapshot(None, (), None)
+        else:
+            self._cpu_error = None
+        try:
+            temperature = self._core_temp_reader.read_temperature()
+        except CpuReadError as exc:
+            message = str(exc)
+            if message != self._core_temp_error:
+                self.error.emit(message)
+            self._core_temp_error = message
+            temperature = None
+        else:
+            self._core_temp_error = None
+        self.cpu_ready.emit(
+            CpuSnapshot(
+                snapshot.usage_percent,
+                snapshot.per_core_usage_percent,
+                snapshot.frequency_mhz,
+                temperature,
+            )
+        )
 
     def _replay_telemetry(self, snap: TelemetrySnapshot) -> None:
         """Толкает снимок в буфер реплея; при инциденте пишет дамп и извещает UI.

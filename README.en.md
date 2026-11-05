@@ -38,8 +38,10 @@ Implemented and verified on a live B580:
 - ✅ **Journal + rollback**, telemetry export to CSV. After `reset --oc` the previous
   rollback targets are no longer valid: history remains, but the old overclock is not
   restored
-- ✅ **GUI (PySide6)** — 7 tabs (monitoring, overclock, fans, V/F, journal, auto-tune,
+- ✅ **GUI (PySide6)** — 8 tabs (monitoring, overclock, fans, V/F, journal, device info, auto-tune,
   overlay) with charts and write confirmations; a standalone `arctune-gui.exe`
+- ✅ **CPU telemetry in the GUI** — load and frequency via psutil, core temperatures
+  via Core Temp read-only shared memory; chart series and overlay cells are independently configurable.
 - ✅ **On-screen overlay (HUD)** — always-on-top telemetry over games/benchmarks with
   its own settings tab, 3 layouts, and a custom metric selection
 

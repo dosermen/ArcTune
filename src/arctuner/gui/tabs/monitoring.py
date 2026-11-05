@@ -177,9 +177,15 @@ class MonitoringTab(QWidget):
         self._cpu_freq_chart.toggled.connect(
             lambda visible: self._set_cpu_chart_series("cpu_freq", visible)
         )
+        self._cpu_temp_chart = QCheckBox(tr("CPU, °C", "CPU Temperature, °C"))
+        self._cpu_temp_chart.setChecked("cpu_temp" in selected_cpu_series)
+        self._cpu_temp_chart.toggled.connect(
+            lambda visible: self._set_cpu_chart_series("cpu_temp", visible)
+        )
         self._chart.set_cpu_series_visible("cpu_load", self._cpu_load_chart.isChecked())
         self._chart.set_cpu_series_visible("cpu_freq", self._cpu_freq_chart.isChecked())
-        self._cpu_chart_series = selected_cpu_series & {"cpu_load", "cpu_freq"}
+        self._chart.set_cpu_series_visible("cpu_temp", self._cpu_temp_chart.isChecked())
+        self._cpu_chart_series = selected_cpu_series & {"cpu_load", "cpu_freq", "cpu_temp"}
 
         self._export_btn = QPushButton(tr("Экспорт CSV…", "Export CSV…"))
         self._export_btn.setToolTip(
@@ -206,6 +212,7 @@ class MonitoringTab(QWidget):
         chart_row.addStretch(1)
         chart_row.addWidget(self._cpu_load_chart)
         chart_row.addWidget(self._cpu_freq_chart)
+        chart_row.addWidget(self._cpu_temp_chart)
         chart_row.addWidget(self._export_btn)
 
         hint = QLabel(
@@ -292,7 +299,9 @@ class MonitoringTab(QWidget):
         t = time.monotonic() - self._t0
         if self._t_cpu_last is not None and t - self._t_cpu_last > GAP_MAX_S:
             self._chart.clear_cpu()
-        self._chart.push_cpu(t, snapshot.usage_percent, snapshot.frequency_mhz)
+        self._chart.push_cpu(
+            t, snapshot.usage_percent, snapshot.frequency_mhz, snapshot.temperature_c
+        )
         self._t_cpu_last = t
 
     def _set_cpu_chart_series(self, key: str, visible: bool) -> None:

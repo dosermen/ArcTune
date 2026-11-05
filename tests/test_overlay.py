@@ -555,16 +555,18 @@ def test_overlay_displays_optional_cpu_cells(settings, qapp) -> None:
     """CPU-ячейки показывают только реально измеренные загрузку и частоту."""
     win = OverlayWindow()
     win.show()
-    win.set_visible_cells(("cpu_load", "cpu_freq"))
-    win.on_cpu(CpuSnapshot(37.5, (25.0, 50.0), 2400.0))
+    win.set_visible_cells(("cpu_load", "cpu_freq", "cpu_temp"))
+    win.on_cpu(CpuSnapshot(37.5, (25.0, 50.0), 2400.0, 81.5))
 
     assert win._cells["cpu_load"].text() == "38 %"
     assert win._cells["cpu_load"]._value.toolTip() == "По ядрам: 25 %, 50 %"
     assert win._cells["cpu_freq"].text() == "2400 МГц"
+    assert win._cells["cpu_temp"].text() == "82 °C"
 
     win.on_cpu(CpuSnapshot(None, (), None))
     assert win._cells["cpu_load"].text() == "—"
     assert win._cells["cpu_freq"].text() == "—"
+    assert win._cells["cpu_temp"].text() == "—"
     win.deleteLater()
 
 
@@ -618,8 +620,10 @@ def test_main_window_forwards_telemetry_to_overlay(settings, qapp, monkeypatch, 
     assert win._overlay._cells["temp"].text() == "61 °C"
 
     win._monitoring._cpu_load_chart.setChecked(True)
-    win._worker.cpu_ready.emit(CpuSnapshot(40.0, (30.0, 50.0), 2400.0))
+    win._monitoring._cpu_temp_chart.setChecked(True)
+    win._worker.cpu_ready.emit(CpuSnapshot(40.0, (30.0, 50.0), 2400.0, 78.0))
     assert win._monitoring._chart._cpu_load_series.count() == 1
+    assert win._monitoring._chart._cpu_temp_series.count() == 1
     assert win._overlay._cells["cpu_load"].text() == "40 %"
 
     win._overlay.set_mini_chart_enabled(True)

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import ctypes
 import math
+import os
 from dataclasses import dataclass
 
 import psutil
@@ -15,6 +17,7 @@ class CpuSnapshot:
     usage_percent: float | None
     per_core_usage_percent: tuple[float, ...]
     frequency_mhz: float | None
+    temperature_c: float | None = None
 
 
 class CpuReadError(RuntimeError):
@@ -52,4 +55,163 @@ class CpuSampler:
         return CpuSnapshot(usage, per_core, frequency_mhz)
 
 
-__all__ = ["CpuReadError", "CpuSampler", "CpuSnapshot"]
+class _CoreTempSharedDataEx(ctypes.Structure):
+    _pack_ = 4
+    _fields_ = [
+        ("uiLoad", ctypes.c_uint32 * 256),
+        ("uiTjMax", ctypes.c_uint32 * 128),
+        ("uiCoreCnt", ctypes.c_uint32),
+        ("uiCPUCnt", ctypes.c_uint32),
+        ("fTemp", ctypes.c_float * 256),
+        ("fVID", ctypes.c_float),
+        ("fCPUSpeed", ctypes.c_float),
+        ("fFSBSpeed", ctypes.c_float),
+        ("fMultiplier", ctypes.c_float),
+        ("sCPUName", ctypes.c_char * 100),
+        ("ucFahrenheit", ctypes.c_uint8),
+        ("ucDeltaToTjMax", ctypes.c_uint8),
+        ("ucTdpSupported", ctypes.c_uint8),
+        ("ucPowerSupported", ctypes.c_uint8),
+        ("uiStructVersion", ctypes.c_uint32),
+        ("uiTdp", ctypes.c_uint32 * 128),
+        ("fPower", ctypes.c_float * 128),
+        ("fMultipliers", ctypes.c_float * 256),
+    ]
+
+
+class CoreTempReader:
+    """Читает температуру ядер из read-only shared memory Core Temp."""
+
+    _MAPPING_NAMES = ("Global\\CoreTempMappingObjectEx", "CoreTempMappingObjectEx")
+    _MUTEX_NAME = "CoreTempMutexObject"
+    _FILE_MAP_READ = 0x0004
+    _WAIT_OBJECT_0 = 0x00000000
+    _WAIT_ABANDONED = 0x00000080
+    _WAIT_TIMEOUT = 0x00000102
+    _WAIT_FAILED = 0xFFFFFFFF
+
+    def read_temperature(self) -> float | None:
+        """Возвращает максимальную температуру ядер в °C или None, если Core Temp не запущен."""
+        if os.name != "nt":
+            return None
+
+        kernel32 = self._kernel32()
+        kernel32.CreateMutexW.argtypes = (ctypes.c_void_p, ctypes.c_int, ctypes.c_wchar_p)
+        kernel32.CreateMutexW.restype = ctypes.c_void_p
+        kernel32.WaitForSingleObject.argtypes = (ctypes.c_void_p, ctypes.c_uint32)
+        kernel32.WaitForSingleObject.restype = ctypes.c_uint32
+        kernel32.ReleaseMutex.argtypes = (ctypes.c_void_p,)
+        kernel32.ReleaseMutex.restype = ctypes.c_int
+        kernel32.OpenFileMappingW.argtypes = (
+            ctypes.c_uint32,
+            ctypes.c_int,
+            ctypes.c_wchar_p,
+        )
+        kernel32.OpenFileMappingW.restype = ctypes.c_void_p
+        kernel32.MapViewOfFile.argtypes = (
+            ctypes.c_void_p,
+            ctypes.c_uint32,
+            ctypes.c_uint32,
+            ctypes.c_uint32,
+            ctypes.c_size_t,
+        )
+        kernel32.MapViewOfFile.restype = ctypes.c_void_p
+        kernel32.UnmapViewOfFile.argtypes = (ctypes.c_void_p,)
+        kernel32.UnmapViewOfFile.restype = ctypes.c_int
+        kernel32.CloseHandle.argtypes = (ctypes.c_void_p,)
+        kernel32.CloseHandle.restype = ctypes.c_int
+
+        mutex = kernel32.CreateMutexW(None, False, self._MUTEX_NAME)
+        if not mutex:
+            raise self._windows_error("не удалось открыть mutex Core Temp")
+
+        owns_mutex = False
+        mapping = None
+        view = None
+        try:
+            wait = kernel32.WaitForSingleObject(mutex, 250)
+            if wait in (self._WAIT_OBJECT_0, self._WAIT_ABANDONED):
+                owns_mutex = True
+            elif wait == self._WAIT_TIMEOUT:
+                raise CpuReadError("тайм-аут ожидания данных Core Temp")
+            elif wait == self._WAIT_FAILED:
+                raise self._windows_error("ошибка ожидания mutex Core Temp")
+            else:
+                raise CpuReadError(f"неожиданный результат ожидания Core Temp: 0x{wait:08x}")
+
+            global_access_denied = False
+            for name in self._MAPPING_NAMES:
+                mapping = kernel32.OpenFileMappingW(self._FILE_MAP_READ, False, name)
+                if not mapping:
+                    error = ctypes.get_last_error()
+                    if error == 2:
+                        continue
+                    if name.startswith("Global\\") and error == 5:
+                        global_access_denied = True
+                        continue
+                    raise self._windows_error("не удалось открыть shared memory Core Temp")
+                view = kernel32.MapViewOfFile(
+                    mapping,
+                    self._FILE_MAP_READ,
+                    0,
+                    0,
+                    ctypes.sizeof(_CoreTempSharedDataEx),
+                )
+                if not view:
+                    raise self._windows_error("не удалось отобразить shared memory Core Temp")
+                data = ctypes.cast(view, ctypes.POINTER(_CoreTempSharedDataEx)).contents
+                return self._temperature_from_data(data)
+            if global_access_denied:
+                raise CpuReadError("доступ к глобальной shared memory Core Temp запрещён")
+            return None
+        finally:
+            if view:
+                kernel32.UnmapViewOfFile(view)
+            if mapping:
+                kernel32.CloseHandle(mapping)
+            if owns_mutex:
+                kernel32.ReleaseMutex(mutex)
+            kernel32.CloseHandle(mutex)
+
+    @staticmethod
+    def _kernel32():
+        return ctypes.WinDLL("kernel32", use_last_error=True)
+
+    @staticmethod
+    def _windows_error(context: str) -> CpuReadError:
+        error = ctypes.get_last_error()
+        detail = ctypes.FormatError(error).strip() if error else "неизвестная ошибка Windows"
+        return CpuReadError(f"{context}: {detail}")
+
+    @staticmethod
+    def _temperature_from_data(data: _CoreTempSharedDataEx) -> float | None:
+        if data.uiStructVersion != 2:
+            raise CpuReadError(
+                f"неподдерживаемая версия shared memory Core Temp: {data.uiStructVersion}"
+            )
+        core_count = int(data.uiCoreCnt)
+        cpu_count = int(data.uiCPUCnt)
+        if not 0 < core_count <= len(data.fTemp) or not 0 < cpu_count <= len(data.uiTjMax):
+            raise CpuReadError(
+                f"некорректные счётчики Core Temp: ядер={core_count}, процессоров={cpu_count}"
+            )
+        total_cores = core_count * cpu_count
+        if total_cores > len(data.fTemp):
+            raise CpuReadError(f"некорректное число логических ядер Core Temp: {total_cores}")
+
+        temperatures: list[float] = []
+        for index, raw in enumerate(data.fTemp[:total_cores]):
+            value = float(raw)
+            if not math.isfinite(value):
+                continue
+            if data.ucDeltaToTjMax:
+                cpu_index = index // core_count
+                value = float(data.uiTjMax[cpu_index]) - value
+            if data.ucFahrenheit:
+                value = (value - 32.0) * 5.0 / 9.0
+            if 0.0 <= value <= 150.0:
+                temperatures.append(value)
+        return max(temperatures) if temperatures else None
+
+
+__all__ = ["CoreTempReader", "CpuReadError", "CpuSampler", "CpuSnapshot"]

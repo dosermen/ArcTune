@@ -677,10 +677,10 @@ def cmd_autofind(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_info(_: argparse.Namespace) -> int:
-    """PCIe/ReBAR, ECC, прошивка, режимы вентиляторов (read-only)."""
+def cmd_info(args: argparse.Namespace) -> int:
+    """PCIe/ReBAR, ECC, прошивка и режимы вентиляторов (read-only)."""
     from arctuner.device_profile import profile_status_note
-    from arctuner.igcl.api import IgclApi, IgclError
+    from arctuner.igcl.api import ExtendedDeviceInfo, IgclApi, IgclError
     from arctuner.telemetry import find_arc_adapter
 
     try:
@@ -699,6 +699,37 @@ def cmd_info(_: argparse.Namespace) -> int:
             note = profile_status_note(dev.device_id)
             if note:
                 print(f"  ⚠️  {note}")
+
+            if getattr(args, "detailed", False):
+                print(
+                    tr(
+                        f"  PCI ID: производитель {dev.vendor_id:#06X}, устройство "
+                        f"{dev.device_id:#06X}, подсистема "
+                        f"{dev.subsystem_vendor_id:#06X}:{dev.subsystem_id:#06X}, "
+                        f"ревизия {dev.rev_id:#04X}",
+                        f"  PCI ID: vendor {dev.vendor_id:#06X}, device {dev.device_id:#06X}, "
+                        f"subsystem {dev.subsystem_vendor_id:#06X}:{dev.subsystem_id:#06X}, "
+                        f"revision {dev.rev_id:#04X}",
+                    )
+                )
+                try:
+                    props = api.read_raw_device_properties(handle)
+                    extended = ExtendedDeviceInfo.from_properties(dev, props)
+                    print(
+                        tr(
+                            f"  Драйвер: {extended.driver_version_str}; "
+                            f"версия прошивки IGCL: {extended.firmware_version_str}",
+                            f"  Driver: {extended.driver_version_str}; "
+                            f"IGCL firmware version: {extended.firmware_version_str}",
+                        )
+                    )
+                except IgclError as e:
+                    print(
+                        tr(
+                            f"  Драйвер/версия прошивки IGCL: нет данных ({e.code:#010x})",
+                            f"  Driver/IGCL firmware version: unavailable ({e.code:#010x})",
+                        )
+                    )
 
             # PCIe — первопричина «разгон не помогает» (x8 вместо x16, ReBAR off).
             try:
@@ -1264,8 +1295,16 @@ def build_parser() -> argparse.ArgumentParser:
     pi = sub.add_parser(
         "info",
         help=tr(
-            "PCIe / ReBAR / ECC / прошивка / режимы вентиляторов",
-            "PCIe / ReBAR / ECC / firmware / fan modes",
+            "сведения об устройстве; --detailed добавляет PCI ID и версии",
+            "device information; --detailed adds PCI IDs and versions",
+        ),
+    )
+    pi.add_argument(
+        "--detailed",
+        action="store_true",
+        help=tr(
+            "показать PCI IDs, ревизию и версии драйвера/прошивки IGCL",
+            "show PCI IDs, revision, and driver/IGCL firmware versions",
         ),
     )
     pi.set_defaults(func=cmd_info)

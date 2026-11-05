@@ -67,7 +67,7 @@ class LiveChart(QChartView):
         self._samples: deque[tuple[float, float, float, float, float | None, float | None]] = deque(
             maxlen=window_s * 2
         )
-        self._cpu_samples: deque[tuple[float, float | None, float | None]] = deque(
+        self._cpu_samples: deque[tuple[float, float | None, float | None, float | None]] = deque(
             maxlen=window_s * 2
         )
 
@@ -78,6 +78,7 @@ class LiveChart(QChartView):
         self._vram_series = self._make_series(tr("Память, %", "VRAM Used, %"), _VRAM_COLOR)
         self._cpu_load_series: QLineSeries | None = None
         self._cpu_freq_series: QLineSeries | None = None
+        self._cpu_temp_series: QLineSeries | None = None
 
         self._axis_x = QValueAxis()
         self._axis_x.setRange(0.0, float(window_s))
@@ -195,6 +196,15 @@ class LiveChart(QChartView):
                 series.attachAxis(self._axis_right)
                 self._replace_cpu(series, 2)
                 self._cpu_freq_series = series
+        elif key == "cpu_temp":
+            series = self._cpu_temp_series
+            if visible and series is None:
+                series = self._make_series(tr("CPU, °C", "CPU Temperature, °C"), QColor("#ef6c00"))
+                self.chart().addSeries(series)
+                series.attachAxis(self._axis_x)
+                series.attachAxis(self._axis_left)
+                self._replace_cpu(series, 3)
+                self._cpu_temp_series = series
         else:
             raise ValueError(f"неизвестная серия CPU: {key!r}")
         if series is not None:
@@ -205,19 +215,24 @@ class LiveChart(QChartView):
         t: float,
         usage_percent: float | None,
         frequency_mhz: float | None,
+        temperature_c: float | None = None,
     ) -> None:
         """Добавляет CPU-метрики к отдельным сериям без изменения GPU-снимков."""
-        self._cpu_samples.append((t, usage_percent, frequency_mhz))
+        self._cpu_samples.append((t, usage_percent, frequency_mhz, temperature_c))
         if self._cpu_load_series is not None:
             self._replace_cpu(self._cpu_load_series, 1)
         if self._cpu_freq_series is not None:
             self._replace_cpu(self._cpu_freq_series, 2)
+        if self._cpu_temp_series is not None:
+            self._replace_cpu(self._cpu_temp_series, 3)
         self._axis_x.setMax(max(t, float(self._window_s)))
         self._axis_x.setMin(max(0.0, t - self._window_s))
         if usage_percent is not None:
             self._raise_axis(self._axis_left, usage_percent, 10.0)
         if frequency_mhz is not None:
             self._raise_axis(self._axis_right, frequency_mhz, 100.0)
+        if temperature_c is not None:
+            self._raise_axis(self._axis_left, temperature_c, 10.0)
 
     def _replace_cpu(self, series: QLineSeries, column: int) -> None:
         points = []
@@ -255,6 +270,8 @@ class LiveChart(QChartView):
             self._cpu_load_series.clear()
         if self._cpu_freq_series is not None:
             self._cpu_freq_series.clear()
+        if self._cpu_temp_series is not None:
+            self._cpu_temp_series.clear()
 
     def set_dark(self, dark: bool) -> None:
         """Интентионно no-op: вид графика мониторинга пользователь просил сохранить.

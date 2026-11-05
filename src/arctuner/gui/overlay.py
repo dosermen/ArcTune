@@ -88,6 +88,7 @@ CELL_LABELS_EN: dict[str, str] = {
     "sa_vr": "SA VRM",
     "cpu_load": "CPU Load",
     "cpu_freq": "CPU Frequency",
+    "cpu_temp": "CPU Temperature",
 }
 
 
@@ -135,6 +136,7 @@ _CELLS: tuple[tuple[str, str, str, str | None], ...] = (
     ("sa_vr", "VR SA", "°C", "temp"),
     ("cpu_load", "CPU загрузка", "%", "load"),
     ("cpu_freq", "CPU частота", "МГц", "freq"),
+    ("cpu_temp", "CPU температура", "°C", "temp"),
 )
 
 #: макет → (порядок ключей ячеек, число колонок)
@@ -756,6 +758,7 @@ class OverlayWindow(QWidget):
             tooltip=tr(f"По ядрам: {per_core}", f"Per core: {per_core}") if per_core else "",
         )
         self._cells["cpu_freq"].set_value(snapshot.frequency_mhz)
+        self._cells["cpu_temp"].set_value(snapshot.temperature_c)
 
     def _set_limits(self, snap: TelemetrySnapshot) -> None:
         """Плашка ограничений: жёлтая только когда что-то реально мешает карте."""

@@ -34,7 +34,11 @@ from arctuner.tuner import SafetyLimitError, WriteReport
 
 _DEV = SimpleNamespace(
     name="Intel Arc B580",
+    vendor_id=0x8086,
     device_id=0xE20B,
+    subsystem_vendor_id=0x8086,
+    subsystem_id=0x1025,
+    rev_id=0,
     frequency_mhz=2670,
     num_xe_cores=20,
 )
@@ -95,6 +99,12 @@ class _FakeApi:
     def get_firmware_properties(self, handle: object) -> SimpleNamespace:
         return SimpleNamespace(name="i915", version="1.0")
 
+    def read_raw_device_properties(self, handle: object) -> SimpleNamespace:
+        return SimpleNamespace(
+            driver_version=(32 << 48) | (1 << 32) | (101 << 16) | 9150,
+            firmware_version=SimpleNamespace(major_version=3, minor_version=7),
+        )
+
     def get_ecc_state(self, handle: object) -> SimpleNamespace:
         return SimpleNamespace(current="disabled", pending="disabled")
 
@@ -121,8 +131,20 @@ def test_read_only_commands_return_zero(cli_env: _FakeApi) -> None:
     assert main(["telemetry"]) == 0
     assert main(["status"]) == 0
     assert main(["info"]) == 0
+    assert main(["info", "--detailed"]) == 0
     assert main(["vf"]) == 0
     assert main(["log"]) == 0  # пустой журнал — не ошибка, просто нечего показывать
+
+
+def test_info_detailed_prints_ids_and_versions(cli_env: _FakeApi, capsys) -> None:
+    assert main(["info", "--detailed"]) == 0
+
+    output = capsys.readouterr().out
+    assert "0X8086" in output
+    assert "0XE20B" in output
+    assert "0X00" in output
+    assert "32.1.101.9150" in output
+    assert "3.7" in output
 
 
 def test_telemetry_csv_writes_file(cli_env: _FakeApi, tmp_path: Path, capsys) -> None:
