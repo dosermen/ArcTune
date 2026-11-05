@@ -10,6 +10,7 @@
 
 * ``overlay/enabled``   — включён ли оверлей (вкладка «Оверлей», меню «Вид»);
 * ``overlay/layout``    — макет: полоса 1×6, сетка 3×2, подробный 2×5;
+* ``overlay/orientation`` — горизонтальное (по умолчанию) или вертикальное размещение;
 * ``overlay/cells``     — какие метрики показывать (можно снять/поставить
   галочки вручную — пресет макета возвращает свой набор);
 * ``overlay/opacity``   — непрозрачность (50/70/85/100 %);
@@ -26,6 +27,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Iterable
 
 from PySide6.QtCore import QPoint, QSettings, Qt, Signal, Slot
@@ -40,11 +42,22 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from arctuner.gui.minichart import (
+    DEFAULT_MINI_CHART_SERIES,
+    DEFAULT_MINI_CHART_SIZE,
+    DEFAULT_MINI_CHART_WINDOW,
+    MINI_CHART_SERIES,
+    MINI_CHART_SIZES,
+    MINI_CHART_WINDOWS,
+    MiniChart,
+    normalize_mini_chart_series,
+)
 from arctuner.i18n import tr
 from arctuner.igcl.api import TelemetrySnapshot
 
 #: макеты HUD (выбор пользователя; хранится в настройках)
 LAYOUTS: tuple[str, ...] = ("compact", "grid", "detailed")
+ORIENTATIONS: tuple[str, ...] = ("horizontal", "vertical")
 
 #: подписи макетов для меню (главного окна и контекстного меню оверлея);
 #: размер честный: строки × колонки под текущий пресет метрик
@@ -61,16 +74,48 @@ LAYOUT_LABELS_EN: dict[str, str] = {
     "detailed": "Detailed 2×5",
 }
 
+CELL_LABELS_EN: dict[str, str] = {
+    "temp": "Temperature",
+    "power": "Power",
+    "freq": "Core",
+    "load": "GPU Load",
+    "vram": "Memory Speed",
+    "vram_used": "VRAM Used",
+    "vram_temp": "Memory Temp",
+    "gpu_vr": "Core VRM",
+    "vram_vr": "Memory VRM",
+    "sa_vr": "SA VRM",
+}
+
 
 def layout_label(name: str) -> str:
     """Подпись макета на текущем языке интерфейса (см. arctuner.i18n)."""
     return tr(LAYOUT_LABELS[name], LAYOUT_LABELS_EN[name])
 
 
+def orientation_label(name: str) -> str:
+    """Подпись ориентации HUD для текущего языка интерфейса."""
+    labels = {
+        "horizontal": ("Горизонтально", "Horizontal"),
+        "vertical": ("Вертикально", "Vertical"),
+    }
+    ru, en = labels[name]
+    return tr(ru, en)
+
+
+def cell_label(key: str) -> str:
+    """Подпись метрики для текущего языка интерфейса."""
+    cells = {cell_key: (title, unit) for cell_key, title, unit, _ in _CELLS}
+    title, unit = cells[key]
+    units_en = {"°C": "°C", "Вт": "W", "МГц": "MHz", "%": "%", "Гбит/с": "Gbps", "ГиБ": "GiB"}
+    return f"{tr(title, CELL_LABELS_EN[key])} ({tr(unit, units_en[unit])})"
+
+
 #: допустимая непрозрачность (доля от 1.0)
 OPACITIES: tuple[float, ...] = (0.5, 0.7, 0.85, 1.0)
 
 DEFAULT_LAYOUT: str = "compact"
+DEFAULT_ORIENTATION: str = "horizontal"
 DEFAULT_OPACITY: float = 0.85
 
 #: (ключ ячейки, подпись, единица, accent цвет значения)
@@ -143,6 +188,63 @@ def save_overlay_enabled(value: bool) -> None:
     _settings().setValue("overlay/enabled", bool(value))
 
 
+def load_mini_chart_enabled() -> bool:
+    """Мини-график включён ли пользователем (по умолчанию — выключен)."""
+    return _as_bool(_settings().value("overlay/chart_enabled"), default=False)
+
+
+def save_mini_chart_enabled(value: bool) -> None:
+    """Сохраняет выбор показа мини-графика."""
+    _settings().setValue("overlay/chart_enabled", bool(value))
+
+
+def load_mini_chart_series() -> tuple[str, ...]:
+    """Серии мини-графика; повреждённое значение заменяется набором по умолчанию."""
+    raw = _settings().value("overlay/chart_series")
+    if raw is None:
+        return DEFAULT_MINI_CHART_SERIES
+    try:
+        return normalize_mini_chart_series(str(raw).split(","))
+    except ValueError:
+        return DEFAULT_MINI_CHART_SERIES
+
+
+def save_mini_chart_series(keys: Iterable[str]) -> None:
+    """Проверяет и сохраняет набор серий мини-графика."""
+    normalized = normalize_mini_chart_series(list(keys))
+    _settings().setValue("overlay/chart_series", ",".join(normalized))
+
+
+def load_mini_chart_window() -> int:
+    """Временное окно графика; мусор схлопывается к безопасному дефолту."""
+    raw = _settings().value("overlay/chart_window", DEFAULT_MINI_CHART_WINDOW)
+    try:
+        value = int(str(raw))
+    except (TypeError, ValueError):
+        return DEFAULT_MINI_CHART_WINDOW
+    return value if value in MINI_CHART_WINDOWS else DEFAULT_MINI_CHART_WINDOW
+
+
+def save_mini_chart_window(window_s: int) -> None:
+    """Проверяет и сохраняет длину временного окна мини-графика."""
+    if window_s not in MINI_CHART_WINDOWS:
+        raise ValueError(f"временное окно мини-графика вне {MINI_CHART_WINDOWS}: {window_s}")
+    _settings().setValue("overlay/chart_window", window_s)
+
+
+def load_mini_chart_size() -> str:
+    """Размер графика; мусор схлопывается к компактному."""
+    raw = _settings().value("overlay/chart_size", DEFAULT_MINI_CHART_SIZE)
+    return raw if raw in MINI_CHART_SIZES else DEFAULT_MINI_CHART_SIZE
+
+
+def save_mini_chart_size(size: str) -> None:
+    """Проверяет и сохраняет размер мини-графика."""
+    if size not in MINI_CHART_SIZES:
+        raise ValueError(f"неизвестный размер мини-графика: {size!r}")
+    _settings().setValue("overlay/chart_size", size)
+
+
 def load_overlay_layout() -> str:
     """Макет из настроек; мусор/отсутствие принимается за дефолт (полоса)."""
     value = _settings().value("overlay/layout", DEFAULT_LAYOUT)
@@ -154,6 +256,19 @@ def save_overlay_layout(name: str) -> None:
     if name not in LAYOUTS:
         raise ValueError(f"неизвестный макет: {name!r} (ждём {LAYOUTS})")
     _settings().setValue("overlay/layout", name)
+
+
+def load_overlay_orientation() -> str:
+    """Ориентация ячеек; по умолчанию HUD расположен горизонтально."""
+    value = _settings().value("overlay/orientation", DEFAULT_ORIENTATION)
+    return value if value in ORIENTATIONS else DEFAULT_ORIENTATION
+
+
+def save_overlay_orientation(orientation: str) -> None:
+    """Проверяет и сохраняет ориентацию ячеек HUD."""
+    if orientation not in ORIENTATIONS:
+        raise ValueError(f"неизвестная ориентация оверлея: {orientation!r}")
+    _settings().setValue("overlay/orientation", orientation)
 
 
 def load_overlay_opacity() -> float:
@@ -297,9 +412,15 @@ class OverlayWindow(QWidget):
     """
 
     layout_changed = Signal(str)  # макет изменён (вкладка/меню/правый клик)
+    orientation_changed = Signal(str)
     cells_changed = Signal(object)  # tuple[str, ...] — набор метрик изменён
     opacity_changed = Signal(float)  # непрозрачность изменена
     visibility_changed = Signal(bool)  # показан/спрятан (галочки вкладки и меню)
+    chart_enabled_changed = Signal(bool)
+    chart_series_changed = Signal(object)
+    chart_window_changed = Signal(int)
+    chart_size_changed = Signal(str)
+    chart_paused_changed = Signal(bool)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         # Без родителя: Tool-окно не должно прятаться вместе с главным окном —
@@ -313,9 +434,10 @@ class OverlayWindow(QWidget):
             | Qt.WindowType.WindowStaysOnTopHint
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setWindowTitle("ArcTune — оверлей")
+        self.setWindowTitle(tr("ArcTune — оверлей", "ArcTune — overlay"))
 
         self._layout = load_overlay_layout()
+        self._orientation = load_overlay_orientation()
         # Набор метрик: сохранённый (в т.ч. правленный вручную) либо пресет
         # текущего макета — мусор в настройках не должен ломать старт.
         self._visible: tuple[str, ...] = load_overlay_cells() or _LAYOUT_SPECS[self._layout][0]
@@ -325,16 +447,36 @@ class OverlayWindow(QWidget):
 
         self._cells: dict[str, _Cell] = {}
         for key, title, unit, accent in _CELLS:
-            self._cells[key] = _Cell(title, unit, accent)
+            unit_en = {
+                "°C": "°C",
+                "Вт": "W",
+                "МГц": "MHz",
+                "%": "%",
+                "Гбит/с": "Gbps",
+                "ГиБ": "GiB",
+            }[unit]
+            self._cells[key] = _Cell(tr(title, CELL_LABELS_EN[key]), tr(unit, unit_en), accent)
 
         self._limits = QLabel("")
         self._limits.setObjectName("overlayLimits")
         self._limits.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._limits.setProperty("active", "false")
         self._limits.setToolTip(
-            "Активный лимитер прямо сейчас: Power / Temperature / Current / Voltage / "
-            "Utilization Limited. «нет (запас есть)» — ничего не ограничивает."
+            tr(
+                "Активный лимитер прямо сейчас: Power / Temperature / Current / Voltage / "
+                "Utilization Limited. «нет (запас есть)» — ничего не ограничивает.",
+                "Active limiter right now: Power / Temperature / Current / Voltage / "
+                "Utilization Limited. “None (headroom available)” means no active limit.",
+            )
         )
+        self._chart_enabled = load_mini_chart_enabled()
+        self._chart_paused = False
+        self._chart_t0 = time.monotonic()
+        self._active_limits: set[str] | None = None
+        self._mini_chart = MiniChart(load_mini_chart_window())
+        self._mini_chart.set_series(load_mini_chart_series())
+        self._mini_chart.set_size(load_mini_chart_size())
+        self._mini_chart.setVisible(self._chart_enabled)
 
         root = QFrame(self)
         root.setObjectName("overlayRoot")
@@ -344,6 +486,7 @@ class OverlayWindow(QWidget):
         root_lay.setContentsMargins(6, 5, 6, 5)
         root_lay.setSpacing(4)
         root_lay.addLayout(self._grid)
+        root_lay.addWidget(self._mini_chart)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -357,6 +500,21 @@ class OverlayWindow(QWidget):
     def layout_name(self) -> str:
         """Текущий макет (см. LAYOUTS)."""
         return self._layout
+
+    def orientation(self) -> str:
+        """Текущая ориентация ячеек HUD."""
+        return self._orientation
+
+    def set_orientation(self, orientation: str) -> None:
+        """Располагает ячейки горизонтально или вертикально."""
+        if orientation not in ORIENTATIONS:
+            raise ValueError(f"неизвестная ориентация оверлея: {orientation!r}")
+        if orientation == self._orientation:
+            return
+        save_overlay_orientation(orientation)
+        self._orientation = orientation
+        self._rebuild()
+        self.orientation_changed.emit(orientation)
 
     def current_opacity(self) -> float:
         """Текущая непрозрачность (см. OPACITIES)."""
@@ -438,6 +596,78 @@ class OverlayWindow(QWidget):
             self.hide()
         self.visibility_changed.emit(shown)
 
+    def mini_chart_enabled(self) -> bool:
+        """Возвращает состояние показа мини-графика."""
+        return self._chart_enabled
+
+    def mini_chart_series(self) -> tuple[str, ...]:
+        """Возвращает выбранные серии мини-графика."""
+        return self._mini_chart.selected_series
+
+    def mini_chart_window(self) -> int:
+        """Возвращает длительность окна мини-графика в секундах."""
+        return self._mini_chart.window_s
+
+    def mini_chart_size(self) -> str:
+        """Возвращает выбранный размер графика."""
+        return self._mini_chart.size_name
+
+    def set_mini_chart_enabled(self, enabled: bool) -> None:
+        """Включает или скрывает мини-график, сохраняя настройку."""
+        enabled = bool(enabled)
+        if enabled == self._chart_enabled:
+            return
+        self._chart_enabled = enabled
+        save_mini_chart_enabled(enabled)
+        self._mini_chart.setVisible(enabled)
+        self.adjustSize()
+        self.chart_enabled_changed.emit(enabled)
+
+    def set_mini_chart_series(self, keys: Iterable[str]) -> None:
+        """Выбирает серии графика, сохраняя их в пользовательских настройках."""
+        normalized = normalize_mini_chart_series(list(keys))
+        if normalized == self._mini_chart.selected_series:
+            return
+        save_mini_chart_series(normalized)
+        self._mini_chart.set_series(normalized)
+        self.chart_series_changed.emit(normalized)
+
+    def set_mini_chart_window(self, window_s: int) -> None:
+        """Меняет видимый временной диапазон графика."""
+        if window_s == self._mini_chart.window_s:
+            return
+        save_mini_chart_window(window_s)
+        self._mini_chart.set_window(window_s)
+        self.chart_window_changed.emit(window_s)
+
+    def set_mini_chart_size(self, size: str) -> None:
+        """Меняет размер графика и сохраняет его."""
+        if size == self._mini_chart.size_name:
+            return
+        save_mini_chart_size(size)
+        self._mini_chart.set_size(size)
+        self.adjustSize()
+        self.chart_size_changed.emit(size)
+
+    def set_mini_chart_paused(self, paused: bool) -> None:
+        """Приостанавливает только визуализацию, не опрос телеметрии."""
+        paused = bool(paused)
+        if paused == self._chart_paused:
+            return
+        self._chart_paused = paused
+        self.chart_paused_changed.emit(paused)
+
+    def clear_mini_chart(self) -> None:
+        """Очищает видимую историю графика."""
+        self._mini_chart.clear()
+
+    @Slot(str, str)
+    def on_watchdog_event(self, event_type: str, detail: str) -> None:
+        """Добавляет событие watchdog на шкалу мини-графика."""
+        if self._chart_enabled:
+            label = f"{event_type}: {detail}"
+            self._mini_chart.add_event_marker(time.monotonic() - self._chart_t0, label, "watchdog")
+
     def reset_position(self) -> None:
         """Возвращает окно в правый верхний угол основного экрана."""
         self._place_default()
@@ -448,6 +678,23 @@ class OverlayWindow(QWidget):
     @Slot(object)
     def on_telemetry(self, snap: TelemetrySnapshot) -> None:
         """Обновляет ячейки по новому снимку (слот воркера: 1 Гц, ~2 Гц в поиске)."""
+        limit_names = {
+            "power_limited": tr("Мощность", "Power"),
+            "temperature_limited": tr("Температура", "Temperature"),
+            "current_limited": tr("Ток", "Current"),
+            "voltage_limited": tr("Напряжение", "Voltage"),
+            "utilization_limited": tr("Загрузка", "Utilization"),
+        }
+        active_limits = {name for name in limit_names if getattr(snap, name)}
+        started = active_limits - self._active_limits if self._active_limits is not None else set()
+        if started and self._chart_enabled:
+            labels = ", ".join(limit_names[name] for name in sorted(started))
+            self._mini_chart.add_event_marker(
+                time.monotonic() - self._chart_t0,
+                tr(f"Лимит: {labels}", f"Limit: {labels}"),
+                "limiter",
+            )
+        self._active_limits = active_limits
         if not self.isVisible():
             return  # спрятан — перерисовка ни к чему
         self._cells["temp"].set_value(snap.gpu_temp_c)
@@ -480,6 +727,8 @@ class OverlayWindow(QWidget):
         self._cells["sa_vr"].set_value(snap.sa_vr_temp_c)
         if self._layout == "detailed":
             self._set_limits(snap)
+        if self._chart_enabled and not self._chart_paused:
+            self._mini_chart.push(time.monotonic() - self._chart_t0, snap)
 
     def _set_limits(self, snap: TelemetrySnapshot) -> None:
         """Плашка ограничений: жёлтая только когда что-то реально мешает карте."""
@@ -492,7 +741,10 @@ class OverlayWindow(QWidget):
                 snap.utilization_limited,
             )
         )
-        self._limits.setText(f"Лимит: {snap.limit_summary()}")
+        summary = snap.limit_summary()
+        if summary == "нет (запас есть)":
+            summary = tr(summary, "None (headroom available)")
+        self._limits.setText(f"{tr('Лимит', 'Limit')}: {summary}")
         self._limits.setProperty("active", "true" if active else "false")
         style = self._limits.style()
         style.unpolish(self._limits)  # динамическое property требует пере-полировки
@@ -513,7 +765,7 @@ class OverlayWindow(QWidget):
             widget = item.widget()
             if widget is not None:
                 widget.hide()
-        cols = _LAYOUT_SPECS[self._layout][1]
+        cols = _LAYOUT_SPECS[self._layout][1] if self._orientation == "horizontal" else 1
         keys = self._visible
         for index, key in enumerate(keys):
             cell = self._cells[key]
@@ -593,6 +845,16 @@ class OverlayWindow(QWidget):
             layout_group.addAction(action)
             layout_menu.addAction(action)
 
+        orientation_menu = menu.addMenu(tr("Ориентация", "Orientation"))
+        orientation_group = QActionGroup(menu)
+        orientation_group.setExclusive(True)
+        for orientation in ORIENTATIONS:
+            action = QAction(orientation_label(orientation), menu, checkable=True)
+            action.setChecked(orientation == self._orientation)
+            action.triggered.connect(lambda _=False, value=orientation: self.set_orientation(value))
+            orientation_group.addAction(action)
+            orientation_menu.addAction(action)
+
         opacity_menu = menu.addMenu(tr("Непрозрачность", "Opacity"))
         opacity_group = QActionGroup(menu)
         opacity_group.setExclusive(True)
@@ -602,6 +864,31 @@ class OverlayWindow(QWidget):
             action.triggered.connect(lambda _=False, v=value: self.set_opacity(v))
             opacity_group.addAction(action)
             opacity_menu.addAction(action)
+
+        chart_menu = menu.addMenu(tr("Мини-график", "Mini chart"))
+        chart_enabled = QAction(tr("Показывать график", "Show chart"), menu, checkable=True)
+        chart_enabled.setChecked(self._chart_enabled)
+        chart_enabled.triggered.connect(self.set_mini_chart_enabled)
+        chart_menu.addAction(chart_enabled)
+        chart_paused = QAction(tr("Пауза", "Pause"), menu, checkable=True)
+        chart_paused.setChecked(self._chart_paused)
+        chart_paused.setEnabled(self._chart_enabled)
+        chart_paused.triggered.connect(self.set_mini_chart_paused)
+        chart_menu.addAction(chart_paused)
+        clear_chart = QAction(tr("Очистить график", "Clear chart"), menu)
+        clear_chart.setEnabled(self._chart_enabled)
+        clear_chart.triggered.connect(self.clear_mini_chart)
+        chart_menu.addAction(clear_chart)
+        size_menu = chart_menu.addMenu(tr("Размер", "Size"))
+        size_group = QActionGroup(menu)
+        size_group.setExclusive(True)
+        for size in MINI_CHART_SIZES:
+            label = tr("Компактный", "Compact") if size == "compact" else tr("Широкий", "Wide")
+            action = QAction(label, menu, checkable=True)
+            action.setChecked(size == self._mini_chart.size_name)
+            action.triggered.connect(lambda _=False, value=size: self.set_mini_chart_size(value))
+            size_group.addAction(action)
+            size_menu.addAction(action)
 
         menu.addSeparator()
         hide_action = QAction(tr("Скрыть", "Hide"), menu)
@@ -620,19 +907,38 @@ __all__ = [
     "CELL_CHOICES",
     "CELL_KEYS",
     "DEFAULT_LAYOUT",
+    "DEFAULT_MINI_CHART_SERIES",
+    "DEFAULT_MINI_CHART_SIZE",
+    "DEFAULT_MINI_CHART_WINDOW",
     "DEFAULT_OPACITY",
+    "DEFAULT_ORIENTATION",
     "LAYOUTS",
     "LAYOUT_LABELS",
     "LAYOUT_LABELS_EN",
+    "MINI_CHART_SERIES",
+    "MINI_CHART_SIZES",
+    "MINI_CHART_WINDOWS",
     "OPACITIES",
+    "ORIENTATIONS",
     "OverlayWindow",
     "layout_label",
+    "load_mini_chart_enabled",
+    "load_mini_chart_series",
+    "load_mini_chart_size",
+    "load_mini_chart_window",
     "load_overlay_cells",
     "load_overlay_enabled",
     "load_overlay_layout",
     "load_overlay_opacity",
+    "load_overlay_orientation",
+    "orientation_label",
+    "save_mini_chart_enabled",
+    "save_mini_chart_series",
+    "save_mini_chart_size",
+    "save_mini_chart_window",
     "save_overlay_cells",
     "save_overlay_enabled",
     "save_overlay_layout",
     "save_overlay_opacity",
+    "save_overlay_orientation",
 ]

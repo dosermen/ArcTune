@@ -166,11 +166,8 @@ def test_doctor_missing_required_fails(monkeypatch, capsys) -> None:
     assert "в порядке" not in out  # успешный вердикт при нехватке функций запрещён
 
 
-def test_version_falls_back_to_package_version(monkeypatch) -> None:
-    def not_installed(name: str) -> str:
-        raise importlib.metadata.PackageNotFoundError(name)
-
-    monkeypatch.setattr(importlib.metadata, "version", not_installed)
+def test_version_uses_package_source_even_if_installed_metadata_is_stale(monkeypatch) -> None:
+    monkeypatch.setattr(importlib.metadata, "version", lambda _name: "0.1.0")
     assert _version() == __version__
 
 

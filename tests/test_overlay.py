@@ -29,7 +29,14 @@ from PySide6.QtCore import QEventLoop, QTimer  # noqa: E402
 from PySide6.QtWidgets import QApplication, QLabel, QPushButton  # noqa: E402
 
 from arctuner.gui import overlay  # noqa: E402
-from arctuner.gui.overlay import LAYOUTS, OPACITIES, OverlayWindow  # noqa: E402
+from arctuner.gui.minichart import MiniChart  # noqa: E402
+from arctuner.gui.overlay import (  # noqa: E402
+    DEFAULT_MINI_CHART_SERIES,
+    DEFAULT_MINI_CHART_WINDOW,
+    LAYOUTS,
+    OPACITIES,
+    OverlayWindow,
+)
 from arctuner.igcl.api import TelemetrySnapshot  # noqa: E402
 
 
@@ -105,9 +112,33 @@ def test_overlay_constructs_with_defaults(settings, qapp) -> None:
     win = OverlayWindow()
     assert win.layout_name() in LAYOUTS
     assert win.layout_name() == overlay.DEFAULT_LAYOUT
+    assert win.orientation() == "horizontal"
     assert win.current_opacity() in OPACITIES
     assert win.current_opacity() == overlay.DEFAULT_OPACITY
     assert not win.isVisible()  # пользователь решает, показывать ли HUD
+    win.deleteLater()
+
+
+def test_overlay_orientation_switches_between_row_and_column(settings, qapp) -> None:
+    """Горизонтальная раскладка по умолчанию; вертикальная складывает метрики в колонку."""
+    win = OverlayWindow()
+    power_index = win._grid.indexOf(win._cells["power"])
+    assert win._grid.getItemPosition(power_index)[:2] == (0, 1)
+
+    fired: list[str] = []
+    win.orientation_changed.connect(fired.append)
+    win.set_orientation("vertical")
+    power_index = win._grid.indexOf(win._cells["power"])
+    assert win._grid.getItemPosition(power_index)[:2] == (1, 0)
+    assert win.orientation() == "vertical"
+    assert settings._store["overlay/orientation"] == "vertical"
+
+    win.set_orientation("horizontal")
+    power_index = win._grid.indexOf(win._cells["power"])
+    assert win._grid.getItemPosition(power_index)[:2] == (0, 1)
+    assert fired == ["vertical", "horizontal"]
+    with pytest.raises(ValueError, match="неизвестная ориентация"):
+        win.set_orientation("diagonal")
     win.deleteLater()
 
 
@@ -276,6 +307,76 @@ def test_overlay_detailed_limits_highlight(settings, qapp, snapshot) -> None:
     win.deleteLater()
 
 
+def test_mini_chart_splits_lines_on_missing_samples(qapp, snapshot) -> None:
+    """Мини-график не соединяет линией точки через отсутствующую телеметрию."""
+    chart = MiniChart(30)
+    chart.set_series(("temp",))
+    chart.push(1.0, snapshot)
+    chart.push(2.0, replace(snapshot, gpu_temp_c=56.0))
+    assert len(chart._series["temp"]) == 1
+    assert chart._series["temp"][0].count() == 2
+
+    chart.push(3.0, replace(snapshot, gpu_temp_c=None))
+    chart.push(4.0, replace(snapshot, gpu_temp_c=60.0))
+    assert len(chart._series["temp"]) == 2
+    assert chart._series["temp"][0].count() == 2
+    assert chart._series["temp"][1].count() == 1
+    chart.deleteLater()
+
+
+def test_mini_chart_splits_lines_after_long_gap(qapp, snapshot) -> None:
+    """После длительной паузы новая точка начинает отдельный отрезок."""
+    chart = MiniChart(30)
+    chart.set_series(("freq",))
+    chart.push(1.0, snapshot)
+    chart.push(10.0, replace(snapshot, gpu_freq_mhz=2600.0))
+    assert len(chart._series["freq"]) == 2
+    assert chart._series["freq"][0].count() == 1
+    assert chart._series["freq"][1].count() == 1
+    chart.deleteLater()
+
+
+def test_mini_chart_inspector_reports_nearest_sample(qapp, snapshot) -> None:
+    """Курсор-инспектор возвращает значения ближайшей точки на выбранных сериях."""
+    chart = MiniChart(30)
+    chart.set_series(("temp", "freq"))
+    chart.push(1.0, snapshot)
+    chart.push(2.0, replace(snapshot, gpu_temp_c=61.0, gpu_freq_mhz=2700.0))
+
+    text = chart.inspect_at_time(1.8)
+    assert "−0.0 с" in text
+    assert "Температура: 61 °C" in text
+    assert "Частота: 2700 МГц" in text
+    assert chart.inspect_at_time(100.0) == text
+    chart.clear()
+    assert chart.inspect_at_time(1.0) == ""
+    chart.deleteLater()
+
+
+def test_mini_chart_event_markers_render_and_clear(qapp, snapshot) -> None:
+    """Маркеры событий попадают в инспектор и очищаются вместе с историей."""
+    chart = MiniChart(30)
+    chart.set_series(("temp",))
+    chart.push(1.0, snapshot)
+    chart.add_event_marker(1.5, "Limit: Power", "limiter")
+    chart.add_event_marker(2.0, "WATCHDOG: frozen telemetry", "watchdog")
+    chart.push(2.0, replace(snapshot, gpu_temp_c=61.0))
+
+    assert len(chart._event_series) == 2
+    inspected = chart.inspect_at_time(2.0)
+    assert "Limit: Power" in inspected
+    assert "WATCHDOG: frozen telemetry" in inspected
+    with pytest.raises(ValueError, match="неизвестный тип события"):
+        chart.add_event_marker(2.0, "Unknown", "other")
+    with pytest.raises(ValueError, match="не должна быть пустой"):
+        chart.add_event_marker(2.0, " ", "watchdog")
+
+    chart.clear()
+    assert not chart._events
+    assert not chart._event_series
+    chart.deleteLater()
+
+
 # --- настройки ---
 
 
@@ -292,6 +393,11 @@ def test_overlay_settings_roundtrip(settings, qapp) -> None:
     assert overlay.load_overlay_layout() == "grid"
     settings._store["overlay/layout"] = "белиберда"
     assert overlay.load_overlay_layout() == overlay.DEFAULT_LAYOUT
+    assert overlay.load_overlay_orientation() == "horizontal"
+    overlay.save_overlay_orientation("vertical")
+    assert overlay.load_overlay_orientation() == "vertical"
+    settings._store["overlay/orientation"] = "diagonal"
+    assert overlay.load_overlay_orientation() == "horizontal"
 
     assert overlay.load_overlay_opacity() == overlay.DEFAULT_OPACITY
     overlay.save_overlay_opacity(0.5)
@@ -303,6 +409,8 @@ def test_overlay_settings_roundtrip(settings, qapp) -> None:
         overlay.save_overlay_layout("nope")
     with pytest.raises(ValueError, match=r"непрозрачность"):
         overlay.save_overlay_opacity(0.6)
+    with pytest.raises(ValueError, match="неизвестная ориентация"):
+        overlay.save_overlay_orientation("diagonal")
 
 
 def test_overlay_cells_settings(settings, qapp) -> None:
@@ -319,6 +427,90 @@ def test_overlay_cells_settings(settings, qapp) -> None:
         overlay.save_overlay_cells([])
     with pytest.raises(ValueError, match=r"неизвестные метрики"):
         overlay.save_overlay_cells(["nope"])
+
+
+def test_mini_chart_settings_validate_and_persist(settings, qapp) -> None:
+    """Настройки мини-графика сохраняются; некорректные значения безопасны."""
+    assert overlay.load_mini_chart_enabled() is False
+    assert overlay.load_mini_chart_series() == DEFAULT_MINI_CHART_SERIES
+    assert overlay.load_mini_chart_window() == DEFAULT_MINI_CHART_WINDOW
+    assert overlay.load_mini_chart_size() == "compact"
+
+    overlay.save_mini_chart_enabled(True)
+    overlay.save_mini_chart_series(["freq", "temp"])
+    overlay.save_mini_chart_window(120)
+    overlay.save_mini_chart_size("wide")
+    assert overlay.load_mini_chart_enabled() is True
+    assert overlay.load_mini_chart_series() == ("temp", "freq")
+    assert overlay.load_mini_chart_window() == 120
+    assert overlay.load_mini_chart_size() == "wide"
+
+    settings._store["overlay/chart_series"] = "temp,unknown"
+    settings._store["overlay/chart_window"] = "invalid"
+    settings._store["overlay/chart_size"] = "invalid"
+    assert overlay.load_mini_chart_series() == DEFAULT_MINI_CHART_SERIES
+    assert overlay.load_mini_chart_window() == DEFAULT_MINI_CHART_WINDOW
+    assert overlay.load_mini_chart_size() == "compact"
+
+    with pytest.raises(ValueError, match="хотя бы одну"):
+        overlay.save_mini_chart_series([])
+    with pytest.raises(ValueError, match="неизвестные серии"):
+        overlay.save_mini_chart_series(["invalid"])
+    with pytest.raises(ValueError, match="временное окно"):
+        overlay.save_mini_chart_window(45)
+    with pytest.raises(ValueError, match="размер мини-графика"):
+        overlay.save_mini_chart_size("huge")
+
+
+def test_overlay_mini_chart_enable_pause_and_clear(settings, qapp, snapshot) -> None:
+    """HUD рисует график только по включению, а пауза/очистка не затрагивают опрос."""
+    win = OverlayWindow()
+    win.show()
+    win.on_telemetry(snapshot)
+    assert not win._mini_chart._samples
+
+    win.set_mini_chart_enabled(True)
+    assert win._mini_chart.isVisible()
+    assert settings._store["overlay/chart_enabled"] is True
+    win.set_mini_chart_series(("temp", "freq"))
+    win.set_mini_chart_window(30)
+    win.on_telemetry(snapshot)
+    assert len(win._mini_chart._samples) == 1
+    assert win._mini_chart.selected_series == ("temp", "freq")
+    assert win._mini_chart.window_s == 30
+    win.set_mini_chart_size("wide")
+    assert win.mini_chart_size() == "wide"
+    assert settings._store["overlay/chart_size"] == "wide"
+    assert win._mini_chart.width() > 400
+
+    win.set_mini_chart_paused(True)
+    win.on_telemetry(replace(snapshot, gpu_temp_c=70.0))
+    assert len(win._mini_chart._samples) == 1
+    win.set_mini_chart_paused(False)
+    win.on_telemetry(replace(snapshot, gpu_temp_c=71.0))
+    assert len(win._mini_chart._samples) == 2
+
+    win.clear_mini_chart()
+    assert not win._mini_chart._samples
+    win.set_mini_chart_enabled(False)
+    assert not win._mini_chart.isVisible()
+    win.deleteLater()
+
+
+def test_overlay_marks_watchdog_and_new_limiter_events(settings, qapp, snapshot) -> None:
+    """HUD аннотирует watchdog и переход лимитера во включённое состояние."""
+    win = OverlayWindow()
+    win.show()
+    win.set_mini_chart_enabled(True)
+    win.on_telemetry(replace(snapshot, voltage_limited=False))
+    win.on_telemetry(replace(snapshot, voltage_limited=True))
+    win.on_watchdog_event("TDR", "driver reset")
+
+    kinds = [event[2] for event in win._mini_chart._events]
+    assert kinds == ["limiter", "watchdog"]
+    assert "Напряжение" in win._mini_chart._events[0][1]
+    assert "TDR: driver reset" in win._mini_chart._events[1][1]
+    win.deleteLater()
 
 
 def test_overlay_hide_emits_visibility(settings, qapp) -> None:
@@ -409,6 +601,10 @@ def test_main_window_forwards_telemetry_to_overlay(settings, qapp, monkeypatch, 
     win._worker.autotune_sample.emit(replace(snapshot, gpu_temp_c=61.0))
     assert win._overlay._cells["temp"].text() == "61 °C"
 
+    win._overlay.set_mini_chart_enabled(True)
+    win._worker.watchdog_event.emit("TDR", "driver reset")
+    assert win._overlay._mini_chart._events[-1][1] == "TDR: driver reset"
+
     _close_window(win)
 
 
@@ -432,6 +628,10 @@ def test_overlay_tab_drives_overlay(settings, qapp) -> None:
     tab._layout_buttons["grid"].click()
     assert win.layout_name() == "grid"
     assert tab._layout_buttons["grid"].isChecked()
+    tab._orientation.setCurrentIndex(tab._orientation.findData("vertical"))
+    assert win.orientation() == "vertical"
+    win.set_orientation("horizontal")
+    assert tab._orientation.currentData() == "horizontal"
 
     # непрозрачность: слайдер ходит только по допустимым шагам
     tab._opacity_slider.setValue(1)
@@ -456,6 +656,26 @@ def test_overlay_tab_drives_overlay(settings, qapp) -> None:
     win.set_visible_cells(("temp", "vram"))
     assert tab._cell_boxes["temp"].isChecked()
     assert not tab._cell_boxes["power"].isChecked()
+
+    tab._chart_enable.setChecked(True)
+    assert win.mini_chart_enabled()
+    assert tab._chart_series_boxes["temp"].isChecked()
+    tab._chart_window.setCurrentIndex(tab._chart_window.findData(30))
+    assert win.mini_chart_window() == 30
+    tab._chart_size.setCurrentIndex(tab._chart_size.findData("wide"))
+    assert win.mini_chart_size() == "wide"
+    tab._chart_series_boxes["freq"].setChecked(False)
+    assert "freq" not in win.mini_chart_series()
+
+    win.set_mini_chart_series(("load", "freq"))
+    assert tab._chart_series_boxes["load"].isChecked()
+    assert tab._chart_series_boxes["freq"].isChecked()
+    win.set_mini_chart_enabled(False)
+    assert not tab._chart_enable.isChecked()
+    win.set_mini_chart_size("compact")
+    assert tab._chart_size.currentData() == "compact"
+    tab._orientation.setCurrentIndex(tab._orientation.findData("vertical"))
+    assert win.orientation() == "vertical"
     win.set_shown(False)
     assert not tab._enable.isChecked()
 

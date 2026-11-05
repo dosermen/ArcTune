@@ -17,6 +17,7 @@ from PySide6.QtCore import QPointF, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPen
 
 from arctuner.gui.theme import SERIES_FREQ, SERIES_LOAD, SERIES_POWER, SERIES_TEMP, SERIES_VRAM
+from arctuner.i18n import tr
 from arctuner.tuner import (
     VF_MAX_FREQ_MHZ,
     VF_MAX_VOLTAGE_MV,
@@ -67,15 +68,15 @@ class LiveChart(QChartView):
             maxlen=window_s * 2
         )
 
-        self._temp_series = self._make_series("Температура, °C", _TEMP_COLOR)
-        self._power_series = self._make_series("Мощность, %", _POWER_COLOR)
-        self._freq_series = self._make_series("Частота, МГц", _FREQ_COLOR)
-        self._load_series = self._make_series("Загрузка, %", _LOAD_COLOR)
-        self._vram_series = self._make_series("Память, %", _VRAM_COLOR)
+        self._temp_series = self._make_series(tr("Температура, °C", "Temperature, °C"), _TEMP_COLOR)
+        self._power_series = self._make_series(tr("Мощность, %", "Power, %"), _POWER_COLOR)
+        self._freq_series = self._make_series(tr("Частота, МГц", "Frequency, MHz"), _FREQ_COLOR)
+        self._load_series = self._make_series(tr("Загрузка, %", "GPU Load, %"), _LOAD_COLOR)
+        self._vram_series = self._make_series(tr("Память, %", "VRAM Used, %"), _VRAM_COLOR)
 
         self._axis_x = QValueAxis()
         self._axis_x.setRange(0.0, float(window_s))
-        self._axis_x.setTitleText("секунды")
+        self._axis_x.setTitleText(tr("секунды", "seconds"))
 
         self._axis_left = QValueAxis()
         self._axis_left.setRange(0.0, 100.0)
@@ -83,7 +84,7 @@ class LiveChart(QChartView):
 
         self._axis_right = QValueAxis()
         self._axis_right.setRange(0.0, 3300.0)
-        self._axis_right.setTitleText("МГц")
+        self._axis_right.setTitleText(tr("МГц", "MHz"))
 
         # Подписи всегда полные: QAbstractAxis по умолчанию (truncateLabels=true)
         # заменяет текст на «…», как только места не хватает — на сжатом графике
@@ -219,16 +220,16 @@ class VfChart(QChartView):
         self._series.setName("V/F")
         self._series.setPen(QPen(_FREQ_COLOR, 2))
         self._axis_x = QValueAxis()
-        self._axis_x.setTitleText("МГц")
+        self._axis_x.setTitleText(tr("МГц", "MHz"))
         self._axis_y = QValueAxis()
-        self._axis_y.setTitleText("мВ")
+        self._axis_y.setTitleText(tr("мВ", "mV"))
         # Подписи всегда полные — та же причина, что у LiveChart (см. выше).
         for axis in (self._axis_x, self._axis_y):
             axis.setTruncateLabels(False)
 
         # Отдельный scatter-серия для отображения маркеров точек (не сливается с линией)
         self._scatter = QScatterSeries()
-        self._scatter.setName("Точки")
+        self._scatter.setName(tr("Точки", "Points"))
 
         chart = QChart()
         chart.setAnimationOptions(QChart.AnimationOption.NoAnimation)

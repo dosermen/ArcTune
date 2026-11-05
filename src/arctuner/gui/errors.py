@@ -21,6 +21,7 @@ from types import TracebackType
 from PySide6.QtCore import QObject, Qt, Signal, Slot
 from PySide6.QtWidgets import QMessageBox
 
+from arctuner.i18n import tr
 from arctuner.logbook import DEFAULT_LOG_DIR
 
 #: Куда складываются необработанные ошибки GUI (не журнал изменений карты).
@@ -115,11 +116,22 @@ class GuiExceptionHandler(QObject):
         self._seen.add(details)
         message = (
             f"{summary}\n\n"
-            "Действие могло не выполниться. Приложение продолжит работу.\n\n"
-            f"Полный traceback сохранён: {GUI_ERROR_LOG}"
+            + tr(
+                "Действие могло не выполниться. Приложение продолжит работу.",
+                "The operation may not have completed. The application will continue running.",
+            )
+            + "\n\n"
+            + tr(
+                f"Полный traceback сохранён: {GUI_ERROR_LOG}",
+                f"Full traceback saved to: {GUI_ERROR_LOG}",
+            )
         )
         with contextlib.suppress(Exception):
-            QMessageBox.critical(None, "ArcTune — внутренняя ошибка", message)
+            QMessageBox.critical(
+                None,
+                tr("ArcTune — внутренняя ошибка", "ArcTune — internal error"),
+                message,
+            )
 
 
 __all__ = ["GUI_ERROR_LOG", "GuiExceptionHandler", "format_exception"]

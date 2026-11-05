@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 
 from arctuner.gui.charts import VfChart
 from arctuner.gui.widgets import confirm_write
+from arctuner.i18n import tr
 from arctuner.tuner import (
     SafetyLimitError,
     VfPoint,
@@ -40,24 +41,24 @@ class VfTab(QWidget):
         self._chart = VfChart()
         self._chart.curve_edited.connect(self._on_chart_edit)
 
-        self._info = QLabel("Точек: —")
+        self._info = QLabel(tr("Точек: —", "Points: —"))
         self._info.setObjectName("hintLabel")
 
-        self._export_btn = QPushButton("Экспорт в CSV…")
+        self._export_btn = QPushButton(tr("Экспорт в CSV…", "Export to CSV…"))
         self._export_btn.setEnabled(False)  # до передачи кривой из IGCL
         self._export_btn.clicked.connect(self._on_export)
-        self._import_btn = QPushButton("Записать из CSV…")
+        self._import_btn = QPushButton(tr("Записать из CSV…", "Write from CSV…"))
         self._import_btn.setObjectName("dangerButton")
         self._import_btn.setEnabled(False)  # запись без кривой невозможна
         self._import_btn.clicked.connect(self._on_import)
-        self._apply_chart_btn = QPushButton("Записать из графика…")
+        self._apply_chart_btn = QPushButton(tr("Записать из графика…", "Write from chart…"))
         self._apply_chart_btn.setObjectName("dangerButton")
         self._apply_chart_btn.setEnabled(False)  # включится после правки точки
         self._apply_chart_btn.clicked.connect(self._on_apply_chart)
-        self._undo_btn = QPushButton("Отменить правку")
+        self._undo_btn = QPushButton(tr("Отменить правку", "Undo edit"))
         self._undo_btn.setEnabled(False)
         self._undo_btn.clicked.connect(self._on_undo)
-        self._refresh_btn = QPushButton("Обновить")
+        self._refresh_btn = QPushButton(tr("Обновить", "Refresh"))
         self._refresh_btn.clicked.connect(self.refresh_requested)
 
         btns = QHBoxLayout()
@@ -69,10 +70,16 @@ class VfTab(QWidget):
         btns.addWidget(self._undo_btn)
 
         note = QLabel(
-            "Кривую можно править мышью прямо на графике (потяните точку: по вертикали — "
-            "напряжение 600…1250 мВ, по горизонтали — между соседями точек). Запись — "
-            "по кнопке с подтверждением; либо через CSV (voltage_mv,freq_mhz). Перед отправкой "
-            "в драйвер кривая проходит валидацию: границы и монотонность."
+            tr(
+                "Кривую можно править мышью прямо на графике (потяните точку: по вертикали — "
+                "напряжение 600…1250 мВ, по горизонтали — между соседями точек). Запись — "
+                "по кнопке с подтверждением; либо через CSV (voltage_mv,freq_mhz). Перед отправкой "
+                "в драйвер кривая проходит валидацию: границы и монотонность.",
+                "Edit the curve directly on the chart (drag a point: vertically for voltage "
+                "600…1250 mV, horizontally between neighboring points). Apply changes with "
+                "confirmation, or import CSV (voltage_mv,freq_mhz). The curve is validated "
+                "for bounds and monotonicity before it is sent to the driver.",
+            )
         )
         note.setObjectName("hintLabel")
         note.setWordWrap(True)
@@ -89,7 +96,11 @@ class VfTab(QWidget):
         self._edited = None
         self._chart.set_curve(self._points)
         self._chart.set_editable(bool(points))
-        self._info.setText(f"Точек: {len(self._points)}" if points else "Точек: —")
+        self._info.setText(
+            tr(f"Точек: {len(self._points)}", f"Points: {len(self._points)}")
+            if points
+            else tr("Точек: —", "Points: —")
+        )
         # Устаревший queued-ответ (пришёл во время busy) не снимает блок.
         self.set_busy(self._busy)
 
@@ -127,13 +138,21 @@ class VfTab(QWidget):
         self._edited = list(pairs)
         if self._edited == self._points:
             self._edited = None
-            self._info.setText(f"Точек: {len(self._points)}")
+            self._info.setText(tr(f"Точек: {len(self._points)}", f"Points: {len(self._points)}"))
         elif self._edited_is_valid():
             self._info.setText(
-                f"Точек: {len(self._edited)} — кривая изменена; запись через «Записать из графика…»"
+                tr(
+                    f"Точек: {len(self._edited)} — кривая изменена; запись через «Записать из графика…»",
+                    f"Points: {len(self._edited)} — curve edited; apply with Write from chart…",
+                )
             )
         else:
-            self._info.setText("Правка отклонена валидацией (границы/монотонность)")
+            self._info.setText(
+                tr(
+                    "Правка отклонена валидацией (границы/монотонность)",
+                    "Edit rejected by validation (bounds/monotonicity)",
+                )
+            )
         # Пересчёт кнопок с учётом текущего busy (во время поиска правка не пишется).
         self.set_busy(self._busy)
 
@@ -169,9 +188,14 @@ class VfTab(QWidget):
             preview += f"\n  … и ещё {len(rows) - 8}"
         if confirm_write(
             self.window(),
-            "Запись кривой V/F",
-            [f"изменено точек: {len(rows)} из {len(points)}"],
-            detail=f"Предпросмотр:\n{preview}",
+            tr("Запись кривой V/F", "Write V/F curve"),
+            [
+                tr(
+                    f"изменено точек: {len(rows)} из {len(points)}",
+                    f"Points changed: {len(rows)} of {len(points)}",
+                )
+            ],
+            detail=tr(f"Предпросмотр:\n{preview}", f"Preview:\n{preview}"),
         ):
             self.apply_requested.emit(points)
 
@@ -179,19 +203,25 @@ class VfTab(QWidget):
         """Откат правки: вернуть сток с карты."""
         self._edited = None
         self._chart.set_curve(self._points)
-        self._info.setText(f"Точек: {len(self._points)}" if self._points else "Точек: —")
+        self._info.setText(
+            tr(f"Точек: {len(self._points)}", f"Points: {len(self._points)}")
+            if self._points
+            else tr("Точек: —", "Points: —")
+        )
         self.set_busy(self._busy)
 
     def _on_export(self) -> None:
         path, _ = QFileDialog.getSaveFileName(
-            self, "Экспорт кривой V/F", "vf_curve.csv", "CSV (*.csv)"
+            self, tr("Экспорт кривой V/F", "Export V/F curve"), "vf_curve.csv", "CSV (*.csv)"
         )
         if path:
             self.export_requested.emit(path)
 
     def _on_import(self) -> None:
         """Читает CSV, валидирует БЕЗ записи, показывает предпросмотр и спрашивает."""
-        path, _ = QFileDialog.getOpenFileName(self, "Запись кривой V/F из CSV", "", "CSV (*.csv)")
+        path, _ = QFileDialog.getOpenFileName(
+            self, tr("Запись кривой V/F из CSV", "Write V/F curve from CSV"), "", "CSV (*.csv)"
+        )
         if not path:
             return
         try:

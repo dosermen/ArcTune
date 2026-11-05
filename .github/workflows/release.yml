@@ -1,6 +1,6 @@
 name: Release
 
-# Релиз по тегу: git tag v0.1.0 && git push origin v0.1.0
+# Релиз по тегу: git tag v0.2.0 && git push origin v0.2.0
 # Собирает CLI/GUI exe и публикует GitHub Release с артефактами.
 
 on:
@@ -38,7 +38,7 @@ jobs:
 
       - name: Сверить тег с версией пакета
         # Единый источник версии — arctuner/__init__.py: __version__.
-        # Тег v0.2.0 при __version__ = "0.1.0" — ошибка, а не релиз.
+        # Например, тег v0.3.0 при __version__ = "0.2.0" — ошибка, а не релиз.
         shell: pwsh
         run: |
           $ver = (Select-String -Path src/arctuner/__init__.py -Pattern '__version__ = "(.+)"').Matches.Groups[1].Value

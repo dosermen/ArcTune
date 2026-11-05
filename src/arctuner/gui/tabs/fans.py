@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 from arctuner.context import MIN_FAN_RPM
 from arctuner.gui.context import FanInfo
 from arctuner.gui.widgets import confirm_write
+from arctuner.i18n import tr
 
 
 class FansTab(QWidget):
@@ -34,7 +35,7 @@ class FansTab(QWidget):
         self._have_fans = False
         self._busy = False  # воркер занят: устаревший queued-список не снимает блок
 
-        self._list_box = QGroupBox("Вентиляторы (read-only)")
+        self._list_box = QGroupBox(tr("Вентиляторы (только чтение)", "Fans (read-only)"))
         self._list_layout = QVBoxLayout(self._list_box)
 
         self._rpm = QSpinBox()
@@ -45,19 +46,19 @@ class FansTab(QWidget):
         self._rpm.setSuffix(" RPM")
         self._rpm.setValue(1500)
 
-        self._set_btn = QPushButton("⚠️ Зафиксировать все…")
+        self._set_btn = QPushButton(tr("⚠️ Зафиксировать все…", "⚠️ Set all fans…"))
         self._set_btn.setEnabled(False)  # до подтверждения canControl из IGCL
         self._set_btn.clicked.connect(self._on_set)
 
-        self._reset_btn = QPushButton("Вернуть в авто")
+        self._reset_btn = QPushButton(tr("Вернуть в авто", "Restore automatic control"))
         self._reset_btn.setEnabled(False)  # до первого списка вентиляторов
         self._reset_btn.clicked.connect(self._on_reset)
 
-        self._refresh_btn = QPushButton("Обновить")
+        self._refresh_btn = QPushButton(tr("Обновить", "Refresh"))
         self._refresh_btn.clicked.connect(self.refresh_requested.emit)
 
         ctrl = QHBoxLayout()
-        ctrl.addWidget(QLabel("Общая скорость:"))
+        ctrl.addWidget(QLabel(tr("Общая скорость:", "Fan speed:")))
         ctrl.addWidget(self._rpm)
         ctrl.addWidget(self._set_btn)
         ctrl.addWidget(self._reset_btn)
@@ -65,7 +66,10 @@ class FansTab(QWidget):
         ctrl.addStretch(1)
 
         self._note = QLabel(
-            "B580 поддерживает только FIXED-режим (нет таблицы temp/speed), единица — RPM."
+            tr(
+                "B580 поддерживает только FIXED-режим (нет таблицы temp/speed), единица — RPM.",
+                "B580 supports FIXED mode only (no temperature/speed curve); values are in RPM.",
+            )
         )
         self._note.setObjectName("hintLabel")
         self._note.setWordWrap(True)
@@ -92,7 +96,12 @@ class FansTab(QWidget):
         self._rpm.setRange(int(MIN_FAN_RPM), int(max_rpm))
 
         if not fans:
-            empty = QLabel("Вентиляторы не найдены (внешний кулер / ноутбук?).")
+            empty = QLabel(
+                tr(
+                    "Вентиляторы не найдены (внешний кулер / ноутбук?).",
+                    "No fans found (external cooler or laptop?).",
+                )
+            )
             empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self._list_layout.addWidget(empty)
             # empty сам себе контейнер: очистка выше корректно уберёт его ниже.
@@ -109,8 +118,9 @@ class FansTab(QWidget):
                 if fan.props.supportedModes & bit
             )
             props = QLabel(
-                f"max {fan.props.maxRPM}  режимы: {modes or '-'}  "
-                f"управляемый: {'да' if fan.props.canControl else 'нет'}"
+                f"max {fan.props.maxRPM}  {tr('режимы', 'modes')}: {modes or '-'}  "
+                f"{tr('управляемый', 'controllable')}: "
+                f"{tr('да', 'yes') if fan.props.canControl else tr('нет', 'no')}"
             )
             props.setObjectName("hintLabel")
             row = QHBoxLayout()
@@ -135,17 +145,27 @@ class FansTab(QWidget):
 
     def _on_set(self) -> None:
         rpm = self._rpm.value()
-        detail = "Вернуть автоуправление: вкладка «Вентиляторы» → «Вернуть в авто»."
+        detail = tr(
+            "Вернуть автоуправление: вкладка «Вентиляторы» → «Вернуть в авто».",
+            "To restore automatic control, use Fans → Restore automatic control.",
+        )
         if rpm <= MIN_FAN_RPM:
-            detail += (
+            detail += tr(
                 f"\n⚠️ {rpm} RPM — минимально допустимая фиксация: "
                 "под нагрузкой возможен перегрев — "
-                "следите за температурой в «Мониторинге»."
+                "следите за температурой в «Мониторинге».",
+                f"\n⚠️ {rpm} RPM is the minimum allowed setting. Overheating may occur "
+                "under load; monitor temperatures on the Monitoring tab.",
             )
         if confirm_write(
             self.window(),
-            "Фиксация вентиляторов",
-            [f"Все управляемые вентиляторы → {rpm} RPM (FIXED)"],
+            tr("Фиксация вентиляторов", "Set fan speed"),
+            [
+                tr(
+                    f"Все управляемые вентиляторы → {rpm} RPM (FIXED)",
+                    f"All controllable fans → {rpm} RPM (FIXED)",
+                )
+            ],
             detail=detail,
         ):
             self.set_fan_requested.emit(rpm)
@@ -153,8 +173,8 @@ class FansTab(QWidget):
     def _on_reset(self) -> None:
         if confirm_write(
             self.window(),
-            "Возврат вентиляторов",
-            ["Все вентиляторы → аппаратный режим (авто)"],
+            tr("Возврат вентиляторов", "Restore fans"),
+            [tr("Все вентиляторы → аппаратный режим (авто)", "All fans → hardware automatic mode")],
         ):
             self.reset_fans_requested.emit()
 

@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 
 from arctuner.gui.context import ROLLBACKABLE_FIELDS
 from arctuner.gui.widgets import confirm_write
+from arctuner.i18n import tr
 from arctuner.logbook import LogEntry, compute_rollback_targets
 
 
@@ -32,19 +33,26 @@ class LogTab(QWidget):
 
         self._table = QTableWidget(0, 6)
         self._table.setHorizontalHeaderLabels(
-            ["Время (UTC)", "Поле", "Было", "Стало", "Примечание", "Восстановлено"]
+            [
+                tr("Время (UTC)", "Time (UTC)"),
+                tr("Поле", "Field"),
+                tr("Было", "Before"),
+                tr("Стало", "After"),
+                tr("Примечание", "Note"),
+                tr("Восстановлено", "Restored"),
+            ]
         )
         self._table.setAlternatingRowColors(True)
         self._table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
 
-        self._count = QLabel("Записей: 0")
+        self._count = QLabel(tr("Записей: 0", "Entries: 0"))
         self._count.setObjectName("hintLabel")
 
-        self._refresh_btn = QPushButton("Обновить")
+        self._refresh_btn = QPushButton(tr("Обновить", "Refresh"))
         self._refresh_btn.clicked.connect(self.refresh_requested.emit)
 
-        self._rollback_btn = QPushButton("⚠️ Откатить к исходным…")
+        self._rollback_btn = QPushButton(tr("⚠️ Откатить к исходным…", "⚠️ Restore original values…"))
         self._rollback_btn.setObjectName("dangerButton")
         self._rollback_btn.setEnabled(False)  # до первого чтения журнала
         self._rollback_btn.clicked.connect(self._on_rollback)
@@ -56,8 +64,12 @@ class LogTab(QWidget):
         top.addWidget(self._rollback_btn)
 
         note = QLabel(
-            "Откат восстанавливает значения, зафиксированные в журнале до изменений. "
-            "Каждая запись журналируется, поэтому история сохраняется."
+            tr(
+                "Откат восстанавливает значения, зафиксированные в журнале до изменений. "
+                "Каждая запись журналируется, поэтому история сохраняется.",
+                "Rollback restores values recorded in the journal before they were changed. "
+                "Each change is logged, so history is preserved.",
+            )
         )
         note.setObjectName("hintLabel")
         note.setWordWrap(True)
@@ -70,7 +82,7 @@ class LogTab(QWidget):
     def set_entries(self, entries: list[LogEntry]) -> None:
         """Заполняет таблицу (новые сверху)."""
         self._entries = list(entries)
-        self._count.setText(f"Записей: {len(self._entries)}")
+        self._count.setText(tr(f"Записей: {len(self._entries)}", f"Entries: {len(self._entries)}"))
         # Устаревший queued-журнал (пришёл во время busy) не снимает блок отката.
         # Кнопка активна только если есть реальные цели: записи одних
         # вентиляторов/маркеры сброса откатывать нечего.
@@ -89,7 +101,7 @@ class LogTab(QWidget):
                 "" if e.old is None else f"{e.old:g}",
                 "" if e.new is None else f"{e.new:g}",
                 e.note,
-                "да" if e.restored else "",
+                tr("да", "yes") if e.restored else "",
             ]
             for col, text in enumerate(values):
                 item = QTableWidgetItem(text)
@@ -111,7 +123,7 @@ class LogTab(QWidget):
         «Вентиляторы», fan[*] в журнале остаётся историей.
         """
         return [
-            f"{field}: восстановить {value:g}"
+            tr(f"{field}: восстановить {value:g}", f"{field}: restore {value:g}")
             for field, value in compute_rollback_targets(entries).items()
             if field in ROLLBACKABLE_FIELDS and value is not None
         ]
@@ -123,8 +135,11 @@ class LogTab(QWidget):
             # подтверждение и не отправляем воркеру заведомо пустой откат.
             QMessageBox.information(
                 self,
-                "Журнал",
-                "Нечего откатывать: в журнале нет записей, пригодных для отката.",
+                tr("Журнал", "Journal"),
+                tr(
+                    "Нечего откатывать: в журнале нет записей, пригодных для отката.",
+                    "Nothing to roll back: the journal has no eligible entries.",
+                ),
             )
             return
         preview = "\n".join(targets[:8])
@@ -132,9 +147,17 @@ class LogTab(QWidget):
             preview += f"\n  … и ещё {len(targets) - 8}"
         if confirm_write(
             self.window(),
-            "Откат к исходным значениям",
-            ["Вернуть настройки, зафиксированные в журнале"],
-            detail=f"Будут восстановлены:\n{preview}",
+            tr("Откат к исходным значениям", "Restore original values"),
+            [
+                tr(
+                    "Вернуть настройки, зафиксированные в журнале",
+                    "Restore settings recorded in the journal",
+                )
+            ],
+            detail=tr(
+                f"Будут восстановлены:\n{preview}",
+                f"The following values will be restored:\n{preview}",
+            ),
         ):
             self.rollback_requested.emit()
 

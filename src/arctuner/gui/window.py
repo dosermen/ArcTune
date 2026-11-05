@@ -199,6 +199,7 @@ class MainWindow(QMainWindow):
         w.busy_changed.connect(self._on_busy)
         w.incident_replay.connect(self._on_incident)
         w.watchdog_event.connect(self._on_watchdog)
+        w.watchdog_event.connect(self._overlay.on_watchdog_event)
         w.shutdown_done.connect(self._on_shutdown_done)
         w.autotune_progress.connect(self._autotune.update_progress)
         # Живая телеметрия поиска: общий график «Мониторинга» + мини-график
@@ -359,9 +360,14 @@ class MainWindow(QMainWindow):
             checkable=True,
         )
         self._auto_rollback_action.setToolTip(
-            "При срабатывании постоянного watchdog (аварийная температура, заморозка "
-            "телеметрии, TDR) вернуть настройки к исходным значениям журнала. По "
-            "умолчанию выключено: событие тогда только пишется в журнал."
+            tr(
+                "При срабатывании постоянного watchdog (аварийная температура, заморозка "
+                "телеметрии, TDR) вернуть настройки к исходным значениям журнала. По "
+                "умолчанию выключено: событие тогда только пишется в журнал.",
+                "When the persistent watchdog detects an emergency temperature, frozen "
+                "telemetry, or TDR, restore settings recorded in the journal. Disabled by "
+                "default; otherwise, the event is only logged.",
+            )
         )
         self._auto_rollback_action.setChecked(load_auto_rollback())
         self._auto_rollback_action.triggered.connect(save_auto_rollback)
@@ -501,7 +507,12 @@ class MainWindow(QMainWindow):
             self.close()  # closeEvent корректно закроет сессию IGCL в потоке воркера
         else:
             QMessageBox.information(
-                self, "ArcTune", "Не удалось перезапустить автоматически — запустите вручную."
+                self,
+                "ArcTune",
+                tr(
+                    "Не удалось перезапустить автоматически — запустите вручную.",
+                    "Automatic restart failed — please restart the application manually.",
+                ),
             )
 
     # --- обработчики ---
@@ -524,13 +535,13 @@ class MainWindow(QMainWindow):
 
         Отображает имя, ID, драйвер, прошивку, частоту и Xe-ядра в статус-баре.
         """
-        status_text = (
-            f"📊 {info.name} | "
-            f"ID: {info.device_id:#06X} | "
-            f"Driver: {extended.driver_version_str} | "
-            f"Firmware: {extended.firmware_version_str} | "
-            f"Freq: {info.frequency_mhz} МГц | "
-            f"Xe-cores: {info.num_xe_cores}"
+        status_text = tr(
+            f"📊 {info.name} | ID: {info.device_id:#06X} | Драйвер: "
+            f"{extended.driver_version_str} | Прошивка: {extended.firmware_version_str} | "
+            f"Частота: {info.frequency_mhz} МГц | Xe-ядер: {info.num_xe_cores}",
+            f"📊 {info.name} | ID: {info.device_id:#06X} | Driver: "
+            f"{extended.driver_version_str} | Firmware: {extended.firmware_version_str} | "
+            f"Frequency: {info.frequency_mhz} MHz | Xe cores: {info.num_xe_cores}",
         )
         note = profile_status_note(info.device_id)
         if note:

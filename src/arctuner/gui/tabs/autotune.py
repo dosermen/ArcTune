@@ -34,11 +34,16 @@ from arctuner.autotune.engine import (
 )
 from arctuner.autotune.profiles import ProfileStore
 from arctuner.gui.charts import LiveChart
+from arctuner.i18n import tr
 from arctuner.igcl.api import TelemetrySnapshot
 
 #: человеческие названия режимов (кнопка-переключатель)
 _MODE_LABELS: dict[str, str] = {
     MODE_FREQUENCY: "Частота (+МГц)",
+    MODE_UNDERVOLT: "Undervolt (−%)",
+}
+_MODE_LABELS_EN: dict[str, str] = {
+    MODE_FREQUENCY: "Frequency (+MHz)",
     MODE_UNDERVOLT: "Undervolt (−%)",
 }
 
@@ -65,11 +70,18 @@ class AutoTuneTab(QWidget):
     def _build_ui(self) -> None:
         """Строит четыре зоны: конфигуратор | поиск | результат | профили."""
         note = QLabel(
-            "Поиск требует нагрузки (запустите бенчмарк/игру; либо задайте нагрузчик "
-            "в профиле). Каждый шаг проверяется активностью GPU, температурой и "
-            "Watchdog (TDR/сбой телеметрии); при любом сбое карта возвращается к "
-            "последнему СТАБИЛЬНОМУ значению. Undervolt смещением на B580 ограничен "
-            "драйвером (0…+) — для настоящего undervolt используйте вкладку «V/F»."
+            tr(
+                "Поиск требует нагрузки (запустите бенчмарк/игру; либо задайте нагрузчик "
+                "в профиле). Каждый шаг проверяется активностью GPU, температурой и "
+                "Watchdog (TDR/сбой телеметрии); при любом сбое карта возвращается к "
+                "последнему СТАБИЛЬНОМУ значению. Undervolt смещением на B580 ограничен "
+                "драйвером (0…+) — для настоящего undervolt используйте вкладку «V/F».",
+                "The search requires a workload (run a benchmark/game or configure a load "
+                "command in the profile). Each step is checked for GPU activity, temperature, "
+                "and watchdog events (TDR/telemetry failure); on failure, the card returns "
+                "to the last STABLE value. B580 voltage offset is driver-limited (0…+); use "
+                "the V/F tab for actual undervolting.",
+            )
         )
         note.setObjectName("hintLabel")
         note.setWordWrap(True)
@@ -77,13 +89,18 @@ class AutoTuneTab(QWidget):
         self._mode_btn = QPushButton(self._mode_text())
         self._mode_btn.setObjectName("infoButton")
         self._mode_btn.clicked.connect(self._on_toggle_mode)
-        self._mode_btn.setToolTip("Переключение режима поиска: частота вверх / undervolt вниз")
+        self._mode_btn.setToolTip(
+            tr(
+                "Переключение режима поиска: частота вверх / undervolt вниз",
+                "Switch search mode: increase frequency / decrease voltage offset",
+            )
+        )
 
-        self._start_btn = QPushButton("▶ Запустить поиск")
+        self._start_btn = QPushButton(tr("▶ Запустить поиск", "▶ Start search"))
         self._start_btn.clicked.connect(self._on_start)
         self._start_btn.setObjectName("infoButton")
 
-        self._stop_btn = QPushButton("■ Стоп")
+        self._stop_btn = QPushButton(tr("■ Стоп", "■ Stop"))
         # dangerButton — «жёлтохвост»: завершает поиск и откатывает к стабильному.
         self._stop_btn.setObjectName("dangerButton")
         self._stop_btn.clicked.connect(self.stop_requested.emit)
@@ -95,13 +112,13 @@ class AutoTuneTab(QWidget):
         top.addWidget(self._start_btn)
         top.addWidget(self._stop_btn)
 
-        self._state = QLabel("Поиск не запускался.")
+        self._state = QLabel(tr("Поиск не запускался.", "Search has not been started."))
         self._state.setObjectName("hintLabel")
 
-        self._now = QLabel("Сейчас: —")
+        self._now = QLabel(tr("Сейчас: —", "Current: —"))
         self._now.setObjectName("hintLabel")
 
-        self._result = QLabel("Результат: —")
+        self._result = QLabel(tr("Результат: —", "Result: —"))
         self._result.setObjectName("resultsLabel")
         self._result.setWordWrap(True)
         self._result.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
@@ -115,19 +132,24 @@ class AutoTuneTab(QWidget):
 
         self._live = LiveChart(window_s=120)
         self._live.setMaximumHeight(300)
-        live_caption = QLabel("Живая телеметрия поиска (°C / % слева, МГц справа, окно 2 мин):")
+        live_caption = QLabel(
+            tr(
+                "Живая телеметрия поиска (°C / % слева, МГц справа, окно 2 мин):",
+                "Live search telemetry (°C / % left, MHz right, 2-minute window):",
+            )
+        )
         live_caption.setObjectName("hintLabel")
 
-        self._save_btn = QPushButton("💾 Сохранить профиль…")
+        self._save_btn = QPushButton(tr("💾 Сохранить профиль…", "💾 Save profile…"))
         self._save_btn.setObjectName("infoButton")
         self._save_btn.clicked.connect(self._on_save_profile)
 
-        self._load_btn = QPushButton("📂 Загрузить профиль…")
+        self._load_btn = QPushButton(tr("📂 Загрузить профиль…", "📂 Load profile…"))
         self._load_btn.setObjectName("infoButton")
         self._load_btn.clicked.connect(self._on_load_profile)
 
         profiles = QHBoxLayout()
-        profiles.addWidget(QLabel("Профили:"))
+        profiles.addWidget(QLabel(tr("Профили:", "Profiles:")))
         profiles.addWidget(self._save_btn)
         profiles.addWidget(self._load_btn)
         profiles.addStretch(1)
@@ -143,7 +165,9 @@ class AutoTuneTab(QWidget):
         lay.addLayout(profiles)
 
     def _mode_text(self) -> str:
-        return f"Режим: {_MODE_LABELS.get(self._config.mode, self._config.mode)}"
+        ru = _MODE_LABELS.get(self._config.mode, self._config.mode)
+        en = _MODE_LABELS_EN.get(self._config.mode, self._config.mode)
+        return tr(f"Режим: {ru}", f"Mode: {en}")
 
     # --- события UI ---
 
@@ -166,22 +190,35 @@ class AutoTuneTab(QWidget):
         if self._config.external_cmd:
             answer = QMessageBox.question(
                 self,
-                "ArcTune — нагрузчик из профиля",
-                f"Будет запущена команда из профиля:\n{self._config.external_cmd}\n\nПродолжить?",
+                tr("ArcTune — нагрузчик из профиля", "ArcTune — profile workload command"),
+                tr(
+                    f"Будет запущена команда из профиля:\n{self._config.external_cmd}\n\nПродолжить?",
+                    f"This profile command will be run:\n{self._config.external_cmd}\n\nContinue?",
+                ),
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
             )
             if answer != QMessageBox.StandardButton.Yes:
-                self._state.setText("Запуск отменён (нагрузчик из профиля не подтверждён)")
+                self._state.setText(
+                    tr(
+                        "Запуск отменён (нагрузчик из профиля не подтверждён)",
+                        "Start cancelled (profile workload command was not confirmed)",
+                    )
+                )
                 return
         # Новый поиск — новый график: старые точки к нему не относятся.
         self._t0 = time.monotonic()
         self._t_last = None
         self._live.clear()
-        self._now.setText("Сейчас: ожидание первого снимка…")
+        self._now.setText(
+            tr("Сейчас: ожидание первого снимка…", "Current: waiting for first sample…")
+        )
         self.set_busy(True)  # локально и сразу; повторно воркер пришлёт тот же статус
         self._state.setText(
-            "Запуск: подготовка поиска… (потребуется нагрузка на GPU, см. примечание выше)"
+            tr(
+                "Запуск: подготовка поиска… (потребуется нагрузка на GPU, см. примечание выше)",
+                "Starting: preparing search… (GPU load is required; see the note above)",
+            )
         )
         self.search_requested.emit(self._config)
 
@@ -190,9 +227,14 @@ class AutoTuneTab(QWidget):
     def update_progress(self, current: int, total: int, text: str) -> None:
         """Живой статус: этапы (current=0) и успешные шаги (current=номер)."""
         if current > 0 and total > 0:
-            self._state.setText(f"Поиск: шаг {current}/{total} — {text}")
+            self._state.setText(
+                tr(
+                    f"Поиск: шаг {current}/{total} — {text}",
+                    f"Search: step {current}/{total} — {text}",
+                )
+            )
         else:
-            self._state.setText(f"Поиск: {text}")
+            self._state.setText(tr(f"Поиск: {text}", f"Search: {text}"))
 
     def on_sample(self, snap: TelemetrySnapshot) -> None:
         """Живой снимок поиска: мини-график и строка «сейчас».
@@ -222,7 +264,10 @@ class AutoTuneTab(QWidget):
             )
         ):
             parts.append(f"лимит: {snap.limit_summary()}")
-        self._now.setText("Сейчас: " + (" · ".join(parts) if parts else "нет данных"))
+        self._now.setText(
+            f"{tr('Сейчас', 'Current')}: "
+            + (" · ".join(parts) if parts else tr("нет данных", "no data"))
+        )
 
         # На график — только полные снимки: частичная точка соврала бы картинку.
         if temp is not None and power is not None and freq is not None:
@@ -238,30 +283,55 @@ class AutoTuneTab(QWidget):
         Главное — честно отвечает на «а применилось ли?»: карта либо на
         конкретном значении (и оно названо), либо предупреждение об откате.
         """
-        self._state.setText(f"Итог: {result.stopped_reason}")
+        mode = _MODE_LABELS.get(result.mode, result.mode)
+        mode_en = _MODE_LABELS_EN.get(result.mode, result.mode)
+        self._state.setText(
+            tr(f"Итог: {result.stopped_reason}", f"Result: {result.stopped_reason}")
+        )
         lines = [
-            f"Режим {result.mode}: база {result.baseline:+g} → лучший стабильный "
-            f"{result.best_stable:+g} (шагов: {result.steps_taken})"
+            tr(
+                f"Режим {mode}: база {result.baseline:+g} → лучший стабильный "
+                f"{result.best_stable:+g} (шагов: {result.steps_taken})",
+                f"Mode {mode_en}: baseline {result.baseline:+g} → best stable "
+                f"{result.best_stable:+g} (steps: {result.steps_taken})",
+            )
         ]
         if result.card_value is None:
             lines.append(
-                "⚠ КАРТА НЕ на стабильном значении — откат не удался, "
-                "сбросьте настройки на вкладке «Разгон»"
+                tr(
+                    "⚠ КАРТА НЕ на стабильном значении — откат не удался, "
+                    "сбросьте настройки на вкладке «Разгон»",
+                    "⚠ CARD IS NOT at a stable value — rollback failed; reset settings "
+                    "on the Overclock tab.",
+                )
             )
         else:
             lines.append(
-                f"✓ Карта оставлена на {result.card_value:+g} (сбросится при перезагрузке ОС)"
+                tr(
+                    f"✓ Карта оставлена на {result.card_value:+g} (сбросится при перезагрузке ОС)",
+                    f"✓ Card left at {result.card_value:+g} (resets when the OS restarts)",
+                )
             )
         if result.baseline != 0.0:
             lines.append(
-                "база ≠ 0: предыдущий разгон остался на карте — поиск шёл от него "
-                "(сброс перед поиском — на вкладке «Разгон»)"
+                tr(
+                    "база ≠ 0: предыдущий разгон остался на карте — поиск шёл от него "
+                    "(сброс перед поиском — на вкладке «Разгон»)",
+                    "Baseline ≠ 0: the previous overclock remained active and search started "
+                    "from it (reset it on the Overclock tab before searching).",
+                )
             )
         rows = [self._format_step(e) for e in result.history[-20:]]
         skipped = len(result.history) - len(rows)
         if skipped > 0:
-            rows.insert(0, f"… {skipped} ранних шагов не показаны")
-        lines.append("\n".join(rows) if rows else "шагов не было")
+            rows.insert(
+                0,
+                tr(
+                    f"… {skipped} ранних шагов не показаны",
+                    f"… {skipped} earlier steps not shown",
+                ),
+            )
+        lines.append("\n".join(rows) if rows else tr("шагов не было", "no steps taken"))
         self._result.setText("\n".join(lines))
 
     @staticmethod
@@ -271,13 +341,18 @@ class AutoTuneTab(QWidget):
         Шаг в истории — только ЗАЧИТАННЫЙ (движок пишет после стабильности),
         поэтому «применён» здесь честно.
         """
-        parts = [f"шаг {entry.get('step', 0)}: {entry.get('value', 0.0):+g} применён"]
+        parts = [
+            tr(
+                f"шаг {entry.get('step', 0)}: {entry.get('value', 0.0):+g} применён",
+                f"step {entry.get('step', 0)}: {entry.get('value', 0.0):+g} applied",
+            )
+        ]
         if entry.get("temp_c") is not None:
             parts.append(f"{entry['temp_c']:.0f}°C")
         if entry.get("power_percent") is not None:
             parts.append(f"{entry['power_percent']:.0f}%")
         if entry.get("fitness") is not None:
-            parts.append(f"fitness {entry['fitness']:.2f}")
+            parts.append(f"{tr('качество', 'fitness')} {entry['fitness']:.2f}")
         return "  " + ", ".join(parts)
 
     def set_busy(self, busy: bool) -> None:
@@ -299,7 +374,7 @@ class AutoTuneTab(QWidget):
         """Сохраняет текущую конфигурацию по выбранному пути (реальному)."""
         path, _ = QFileDialog.getSaveFileName(
             self,
-            "Сохранить профиль авторазгона",
+            tr("Сохранить профиль авторазгона", "Save auto-tuning profile"),
             str(self._profiles.dir / "profile.json"),
             "JSON (*.json)",
         )
@@ -311,9 +386,11 @@ class AutoTuneTab(QWidget):
         try:
             saved = self._profiles.save(target, asdict(self._config))
         except OSError as e:
-            self._show_error(f"Не удалось сохранить профиль: {e}")
+            self._show_error(
+                tr(f"Не удалось сохранить профиль: {e}", f"Failed to save profile: {e}")
+            )
             return
-        self._state.setText(f"Профиль сохранён: {saved.name}")
+        self._state.setText(tr(f"Профиль сохранён: {saved.name}", f"Profile saved: {saved.name}"))
 
     def _on_load_profile(self) -> None:
         """Загружает профиль из выбранного файла.
@@ -323,7 +400,7 @@ class AutoTuneTab(QWidget):
         """
         path, _ = QFileDialog.getOpenFileName(
             self,
-            "Загрузить профиль авторазгона",
+            tr("Загрузить профиль авторазгона", "Load auto-tuning profile"),
             str(self._profiles.dir),
             "JSON (*.json)",
         )
@@ -332,15 +409,19 @@ class AutoTuneTab(QWidget):
         try:
             data = self._profiles.load(Path(path))
         except (OSError, ValueError) as e:
-            self._show_error(f"Не удалось загрузить профиль: {e}")
+            self._show_error(
+                tr(f"Не удалось загрузить профиль: {e}", f"Failed to load profile: {e}")
+            )
             return
         allowed = {f.name for f in fields(TuningConfig)}
         self._config = TuningConfig(**{k: v for k, v in data.items() if k in allowed})
         self._mode_btn.setText(self._mode_text())
-        self._state.setText(f"Профиль загружен: {Path(path).name}")
+        self._state.setText(
+            tr(f"Профиль загружен: {Path(path).name}", f"Profile loaded: {Path(path).name}")
+        )
 
     def _show_error(self, text: str) -> None:
-        QMessageBox.warning(self, "Авторазгон", text)
+        QMessageBox.warning(self, tr("Авторазгон", "Auto-tuning"), text)
 
 
 __all__ = ["AutoTuneTab"]

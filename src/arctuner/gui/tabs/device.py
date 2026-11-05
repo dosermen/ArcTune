@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 )
 
 from arctuner.gui.context import DeviceReport
+from arctuner.i18n import tr
 from arctuner.igcl.api import DeviceInfo, ExtendedDeviceInfo
 
 
@@ -32,29 +33,29 @@ class DeviceTab(QWidget):
 
         # Каждая секция: ключ → value-лейбл; порядок ключей = порядок строк.
         dev_box, self._dev = self._section(
-            "Устройство",
-            ("name", "Имя"),
+            tr("Устройство", "Device"),
+            ("name", tr("Имя", "Name")),
             ("ids", "ID (vendor:device / subsystem)"),
-            ("driver", "Драйвер"),
-            ("firmware_ver", "Прошивка (версия IGCL)"),
-            ("freq", "Частота / ядра"),
+            ("driver", tr("Драйвер", "Driver")),
+            ("firmware_ver", tr("Прошивка (версия IGCL)", "Firmware (IGCL version)")),
+            ("freq", tr("Частота / ядра", "Frequency / cores")),
         )
         pci_box, self._pci = self._section(
             "PCIe",
-            ("link", "Линк"),
-            ("bandwidth", "Пропускная способность"),
+            ("link", tr("Линк", "Link")),
+            ("bandwidth", tr("Пропускная способность", "Bandwidth")),
             ("rebar", "ReBAR"),
-            ("address", "Адрес"),
+            ("address", tr("Адрес", "Address")),
         )
         fw_box, self._fw = self._section(
-            "Прошивка",
-            ("fw_name", "Имя"),
-            ("fw_version", "Версия"),
+            tr("Прошивка", "Firmware"),
+            ("fw_name", tr("Имя", "Name")),
+            ("fw_version", tr("Версия", "Version")),
         )
         ecc_box, self._ecc = self._section(
             "ECC",
-            ("ecc_state", "Состояние"),
-            ("ecc_pending", "После перезагрузки"),
+            ("ecc_state", tr("Состояние", "State")),
+            ("ecc_pending", tr("После перезагрузки", "After reboot")),
         )
         # Пока отчёт не пришёл — секции не гадают, а ждут данных.
         for rows in (self._pci, self._fw, self._ecc):
@@ -66,8 +67,13 @@ class DeviceTab(QWidget):
         self._errors.setWordWrap(True)
         self._errors.hide()  # покажется, если какие-то секции не прочитались
 
-        self._refresh_btn = QPushButton("Обновить")
-        self._refresh_btn.setToolTip("Перечитать свойства устройства с карты (read-only).")
+        self._refresh_btn = QPushButton(tr("Обновить", "Refresh"))
+        self._refresh_btn.setToolTip(
+            tr(
+                "Перечитать свойства устройства с карты (только чтение).",
+                "Reload device properties from the card (read-only).",
+            )
+        )
         self._refresh_btn.clicked.connect(self.refresh_requested.emit)
 
         top = QHBoxLayout()
@@ -94,21 +100,30 @@ class DeviceTab(QWidget):
         )
         self._dev["driver"].setText(extended.driver_version_str)
         self._dev["firmware_ver"].setText(extended.firmware_version_str)
-        self._dev["freq"].setText(f"{info.frequency_mhz} МГц / {info.num_xe_cores} Xe-ядер")
+        self._dev["freq"].setText(
+            tr(
+                f"{info.frequency_mhz} МГц / {info.num_xe_cores} Xe-ядер",
+                f"{info.frequency_mhz} MHz / {info.num_xe_cores} Xe cores",
+            )
+        )
 
     def set_report(self, report: DeviceReport) -> None:
         """Заполняет секции PCIe/прошивка/ECC (device_report_ready)."""
         pci = report.pci
         if pci is not None:
             self._pci["link"].setText(f"Gen {pci.gen} x{pci.width}")
-            bw = f"{pci.max_bandwidth_mbps:g} МБ/с" if pci.max_bandwidth_mbps is not None else "—"
+            bw = (
+                tr(f"{pci.max_bandwidth_mbps:g} МБ/с", f"{pci.max_bandwidth_mbps:g} MB/s")
+                if pci.max_bandwidth_mbps is not None
+                else "—"
+            )
             self._pci["bandwidth"].setText(bw)
             if pci.rebar_enabled:
-                rebar = "включён"
+                rebar = tr("включён", "Enabled")
             elif pci.rebar_supported:
-                rebar = "ВЫКЛЮЧЕН"
+                rebar = tr("ВЫКЛЮЧЕН", "DISABLED")
             else:
-                rebar = "не поддержан"
+                rebar = tr("не поддержан", "Not supported")
             self._pci["rebar"].setText(rebar)
             self._pci["address"].setText(pci.address)
 
@@ -119,15 +134,27 @@ class DeviceTab(QWidget):
 
         ecc = report.ecc
         if ecc is not None:
-            state = "включён" if ecc.current == "enabled" else "выключен"
-            self._ecc["ecc_state"].setText(f"{state} ({ecc.current})")
+            state = (
+                tr("включён", "Enabled") if ecc.current == "enabled" else tr("выключен", "Disabled")
+            )
+            self._ecc["ecc_state"].setText(tr(f"{state} ({ecc.current})", state))
             if ecc.pending != ecc.current:
-                self._ecc["ecc_pending"].setText(f"{ecc.pending} (после перезагрузки)")
+                pending = (
+                    tr("включён", "Enabled")
+                    if ecc.pending == "enabled"
+                    else tr("выключен", "Disabled")
+                )
+                self._ecc["ecc_pending"].setText(
+                    tr(
+                        f"{ecc.pending} (после перезагрузки)",
+                        f"{pending} (after reboot)",
+                    )
+                )
             else:
                 self._ecc["ecc_pending"].setText("—")
 
         if report.errors:
-            self._errors.setText("Нет данных: " + "; ".join(report.errors))
+            self._errors.setText(tr("Нет данных: ", "Unavailable: ") + "; ".join(report.errors))
             self._errors.show()
         else:
             self._errors.hide()

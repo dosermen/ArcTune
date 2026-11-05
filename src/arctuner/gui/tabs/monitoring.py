@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 
 from arctuner.gui.charts import LiveChart
 from arctuner.gui.widgets import MetricCard
+from arctuner.i18n import tr
 from arctuner.igcl.api import TelemetrySnapshot
 
 #: пауза дольше этого считается пропуском данных (сон/подвисание) — график
@@ -59,6 +60,23 @@ _NOTES: dict[str, str] = {
     "кристалла). Обычно наименее нагруженная.",
 }
 
+_NOTES_EN: dict[str, str] = {
+    "freq": "Actual GPU core frequency. Under throttling (Power/Temperature Limited), it falls below the requested value — compare with the limit indicator.",
+    "voltage": "GPU core voltage. Positive offset is set on the Overclock tab; fine tuning is done with the V/F curve.",
+    "temp": "GPU die temperature — the main heat sensor. The temperature limit and throttling use it. Project guideline: stay below 80 °C under load.",
+    "power": "Power: % of the current power limit; watts are averaged from energy counters and appear after the second poll.",
+    "vram_freq": "Actual effective GDDR6 memory speed (B580 nominal: 20 Gbps).",
+    "vram_voltage": "Memory voltage. Fixed at 1.35 V on B580; the driver does not allow changing it.",
+    "vram_temp": "GDDR6 chip temperature (6× Samsung SC20). Memory overheating can cause errors, artifacts, and crashes.",
+    "vram_power": "Memory power in watts, calculated from the vramEnergyCounter (read-only energy counter).",
+    "activity": "Accumulated GPU active time in seconds. It grows under load and may stand still at idle — that is normal.",
+    "load": "GPU core utilization: the share of time the GPU was active during the polling interval (ΔactiveTime/Δtimestamp for the GT group). Available after the second sample.",
+    "vram_used": "VRAM used / available (GiB), from ctlMemoryGetState (used = size − free). The available amount may be below physical 12 GiB because the driver reserves memory.",
+    "gpu_vr": "GPU VRM phase temperature. The MOSFETs heat from current; die temperature does not reveal their temperature.",
+    "vram_vr": "Memory VRM phase temperature. At idle this can be the hottest of the VR sensors.",
+    "sa_vr": "System Agent VRM phase temperature.",
+}
+
 
 class MonitoringTab(QWidget):
     """Показывает текущую телеметрию и скроллящийся график последних минут."""
@@ -71,24 +89,48 @@ class MonitoringTab(QWidget):
         self._t0 = time.monotonic()
         self._t_last: float | None = None
 
-        self._freq = MetricCard("Ядро", "МГц", accent="freq", note=_NOTES["freq"])
-        self._voltage = MetricCard("Напряжение", "В", note=_NOTES["voltage"])
-        self._temp = MetricCard("Температура", "°C", accent="temp", note=_NOTES["temp"])
-        self._power = MetricCard("Питание", "%", accent="power", note=_NOTES["power"])
+        def note(key: str) -> str:
+            return tr(_NOTES[key], _NOTES_EN[key])
 
-        self._vram_freq = MetricCard("Память", "Гбит/с", accent="freq", note=_NOTES["vram_freq"])
-        self._vram_voltage = MetricCard("Память, V", "В", note=_NOTES["vram_voltage"])
-        self._vram_temp = MetricCard("Память, T", "°C", accent="temp", note=_NOTES["vram_temp"])
-        self._vram_power = MetricCard("Память, Вт", "Вт", accent="power", note=_NOTES["vram_power"])
+        self._freq = MetricCard(
+            tr("Ядро", "Core"), tr("МГц", "MHz"), accent="freq", note=note("freq")
+        )
+        self._voltage = MetricCard(tr("Напряжение", "Voltage"), tr("В", "V"), note=note("voltage"))
+        self._temp = MetricCard(
+            tr("Температура", "Temperature"), "°C", accent="temp", note=note("temp")
+        )
+        self._power = MetricCard(tr("Питание", "Power"), "%", accent="power", note=note("power"))
 
-        self._activity = MetricCard("Активность", "с", note=_NOTES["activity"])
-        self._gpu_vr = MetricCard("VR ядра", "°C", accent="temp", note=_NOTES["gpu_vr"])
-        self._vram_vr = MetricCard("VR памяти", "°C", accent="temp", note=_NOTES["vram_vr"])
-        self._sa_vr = MetricCard("VR SA", "°C", accent="temp", note=_NOTES["sa_vr"])
+        self._vram_freq = MetricCard(
+            tr("Память", "Memory"), tr("Гбит/с", "Gbps"), accent="freq", note=note("vram_freq")
+        )
+        self._vram_voltage = MetricCard(
+            tr("Память, V", "Memory, V"), tr("В", "V"), note=note("vram_voltage")
+        )
+        self._vram_temp = MetricCard(
+            tr("Память, T", "Memory, Temp"), "°C", accent="temp", note=note("vram_temp")
+        )
+        self._vram_power = MetricCard(
+            tr("Память, Вт", "Memory, W"), tr("Вт", "W"), accent="power", note=note("vram_power")
+        )
 
-        self._load = MetricCard("Загрузка", "%", accent="load", note=_NOTES["load"])
+        self._activity = MetricCard(
+            tr("Активность", "Activity"), tr("с", "s"), note=note("activity")
+        )
+        self._gpu_vr = MetricCard(
+            tr("VR ядра", "Core VRM"), "°C", accent="temp", note=note("gpu_vr")
+        )
+        self._vram_vr = MetricCard(
+            tr("VR памяти", "Memory VRM"), "°C", accent="temp", note=note("vram_vr")
+        )
+        self._sa_vr = MetricCard("VR SA", "°C", accent="temp", note=note("sa_vr"))
+
+        self._load = MetricCard(tr("Загрузка", "GPU Load"), "%", accent="load", note=note("load"))
         self._vram_used = MetricCard(
-            "Память занято", "ГиБ", accent="vram", note=_NOTES["vram_used"]
+            tr("Память занято", "VRAM Used"),
+            tr("ГиБ", "GiB"),
+            accent="vram",
+            note=note("vram_used"),
         )
 
         grid = QGridLayout()
@@ -104,35 +146,53 @@ class MonitoringTab(QWidget):
         for col, card in enumerate((self._load, self._vram_used)):
             grid.addWidget(card, 3, col)
 
-        self._limits = QLabel("Ограничение: —")
+        self._limits = QLabel(tr("Ограничение: —", "Limit: —"))
         self._limits.setObjectName("limitsLabel")
         self._limits.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._limits.setToolTip(
-            "Активный лимитер прямо сейчас: Power / Temperature / Current / Voltage / "
-            "Utilization Limited — что именно мешает карте держать частоту. «Нет» — "
-            "ничего не ограничивает."
+            tr(
+                "Активный лимитер прямо сейчас: Power / Temperature / Current / Voltage / "
+                "Utilization Limited — что именно мешает карте держать частоту. «Нет» — "
+                "ничего не ограничивает.",
+                "Active limiter right now: Power / Temperature / Current / Voltage / "
+                "Utilization Limited — what is preventing the GPU from sustaining its clock. "
+                "“None” means no active limit.",
+            )
         )
 
         self._chart = LiveChart(window_s=300)
 
-        self._export_btn = QPushButton("Экспорт CSV…")
+        self._export_btn = QPushButton(tr("Экспорт CSV…", "Export CSV…"))
         self._export_btn.setToolTip(
-            "Сохранить буфер наблюдения (последние ~10 минут телеметрии, тот же "
-            "формат, что arctune telemetry --csv) в файл."
+            tr(
+                "Сохранить буфер наблюдения (последние ~10 минут телеметрии, тот же "
+                "формат, что arctune telemetry --csv) в файл.",
+                "Save the observation buffer (about the last 10 minutes of telemetry) "
+                "to a CSV file using the same format as arctune telemetry --csv.",
+            )
         )
         self._export_btn.clicked.connect(self._on_export)
 
         chart_row = QHBoxLayout()
         chart_row.addWidget(
             QLabel(
-                "График (слева °C / %, справа МГц, окно 5 мин; % — мощность, "
-                "загрузка ядра, память):"
+                tr(
+                    "График (слева °C / %, справа МГц, окно 5 мин; % — мощность, "
+                    "загрузка ядра, память):",
+                    "Chart (left: °C / %, right: MHz, 5-minute window; %: power, "
+                    "GPU load, memory):",
+                )
             )
         )
         chart_row.addStretch(1)
         chart_row.addWidget(self._export_btn)
 
-        hint = QLabel("Наведите на карточку — подсказка; клик по карточке — подробное окно.")
+        hint = QLabel(
+            tr(
+                "Наведите на карточку — подсказка; клик по карточке — подробное окно.",
+                "Hover over a card for a tooltip; click it to open the full explanation.",
+            )
+        )
         hint.setObjectName("hintLabel")
 
         lay = QVBoxLayout(self)
@@ -151,7 +211,7 @@ class MonitoringTab(QWidget):
         # не накопилась (первый тик) — честный процент от лимита.
         if snap.gpu_power_w is not None:
             pct = f"{snap.gpu_power_percent:g} %" if snap.gpu_power_percent is not None else ""
-            self._power.set_value(snap.gpu_power_w, digits=0, unit="Вт", tooltip=pct)
+            self._power.set_value(snap.gpu_power_w, digits=0, unit=tr("Вт", "W"), tooltip=pct)
         else:
             self._power.set_value(snap.gpu_power_percent)
 
@@ -178,11 +238,18 @@ class MonitoringTab(QWidget):
             used_gib = snap.vram_used_bytes / 1024**3
             total_gib = snap.vram_total_bytes / 1024**3
             pct = f"{snap.vram_percent:.0f} %" if snap.vram_percent is not None else ""
-            self._vram_used.set_value(f"{used_gib:.2f} / {total_gib:.2f}", unit="ГиБ", tooltip=pct)
+            self._vram_used.set_value(
+                f"{used_gib:.2f} / {total_gib:.2f}",
+                unit=tr("ГиБ", "GiB"),
+                tooltip=pct,
+            )
         else:
             self._vram_used.set_value(None)
 
-        self._limits.setText(f"Ограничение: {snap.limit_summary()}")
+        summary = snap.limit_summary()
+        if summary == "нет (запас есть)":
+            summary = tr(summary, "None (headroom available)")
+        self._limits.setText(f"{tr('Ограничение', 'Limit')}: {summary}")
 
         # На график кладём только полные снимки — частичные точки соврали бы картинку.
         # load/vram (% из LoadMeter) могут быть None — LiveChart их пропускает.
@@ -201,7 +268,7 @@ class MonitoringTab(QWidget):
 
     def _on_export(self) -> None:
         path, _ = QFileDialog.getSaveFileName(
-            self, "Экспорт телеметрии", "telemetry.csv", "CSV (*.csv)"
+            self, tr("Экспорт телеметрии", "Export telemetry"), "telemetry.csv", "CSV (*.csv)"
         )
         if path:
             self.export_requested.emit(path)

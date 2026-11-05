@@ -1074,15 +1074,10 @@ def cmd_reset(args: argparse.Namespace) -> int:
 
 
 def _version() -> str:
-    """Версия пакета; для frozen-exe без metadata — из arctuner.__version__."""
-    try:
-        from importlib.metadata import PackageNotFoundError, version
+    """Версия из единственного источника пакета."""
+    from arctuner import __version__
 
-        return version("arctune")
-    except PackageNotFoundError:
-        from arctuner import __version__
-
-        return __version__
+    return __version__
 
 
 def _configure_console() -> None:

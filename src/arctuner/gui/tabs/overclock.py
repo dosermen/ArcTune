@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from arctuner.gui.widgets import confirm_write
+from arctuner.i18n import tr
 from arctuner.igcl.api import OcControlInfo
 
 #: Пункт UI: ключ в oc-словаре, русское имя, подпись единиц.
@@ -32,6 +33,13 @@ _FIELD_LABELS: dict[str, tuple[str, str]] = {
     "gpuVoltageOffset": ("Смещение напряжения", "%"),
     "temperatureLimit": ("Лимит температуры", "°C*"),
     "vramMemSpeedLimit": ("Скорость памяти", "Гбит/с"),
+}
+_FIELD_LABELS_EN: dict[str, str] = {
+    "powerLimit": "Power Limit",
+    "gpuFrequencyOffset": "GPU Frequency Offset",
+    "gpuVoltageOffset": "GPU Voltage Offset",
+    "temperatureLimit": "Temperature Limit",
+    "vramMemSpeedLimit": "Memory Speed",
 }
 
 #: Сколько знаков после запятой показывать (шаг памяти 0.001 — иначе 0.00).
@@ -72,6 +80,8 @@ class _FieldRow(QObject):
         super().__init__(parent)
         self._field = field
         label, unit = _FIELD_LABELS[field]
+        label = tr(label, _FIELD_LABELS_EN[field])
+        unit = tr(unit, {"%": "%", "МГц": "MHz", "°C*": "°C*", "Гбит/с": "Gbps"}[unit])
         self._supported = False  # станет True, когда IGCL подтвердит поддержку
 
         self._name = QLabel(label)
@@ -91,7 +101,7 @@ class _FieldRow(QObject):
 
         self._unit = QLabel(unit)
 
-        self._btn = QPushButton("Применить…")
+        self._btn = QPushButton(tr("Применить…", "Apply…"))
         self._btn.setEnabled(False)
         self._btn.clicked.connect(self._on_apply)
 
@@ -130,12 +140,17 @@ class _FieldRow(QObject):
             self._spin.setSingleStep(info.step)
         if current is not None:
             self._spin.setValue(current)
-            self._current.setText(f"сейчас: {current:g}")
+            self._current.setText(tr(f"сейчас: {current:g}", f"current: {current:g}"))
         else:
             # Иначе остаётся текст прошлой записи — устаревшее значение.
-            self._current.setText("сейчас: —")
+            self._current.setText(tr("сейчас: —", "current: —"))
         if hi < info.max:
-            self._range.setText(f"{info.min:g}…{hi:g} (потолок проекта)")
+            self._range.setText(
+                tr(
+                    f"{info.min:g}…{hi:g} (потолок проекта)",
+                    f"{info.min:g}…{hi:g} (project limit)",
+                )
+            )
         else:
             self._range.setText(f"{info.min:g}…{info.max:g}")
         self._spin.setMinimumWidth(self._required_width(info))
@@ -151,31 +166,46 @@ class _FieldRow(QObject):
     def _on_apply(self) -> None:
         value = self._spin.value()
         label, unit = _FIELD_LABELS[self._field]
-        current = self._current.text().removeprefix("сейчас: ").strip() or "?"
+        label = tr(label, _FIELD_LABELS_EN[self._field])
+        unit = tr(unit, {"%": "%", "МГц": "MHz", "°C*": "°C*", "Гбит/с": "Gbps"}[unit])
+        current = self._current.text().removeprefix(tr("сейчас: ", "current: ")).strip() or "?"
         hard = ""
         if self._field == "vramMemSpeedLimit" and value > _VRAM_NOMINAL:
-            hard = (
+            hard = tr(
                 f"⚠️ СВЕРХ НОМИНАЛА чипа SC20 ({_VRAM_NOMINAL:g} {unit})! "
                 f"Драйвер декларирует до {_HARD_MAX[self._field]:g}, но живой тест: "
                 f"21 — работает, 22 — отказ драйвера (DATA_WRITE). Стабильность не "
-                f"гарантирована: возможны артефакты/сброс драйвера."
+                f"гарантирована: возможны артефакты/сброс драйвера.",
+                f"⚠️ ABOVE the SC20 chip's rated speed ({_VRAM_NOMINAL:g} {unit})! "
+                f"The driver reports a maximum of {_HARD_MAX[self._field]:g}; testing "
+                "showed 21 works, while 22 is rejected (DATA_WRITE). Stability is not "
+                "guaranteed; artifacts or a driver reset may occur.",
             )
         elif self._field == "vramMemSpeedLimit":
             # _HARD_MAX для памяти = 22 (максимум драйвера), но безопасный
             # потолок проекта — 20 (номинал SC20). Раньше здесь писалось
             # «Потолок проекта: 22» и путало с безусловно разрешённым.
-            hard = (
+            hard = tr(
                 f"Безопасный потолок проекта: {_VRAM_NOMINAL:g} {unit} (номинал чипа SC20); "
                 f"драйвер допускает до {_HARD_MAX[self._field]:g}, но выше номинала — "
-                f"только с явным предупреждением."
+                "только с явным предупреждением.",
+                f"Safe project limit: {_VRAM_NOMINAL:g} {unit} (SC20 rated speed); the "
+                f"driver allows up to {_HARD_MAX[self._field]:g}, but exceeding the rated "
+                "speed requires explicit confirmation.",
             )
         elif self._field in _HARD_MAX:
-            hard = f"Потолок проекта: {_HARD_MAX[self._field]:g} {unit} (обход невозможен)."
+            hard = tr(
+                f"Потолок проекта: {_HARD_MAX[self._field]:g} {unit} (обход невозможен).",
+                f"Project limit: {_HARD_MAX[self._field]:g} {unit} (cannot be bypassed).",
+            )
         if self._field == "gpuVoltageOffset":
-            extra = (
+            extra = tr(
                 "Intel требует waiver (принятие снижения срока службы) — вызывается "
                 "автоматически. В МИНУС смещение недоступно (драйвер даёт 0…100): "
-                "undervolt — через вкладку «V/F»."
+                "undervolt — через вкладку «V/F».",
+                "Intel requires a waiver acknowledging reduced component lifespan; it is "
+                "requested automatically. Negative offset is unavailable (driver range "
+                "0…100); use the V/F tab to undervolt.",
             )
             hard = f"{hard}\n{extra}" if hard else extra
         # _FieldRow — QObject, а не QWidget: window() есть только у родителя.
@@ -183,7 +213,7 @@ class _FieldRow(QObject):
         dialog_parent = parent.window() if isinstance(parent, QWidget) else None
         if confirm_write(
             dialog_parent,
-            "Подтверждение записи",
+            tr("Подтверждение записи", "Confirm write"),
             [f"{label}: {current} → {value:g} {unit}"],
             detail=hard,
         ):
@@ -209,7 +239,12 @@ class OverclockTab(QWidget):
         super().__init__(parent)
         self._rows: dict[str, _FieldRow] = {}
 
-        box = QGroupBox("Пункты разгона (диапазоны — из IGCL)")
+        box = QGroupBox(
+            tr(
+                "Пункты разгона (диапазоны — из IGCL)",
+                "Overclock controls (ranges from IGCL)",
+            )
+        )
         grid = QGridLayout()
         grid.setVerticalSpacing(10)
         for row_index, field in enumerate(self.FIELDS):
@@ -225,19 +260,31 @@ class OverclockTab(QWidget):
         vbox = QVBoxLayout(box)
         vbox.addLayout(grid)
         for note_text in (
-            "* Лимит температуры: драйвер отдаёт units=PERCENT, значения — °C",
-            "* Смещение напряжения: только ПЛЮС (драйвер даёт 0…100); в минус —"
-            " только через кривую V/F (вкладка «V/F»).",
+            tr(
+                "* Лимит температуры: драйвер отдаёт units=PERCENT, значения — °C",
+                "* Temperature limit: the driver reports units=PERCENT, but values are °C.",
+            ),
+            tr(
+                "* Смещение напряжения: только ПЛЮС (драйвер даёт 0…100); в минус —"
+                " только через кривую V/F (вкладка «V/F»).",
+                "* Voltage offset is positive-only (driver range 0…100); use the V/F curve "
+                "to undervolt.",
+            ),
         ):
             note = QLabel(note_text)
             note.setObjectName("hintLabel")
             note.setWordWrap(True)
             vbox.addWidget(note)
 
-        self._reset = QPushButton("⚠️ Сбросить всё к дефолту…")
+        self._reset = QPushButton(tr("⚠️ Сбросить всё к дефолту…", "⚠️ Reset all to defaults…"))
         self._reset.clicked.connect(self._on_reset)
 
-        hint = QLabel("Запись применяется не мгновенно — эффект виден в «Мониторинге».")
+        hint = QLabel(
+            tr(
+                "Запись применяется не мгновенно — эффект виден в «Мониторинге».",
+                "Changes may take a moment to apply; check the Monitoring tab for their effect.",
+            )
+        )
         hint.setObjectName("hintLabel")
 
         lay = QVBoxLayout(self)
@@ -262,9 +309,12 @@ class OverclockTab(QWidget):
     def _on_reset(self) -> None:
         if confirm_write(
             self.window(),
-            "Сброс настроек",
-            ["Все OC-пункты → значения по умолчанию"],
-            detail="Сброс идёт через ctlOverclockResetToDefault и журналируется.",
+            tr("Сброс настроек", "Reset settings"),
+            [tr("Все OC-пункты → значения по умолчанию", "All OC controls → default values")],
+            detail=tr(
+                "Сброс идёт через ctlOverclockResetToDefault и журналируется.",
+                "The reset uses ctlOverclockResetToDefault and is recorded in the journal.",
+            ),
         ):
             self.reset_requested.emit()
 

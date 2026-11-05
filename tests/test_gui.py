@@ -22,11 +22,14 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 PySide6 = pytest.importorskip("PySide6", reason="GUI-тесты требуют PySide6 (extra gui)")
 
-from PySide6.QtCore import Qt  # noqa: E402
+from PySide6.QtCore import QSettings, Qt  # noqa: E402
 from PySide6.QtWidgets import QApplication, QGraphicsTextItem  # noqa: E402
 
+from arctuner import i18n  # noqa: E402
+from arctuner.gui import overlay as overlay_module  # noqa: E402
 from arctuner.gui.charts import LiveChart, VfChart  # noqa: E402
 from arctuner.gui.context import FanInfo  # noqa: E402
+from arctuner.gui.overlay import cell_label, layout_label  # noqa: E402
 from arctuner.gui.tabs import (  # noqa: E402
     AutoTuneTab,
     DeviceTab,
@@ -36,6 +39,7 @@ from arctuner.gui.tabs import (  # noqa: E402
     OverclockTab,
     VfTab,
 )
+from arctuner.gui.tabs.overlay import OverlayTab  # noqa: E402
 from arctuner.gui.widgets import MetricCard  # noqa: E402
 from arctuner.igcl.api import (  # noqa: E402
     DeviceInfo,
@@ -96,6 +100,38 @@ def test_metric_card_none_shows_dash(qapp) -> None:
 def test_charts_construct(qapp) -> None:
     LiveChart()
     VfChart()
+
+
+def test_english_gui_labels_and_chart_labels(qapp, monkeypatch, tmp_path) -> None:
+    """Основные подписи вкладок и графиков отображаются на выбранном языке."""
+    i18n.set_language(i18n.LANG_EN)
+    try:
+        monitoring = MonitoringTab()
+        overclock = OverclockTab()
+        vf = VfTab()
+        chart = LiveChart()
+        settings = QSettings(str(tmp_path / "overlay.ini"), QSettings.Format.IniFormat)
+        monkeypatch.setattr(overlay_module, "_settings", lambda: settings)
+        overlay = overlay_module.OverlayWindow()
+        overlay_tab = OverlayTab(overlay)
+
+        assert monitoring._freq._title.text() == "Core"
+        assert monitoring._temp._title.text() == "Temperature"
+        assert monitoring._export_btn.text() == "Export CSV…"
+        assert overclock._rows["powerLimit"]._name.text() == "Power Limit"
+        assert overclock._rows["powerLimit"]._btn.text() == "Apply…"
+        assert vf._import_btn.text() == "Write from CSV…"
+        assert chart._axis_x.titleText() == "seconds"
+        assert chart._axis_right.titleText() == "MHz"
+        assert chart._temp_series.name() == "Temperature, °C"
+        assert cell_label("vram_used") == "VRAM Used (GiB)"
+        assert layout_label("grid") == "Grid 3×2"
+        assert overlay_tab._enable.text() == "Show overlay on top of windows"
+        assert overlay_tab._layout_buttons["grid"].text() == "Grid 3×2"
+        assert overlay_tab._cell_boxes["temp"].text() == "Temperature (°C)"
+        overlay.close()
+    finally:
+        i18n.set_language(i18n.LANG_RU)
 
 
 def test_chart_axis_labels_never_truncated(qapp) -> None:
