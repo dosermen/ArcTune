@@ -717,13 +717,11 @@ class IgclApi:
 
     def read_oc_properties(self, handle: CtlDeviceHandle) -> dict[str, OcControlInfo | bool]:
         """ctlOverclockGetProperties — диапазоны пунктов разгона (read-only)."""
+        fn = self._require_func("ctlOverclockGetProperties")
         props = T.CtlOcProperties()
         props.Size = ctypes.sizeof(T.CtlOcProperties)
         props.Version = 1  # >0, чтобы получить vramMemSpeedLimit/VF limits
-        _check(
-            self.loader.dll.ctlOverclockGetProperties(handle, ctypes.byref(props)),
-            "ctlOverclockGetProperties",
-        )
+        _check(fn(handle, ctypes.byref(props)), "ctlOverclockGetProperties")
 
         def conv(c: T.CtlOcControlItem) -> OcControlInfo:
             return OcControlInfo(
@@ -753,9 +751,22 @@ class IgclApi:
     # --- Запись (⚠️ меняет состояние карты). Вызывается только из tuner.py
     #     после проверок min/max/step/supported и инвариантов проекта. ---
 
+    def _require_func(self, func_name: str):
+        """Возвращает функцию DLL и гарантирует, что она реально доступна.
+
+        На старых/узких драйверах некоторые функции Intel отсутствуют в DLL или
+        не представлены загрузчиком. Тогда вместо ``AttributeError`` выбрасываем
+        ``IclError`` со статусом ``ERROR_UNSUPPORTED_FEATURE`` — это ожидаемое
+        поведение для безопасного и понятного обрамления ошибок.
+        """
+        if not self.loader.has(func_name):
+            raise IgclError(T.CtlResult.ERROR_UNSUPPORTED_FEATURE, func_name)
+        return getattr(self.loader.dll, func_name)
+
     def _set_value(self, func_name: str, handle: CtlDeviceHandle, value: float) -> None:
         """Вызывает set-функцию (handle, double) и проверяет результат."""
-        _check(getattr(self.loader.dll, func_name)(handle, value), func_name)
+        fn = self._require_func(func_name)
+        _check(fn(handle, value), func_name)
 
     def set_power_limit(self, handle: CtlDeviceHandle, percent: float) -> None:
         """ctlOverclockPowerLimitSetV2 — лимит питания, % (макс 120)."""
@@ -779,7 +790,8 @@ class IgclApi:
 
     def reset_to_default(self, handle: CtlDeviceHandle) -> None:
         """ctlOverclockResetToDefault — откат всех OC-настроек к дефолту (план отката)."""
-        _check(self.loader.dll.ctlOverclockResetToDefault(handle), "ctlOverclockResetToDefault")
+        fn = self._require_func("ctlOverclockResetToDefault")
+        _check(fn(handle), "ctlOverclockResetToDefault")
 
     def set_overclock_waiver(self, handle: CtlDeviceHandle) -> None:
         """ctlOverclockWaiverSet — принятие пользователем риска разгона.
@@ -794,7 +806,8 @@ class IgclApi:
         записи в CLI/GUI и есть такое согласие. Вызов идемпотентен и сам по себе
         настроек не меняет.
         """
-        _check(self.loader.dll.ctlOverclockWaiverSet(handle), "ctlOverclockWaiverSet")
+        fn = self._require_func("ctlOverclockWaiverSet")
+        _check(fn(handle), "ctlOverclockWaiverSet")
 
     # --- Вентиляторы ---
 
@@ -974,11 +987,10 @@ class IgclApi:
         Двухвызовная идемпотентная схема IGCL: сначала count=0 → размер,
         затем читаем точки.
         """
+        fn = self._require_func("ctlOverclockReadVFCurve")
         count = ctypes.c_uint32(0)
         _check(
-            self.loader.dll.ctlOverclockReadVFCurve(
-                handle, curve_type, detail, ctypes.byref(count), None
-            ),
+            fn(handle, curve_type, detail, ctypes.byref(count), None),
             "ctlOverclockReadVFCurve",
         )
         n = count.value
@@ -986,9 +998,7 @@ class IgclApi:
             return []
         arr = (T.CtlVoltageFrequencyPoint * n)()
         _check(
-            self.loader.dll.ctlOverclockReadVFCurve(
-                handle, curve_type, detail, ctypes.byref(count), arr
-            ),
+            fn(handle, curve_type, detail, ctypes.byref(count), arr),
             "ctlOverclockReadVFCurve",
         )
         return list(arr)

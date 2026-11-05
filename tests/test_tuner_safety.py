@@ -24,6 +24,34 @@ def _info(lo: float, hi: float, step: float = 1.0, supported: bool = True) -> Oc
     )
 
 
+def test_missing_waiver_api_is_rejected_cleanly() -> None:
+    """Если IGCL не поддерживает waiver, запись с риском должна падать явно."""
+    from arctuner import tuner
+
+    class _NoWaiverApi:
+        loader = _LoaderStub()
+
+    with pytest.raises(tuner.SafetyLimitError, match="ctlOverclockWaiverSet"):
+        tuner._ensure_waiver(_NoWaiverApi(), object())
+
+
+def test_missing_igcl_function_raises_igcl_error() -> None:
+    """Отсутствующая функция DLL должна давать IgclError, а не AttributeError."""
+    from arctuner.igcl.api import IgclApi, IgclError
+
+    class _NoLoader:
+        def has(self, name: str) -> bool:
+            return False
+
+        dll = object()
+
+    api = IgclApi.__new__(IgclApi)
+    api.loader = _NoLoader()
+
+    with pytest.raises(IgclError, match="ctlOverclockPowerLimitSetV2"):
+        api._set_value("ctlOverclockPowerLimitSetV2", object(), 100.0)
+
+
 # --- Уровень 1: жёсткие инварианты проекта ---
 
 

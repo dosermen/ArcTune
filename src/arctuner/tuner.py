@@ -95,8 +95,31 @@ def _ensure_waiver(api: IgclApi, handle) -> None:
 
     Согласие пользователя — это подтверждение записи в CLI/GUI (Intel требует
     «хотя бы один раз явно предупредить и получить согласие»).
+
+    Если IGCL-API отсутствует, безопасная реакция — явно запретить запись с
+    объяснением, не пытаясь "обойти" текущую платформу.
     """
-    api.set_overclock_waiver(handle)
+    if not hasattr(api, "set_overclock_waiver"):
+        raise SafetyLimitError(
+            "IGCL не предоставляет ctlOverclockWaiverSet — запись с waiver "
+            "не поддерживается на этом драйвере"
+        )
+    try:
+        if (
+            isinstance(api, IgclApi)
+            and hasattr(api, "loader")
+            and hasattr(api.loader, "has")
+            and not api.loader.has("ctlOverclockWaiverSet")
+        ):
+            raise IgclError(T.CtlResult.ERROR_UNSUPPORTED_FEATURE, "ctlOverclockWaiverSet")
+        api.set_overclock_waiver(handle)
+    except IgclError as exc:
+        if exc.code != T.CtlResult.ERROR_UNSUPPORTED_FEATURE:
+            raise  # прочая ошибка драйвера — не маскируем её под «нет API»
+        raise SafetyLimitError(
+            "IGCL не предоставляет ctlOverclockWaiverSet — запись с waiver "
+            "не поддерживается на этом драйвере"
+        ) from exc
 
 
 def _profile_for_handle(api: IgclApi, handle) -> DeviceProfile:
