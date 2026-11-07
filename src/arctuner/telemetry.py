@@ -148,12 +148,16 @@ class LoadMeter:
             )
         self._api = api
         loader = api.loader
-        # GT-движок (все движки вместе) — итоговая загрузка ядра.
+        # RENDER (render+compute) — итоговая загрузка ядра. Замер на живой B580
+        # (2026-11-07): RENDER совпал с независимым счётчиком Windows (PDH
+        # «3D engine»: 6.3 % против 6–7 %), а GT вёл себя как усреднение по всей
+        # группе (≈ Σзанятого/9): в игре с одним занятым 3D-движком GT давал
+        # ≤11 % вместо ~100 %.
         self._engine: CtlEngineHandle | None = None
         if loader.has("ctlEnumEngineGroups") and loader.has("ctlEngineGetActivity"):
             for eng in api.enumerate_engine_groups(handle):
                 try:
-                    if api.get_engine_properties(eng) == T.CtlEngineGroup.GT:
+                    if api.get_engine_properties(eng) == T.CtlEngineGroup.RENDER:
                         self._engine = eng
                         break
                 except IgclError:

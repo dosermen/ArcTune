@@ -214,6 +214,43 @@ def test_load_rejects_unimplemented_source() -> None:
         LoadMeter(_FakeApi(), None, source="pdh")  # type: ignore[arg-type]
 
 
+def test_loadmeter_selects_render_group_not_gt() -> None:
+    """«Загрузка ядра» читает группу RENDER, а не GT (замер на B580, 2026-11-07).
+
+    GT на живой B580 усредняет по движкам (эмпирически ≈ Σзанятого/9): в игре
+    с одним занятым 3D-движком показывал ≤11 % вместо ~100 %. RENDER совпал
+    с независимым счётчиком Windows (PDH «3D engine»).
+    """
+    from types import SimpleNamespace
+
+    from arctuner.igcl import types as T
+
+    gt_handle, render_handle = object(), object()
+
+    class _Loader:
+        @staticmethod
+        def has(name: str) -> bool:
+            return name in {"ctlEnumEngineGroups", "ctlEngineGetActivity"}
+
+    class _Api:
+        loader = _Loader()
+
+        @staticmethod
+        def enumerate_engine_groups(handle):
+            return [gt_handle, render_handle]
+
+        @staticmethod
+        def get_engine_properties(engine):
+            return T.CtlEngineGroup.GT if engine is gt_handle else T.CtlEngineGroup.RENDER
+
+        @staticmethod
+        def read_engine_activity(engine):
+            return SimpleNamespace(active_time_us=0, timestamp_us=0)
+
+    meter = LoadMeter(_Api(), None, source="igcl")  # type: ignore[arg-type]
+    assert meter._engine is render_handle
+
+
 # --- MemoryState: used/percent из ctlMemoryGetState ---
 
 

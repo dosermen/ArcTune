@@ -517,8 +517,8 @@ class CtlVoltageFrequencyPoint(ctypes.Structure):
 class CtlEngineGroup(IntEnum):
     """_ctl_engine_group_t — группы движков (ctlEngineGetProperties.type)."""
 
-    GT = 0  # все движки вместе (для итоговой загрузки ядра)
-    RENDER = 1  # render + compute
+    GT = 0  # вся группа GT; на B580 — усреднение по движкам, для «загрузки ядра» не годится
+    RENDER = 1  # render + compute: «загрузка ядра» (совпал с PDH «3D engine» на B580)
     MEDIA = 2  # media
 
 

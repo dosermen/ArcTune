@@ -48,9 +48,9 @@ _NOTES: dict[str, str] = {
     "только под нагрузкой; в простое счётчик может стоять на месте — это норма, "
     "а не сбой. Нужен для дельт и реплея инцидентов.",
     "load": "Загрузка ядра в % — доля времени, когда GPU реально работал за период "
-    "опроса (формула igcl_api.h: ΔactiveTime/Δtimestamp по группе GT, все движки "
-    "вместе). Появляется со 2-го тика: первый снимок — база для расчёта. Это "
-    "занятость самого GPU, не процессора.",
+    "опроса (формула igcl_api.h: ΔactiveTime/Δtimestamp по группе RENDER — "
+    "render+compute; сверена с счётчиками Windows). Появляется со 2-го тика: "
+    "первый снимок — база для расчёта. Это занятость самого GPU, не процессора.",
     "vram_used": "Занято памяти: использовано / доступно (ГиБ) из ctlMemoryGetState "
     "(used = size − free). Процент — при наведении. «Доступно» чуть меньше "
     "физических 12 ГиБ: драйвер резервирует часть под себя.",
@@ -72,7 +72,7 @@ _NOTES_EN: dict[str, str] = {
     "vram_temp": "GDDR6 chip temperature (6× Samsung SC20). Memory overheating can cause errors, artifacts, and crashes.",
     "vram_power": "Memory power in watts, calculated from the vramEnergyCounter (read-only energy counter).",
     "activity": "Accumulated GPU active time in seconds. It grows under load and may stand still at idle — that is normal.",
-    "load": "GPU core utilization: the share of time the GPU was active during the polling interval (ΔactiveTime/Δtimestamp for the GT group). Available after the second sample.",
+    "load": "GPU core utilization: the share of time the GPU was active during the polling interval (ΔactiveTime/Δtimestamp for the RENDER group, render+compute). Available after the second sample.",
     "vram_used": "VRAM used / available (GiB), from ctlMemoryGetState (used = size − free). The available amount may be below physical 12 GiB because the driver reserves memory.",
     "gpu_vr": "GPU VRM phase temperature. The MOSFETs heat from current; die temperature does not reveal their temperature.",
     "vram_vr": "Memory VRM phase temperature. At idle this can be the hottest of the VR sensors.",
