@@ -9,6 +9,13 @@ from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPen
 from PySide6.QtWidgets import QToolTip
 
+from arctuner.gui.chartstyle import (
+    DEFAULT_CHART_STYLE,
+    GlowLayer,
+    PulseController,
+    apply_chart_style,
+    chart_style,
+)
 from arctuner.gui.theme import SERIES_FREQ, SERIES_LOAD, SERIES_POWER, SERIES_TEMP, SERIES_VRAM
 from arctuner.i18n import tr
 from arctuner.igcl.api import TelemetrySnapshot
@@ -61,6 +68,7 @@ class MiniChart(QChartView):
         self._window_s = window_s
         self._size = DEFAULT_MINI_CHART_SIZE
         self._selected = DEFAULT_MINI_CHART_SERIES
+        self._style = chart_style(DEFAULT_CHART_STYLE)
         self._samples: deque[tuple[float, dict[str, float | None]]] = deque(maxlen=_MAX_SAMPLES)
         self._events: deque[tuple[float, str, str]] = deque(maxlen=_MAX_EVENTS)
         self._series: dict[str, list[QLineSeries]] = {key: [] for key in MINI_CHART_SERIES}
@@ -88,6 +96,8 @@ class MiniChart(QChartView):
         chart.addAxis(self._axis_right, Qt.AlignmentFlag.AlignRight)
         self.setChart(chart)
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
+        self._glow = GlowLayer(chart)
+        self._pulse = PulseController(self)
         self.set_size(self._size)
         self.setVisible(False)
         self.set_series(self._selected)
@@ -116,8 +126,32 @@ class MiniChart(QChartView):
         self.setFixedSize(width, height)
 
     def set_dark(self, dark: bool) -> None:
-        """Сохраняет приборный вид графика одинаковым при смене темы."""
+        """Сохраняет приборный вид графика одинаковым при смене темы.
+
+        Тема QChart мини-графика не меняется — задать другой вид может только
+        стиль графиков (set_chart_style).
+        """
         del dark
+
+    def set_chart_style(self, name: str) -> None:
+        """Накладывает пресет вида (см. gui.chartstyle) на мини-график HUD.
+
+        Канонические цвета серий не перекрашиваются (тема здесь не меняется) —
+        правится ширина линий, кисти фона/сетки и glow/пульсация.
+        """
+        spec = chart_style(name)
+        self._style = spec
+        apply_chart_style(self.chart(), spec)
+        for series in self._glow.tracked:
+            pen = series.pen()
+            pen.setWidthF(spec.line_width)
+            series.setPen(pen)
+        for series in self._event_series:  # пунктирные маркеры событий — без glow
+            pen = series.pen()
+            pen.setWidthF(spec.line_width)
+            series.setPen(pen)
+        self._glow.set_active(spec.glow)
+        self._pulse.set_style(spec)
 
     def set_series(self, keys: tuple[str, ...] | list[str]) -> None:
         """Задаёт видимые метрики."""
@@ -242,18 +276,21 @@ class MiniChart(QChartView):
             existing = self._series[key]
             while len(existing) < len(segments):
                 series = QLineSeries()
-                series.setPen(QPen(color, 2))
+                series.setPen(QPen(color, self._style.line_width))
                 chart.addSeries(series)
                 series.attachAxis(self._axis_x)
                 series.attachAxis(self._axis_right if right_axis else self._axis_left)
                 existing.append(series)
+                self._glow.track(series)
             while len(existing) > len(segments):
                 series = existing.pop()
+                self._glow.untrack(series)
                 chart.removeSeries(series)
                 series.deleteLater()
             for index, (series, points) in enumerate(zip(existing, segments, strict=False)):
                 series.setName(tr(title_ru, title_en) if index == 0 else "")
                 series.replace(points)
+                self._glow.sync(series)  # подложка свечения копирует точки сама
                 series.setVisible(visible)
                 if index > 0:
                     markers = chart.legend().markers(series)
@@ -282,7 +319,7 @@ class MiniChart(QChartView):
             self._event_series, visible_events, strict=False
         ):
             series.setName("")
-            series.setPen(QPen(_EVENT_COLORS[kind], 2, Qt.PenStyle.DotLine))
+            series.setPen(QPen(_EVENT_COLORS[kind], self._style.line_width, Qt.PenStyle.DotLine))
             series.replace([QPointF(event_t, axis_max * 0.82), QPointF(event_t, axis_max * 0.98)])
             for marker in chart.legend().markers(series):
                 marker.setVisible(False)

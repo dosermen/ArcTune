@@ -16,6 +16,14 @@ from PySide6.QtCharts import (
 from PySide6.QtCore import QPointF, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPen
 
+from arctuner.gui.chartstyle import (
+    DEFAULT_CHART_STYLE,
+    GlowLayer,
+    PulseController,
+    apply_chart_style,
+    chart_style,
+    force_theme,
+)
 from arctuner.gui.theme import (
     SERIES_FREQ,
     SERIES_LOAD,
@@ -23,6 +31,7 @@ from arctuner.gui.theme import (
     SERIES_POWER,
     SERIES_TEMP,
     SERIES_VRAM,
+    load_theme,
 )
 from arctuner.i18n import tr
 from arctuner.tuner import (
@@ -34,14 +43,18 @@ from arctuner.tuner import (
 
 
 class ThemedChart(Protocol):
-    """Минимальный контракт «график, умеющий менять тему».
+    """Минимальный контракт «график, умеющий менять тему и стиль вида».
 
-    LiveChart и VfChart наследуют QChartView и реализуют set_dark. Protocol
-    нужен, чтобы findChildren(QChartView) (базовый тип) позволял вызывать
-    set_dark без подавления ошибок mypy.
+    LiveChart, VfChart и MiniChart наследуют QChartView и реализуют set_dark
+    и set_chart_style. Protocol нужен, чтобы findChildren(QChartView) (базовый
+    тип) позволял вызывать эти методы без подавления ошибок mypy.
     """
 
     def set_dark(self, dark: bool) -> None: ...
+
+    def set_chart_style(self, name: str) -> None:
+        """Накладывает пресет вида (см. gui.chartstyle) на график."""
+        ...
 
 
 # Цвета серий (темп/мощность/частота) — одинаковы и в легенде, и на графике.
@@ -74,6 +87,9 @@ class LiveChart(QChartView):
     def __init__(self, window_s: int = 300, parent=None) -> None:
         super().__init__(parent)
         self._window_s = window_s
+        # Стиль вида (см. chartstyle): ширина линий — из пресета, цвета —
+        # канонические SERIES_*; применяется окном (MainWindow) сразу при старте.
+        self._style = chart_style(DEFAULT_CHART_STYLE)
         # (t, temp, power, freq, load, vram, media): load/vram/media — None,
         # пока LoadMeter не накопил базу; такие точки просто не рисуются
         # (см. _replace).
@@ -139,15 +155,26 @@ class LiveChart(QChartView):
         chart.legend().setAlignment(Qt.AlignmentFlag.AlignBottom)
         self.setChart(chart)
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
+        # Свечение и пульсация: серии уже в графике — регистрируем в glow-слое
+        # (подложки создаются только при включённом стиле, см. set_chart_style).
+        self._glow = GlowLayer(chart)
+        self._pulse = PulseController(self)
+        for series in (
+            self._temp_series,
+            self._power_series,
+            self._load_series,
+            self._vram_series,
+            self._freq_series,
+        ):
+            self._glow.track(series)
         # Минимум, при котором оси не сжимаются: заголовок оси («секунды»)
         # обрезается в «…» ниже ~250 px высоты (измерено на Qt 6.12) — 280 с запасом.
         self.setMinimumHeight(_AXIS_MIN_H)
 
-    @staticmethod
-    def _make_series(name: str, color: QColor) -> QLineSeries:
+    def _make_series(self, name: str, color: QColor) -> QLineSeries:
         series = QLineSeries()
         series.setName(name)
-        series.setPen(QPen(color, 2))
+        series.setPen(QPen(color, self._style.line_width))
         return series
 
     def push(
@@ -204,6 +231,7 @@ class LiveChart(QChartView):
                 series.attachAxis(self._axis_left)
                 self._replace_cpu(series, 1)
                 self._cpu_load_series = series
+                self._glow.track(series)
         elif key == "cpu_freq":
             series = self._cpu_freq_series
             if visible and series is None:
@@ -213,6 +241,7 @@ class LiveChart(QChartView):
                 series.attachAxis(self._axis_right)
                 self._replace_cpu(series, 2)
                 self._cpu_freq_series = series
+                self._glow.track(series)
         elif key == "cpu_temp":
             series = self._cpu_temp_series
             if visible and series is None:
@@ -222,6 +251,7 @@ class LiveChart(QChartView):
                 series.attachAxis(self._axis_left)
                 self._replace_cpu(series, 3)
                 self._cpu_temp_series = series
+                self._glow.track(series)
         else:
             raise ValueError(f"неизвестная серия CPU: {key!r}")
         if series is not None:
@@ -242,6 +272,7 @@ class LiveChart(QChartView):
             series.attachAxis(self._axis_left)
             self._replace(series, 6)
             self._media_series = series
+            self._glow.track(series)
         if series is not None:
             series.setVisible(visible)
 
@@ -276,6 +307,7 @@ class LiveChart(QChartView):
             if value is not None:
                 points.append(QPointF(sample[0], value))
         series.replace(points)
+        self._glow.sync(series)  # у свечения нет сигнала pointsChanged — копируем сами
 
     def _replace(self, series: QLineSeries, column: int) -> None:
         """Перерисовывает серию по колонке _samples, пропуская None-точки."""
@@ -285,6 +317,7 @@ class LiveChart(QChartView):
             if value is not None:
                 points.append(QPointF(sample[0], value))
         series.replace(points)
+        self._glow.sync(series)  # у свечения нет сигнала pointsChanged — копируем сами
 
     def clear(self) -> None:
         self._samples.clear()
@@ -299,6 +332,7 @@ class LiveChart(QChartView):
         if self._media_series is not None:
             self._media_series.clear()
         self.clear_cpu()
+        self._glow.sync_all()  # подложки свечения отстают от очищенных серий
 
     def clear_cpu(self) -> None:
         """Очищает историю только CPU-серий."""
@@ -309,17 +343,38 @@ class LiveChart(QChartView):
             self._cpu_freq_series.clear()
         if self._cpu_temp_series is not None:
             self._cpu_temp_series.clear()
+        self._glow.sync_all()  # подложки не должны отставать от очистки (вызывается и вне clear)
 
     def set_dark(self, dark: bool) -> None:
         """Интентионно no-op: вид графика мониторинга пользователь просил сохранить.
 
         Белый фон, сетка, легенда и цвета линий не меняются при переключении
         темы — это «приборная панель», её внематериальный вид стабильнее.
+        Задать другой вид может только стиль графиков (set_chart_style).
         """
         del dark
 
+    def set_chart_style(self, name: str) -> None:
+        """Накладывает пресет вида (см. gui.chartstyle) на график мониторинга.
+
+        «Классика» задаёт светлые кисти явно (график не зависит от темы
+        приложения — см. set_dark); остальные пресеты — свои фоны/сетку.
+        Pen'ы серий не перекрашиваются: тема QChart здесь никогда не меняется,
+        поэтому остаются канонические цвета SERIES_* — правится только ширина.
+        """
+        spec = chart_style(name)
+        self._style = spec
+        apply_chart_style(self.chart(), spec)
+        for series in self._glow.tracked:
+            pen = series.pen()
+            pen.setWidthF(spec.line_width)
+            series.setPen(pen)
+        self._glow.set_active(spec.glow)
+        self._pulse.set_style(spec)
+
 
 _VF_GRAB_PX = 14.0  # радиус захвата точки на графике, пиксели
+_VF_MARKER_SIZE = 15.0  # базовый размер маркеров точек V/F (px)
 
 
 class VfChart(QChartView):
@@ -336,9 +391,10 @@ class VfChart(QChartView):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
+        self._style = chart_style(DEFAULT_CHART_STYLE)
         self._series = QLineSeries()
         self._series.setName("V/F")
-        self._series.setPen(QPen(_FREQ_COLOR, 2))
+        self._series.setPen(QPen(_FREQ_COLOR, self._style.line_width))
         self._axis_x = QValueAxis()
         self._axis_x.setTitleText(tr("МГц", "MHz"))
         self._axis_y = QValueAxis()
@@ -364,6 +420,11 @@ class VfChart(QChartView):
         chart.legend().setVisible(False)
         self.setChart(chart)
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
+        # Свечение/пульсация кривой: scatter-маркеры подложек не получают
+        # (см. set_chart_style — для них меняется только размер маркера).
+        self._glow = GlowLayer(chart)
+        self._glow.track(self._series)
+        self._pulse = PulseController(self)
         # Минимум под заголовки осей — та же причина, что у LiveChart.
         self.setMinimumHeight(_AXIS_MIN_H)
 
@@ -378,6 +439,7 @@ class VfChart(QChartView):
         # Линия кривой + маркеры точек
         self._series.replace([QPointF(freq, mv) for mv, freq in self._points])
         self._scatter.replace([QPointF(freq, mv) for mv, freq in self._points])
+        self._glow.sync(self._series)  # подложка свечения копирует точки сама
         if ordered:
             freqs = [p[1] for p in ordered]
             mvs = [p[0] for p in ordered]
@@ -405,7 +467,31 @@ class VfChart(QChartView):
         self.chart().setTheme(
             QChart.ChartTheme.ChartThemeDark if dark else QChart.ChartTheme.ChartThemeLight
         )
-        self._series.setPen(QPen(_FREQ_COLOR, 2))
+        self._series.setPen(QPen(_FREQ_COLOR, self._style.line_width))
+
+    def set_chart_style(self, name: str) -> None:
+        """Накладывает пресет вида (см. gui.chartstyle) на кривую V/F.
+
+        «Классика» = тема приложения (форс-тогл сбрасывает overrides прошлого
+        пресета); остальные пресеты живут поверх фиксированной тёмной базы,
+        чтобы неон выглядел одинаково при любой теме окна. setTheme
+        перекрашивает pen'ы — линию возвращаем к #4a90d9, маркеры — к базовому
+        размеру (для glow — крупнее, точки читаются на тёмном фоне).
+        """
+        spec = chart_style(name)
+        self._style = spec
+        if spec.name == "classic":
+            force_theme(self.chart(), load_theme() == "dark")
+        else:
+            force_theme(self.chart(), True)  # тёмная база под неоновыми кистями
+            apply_chart_style(self.chart(), spec)
+        self._series.setPen(QPen(_FREQ_COLOR, spec.line_width))
+        scatter_pen = self._scatter.pen()  # цвет маркеров даёт тема — только ширина
+        scatter_pen.setWidthF(spec.line_width)
+        self._scatter.setPen(scatter_pen)
+        self._scatter.setMarkerSize(_VF_MARKER_SIZE * (1.6 if spec.glow else 1.0))
+        self._glow.set_active(spec.glow)
+        self._pulse.set_style(spec)
 
     # --- программная правка (тот же код, что и у мыши) ---
 
@@ -443,6 +529,7 @@ class VfChart(QChartView):
         self._points[index] = (mv, freq)
         self._series.replace(index, QPointF(freq, mv))
         self._scatter.replace(index, QPointF(freq, mv))
+        self._glow.sync(self._series)  # подложка свечения копирует точки сама
         self.curve_edited.emit(self._edited_pairs())
 
     # --- мышь ---

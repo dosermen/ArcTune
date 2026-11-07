@@ -20,6 +20,12 @@ from PySide6.QtWidgets import (
 
 from arctuner.device_profile import profile_status_note
 from arctuner.gui.charts import ThemedChart
+from arctuner.gui.chartstyle import (
+    CHART_STYLES,
+    chart_style_label,
+    load_chart_style,
+    save_chart_style,
+)
 from arctuner.gui.overlay import (
     LAYOUTS,
     OPACITIES,
@@ -166,8 +172,10 @@ class MainWindow(QMainWindow):
         self._wire_tabs()
         # Поток завершился (штатно или после shutdown_done) — повторить close.
         self._thread.finished.connect(self._on_thread_finished)
-        # Кривая V/F стартует в текущей теме (график мониторинга игнорирует — no-op).
+        # Графики стартуют в текущей теме, затем получают сохранённый стиль вида
+        # (мониторинг тему игнорирует — см. LiveChart.set_dark).
         self._apply_theme_to_charts(load_theme() == "dark")
+        self._apply_chart_style_to_charts()
 
         self._timer = QTimer(self)
         self._timer.setInterval(POLL_MS)
@@ -247,13 +255,14 @@ class MainWindow(QMainWindow):
     # --- меню «Вид»: масштаб интерфейса ---
 
     def _build_view_menu(self) -> None:
-        """Меню «Вид»: масштаб (100–200%), тема и оверлей.
+        """Меню «Вид»: масштаб (100–200%), тема, стиль графиков и оверлей.
 
         QT_SCALE_FACTOR читается при старте, поэтому переключение масштаба
-        сохраняется и применяется после перезапуска; тема и оверлей применяются
-        немедленно. Выбор макета/непрозрачности дублируется в вкладке «Оверлей»
-        и в контекстном меню самого оверлея — все три дороги сходятся на одних
-        настройках и синхронизируются сигналами OverlayWindow.
+        сохраняется и применяется после перезапуска; тема, стиль графиков и
+        оверлей применяются немедленно. Выбор макета/непрозрачности дублируется
+        в вкладке «Оверлей» и в контекстном меню самого оверлея — все три
+        дороги сходятся на одних настройках и синхронизируются сигналами
+        OverlayWindow.
         """
         menu = self.menuBar().addMenu(tr("Вид", "View"))
         group = QActionGroup(self)
@@ -291,6 +300,20 @@ class MainWindow(QMainWindow):
             theme_group.addAction(action)
             theme_menu.addAction(action)
             self._theme_actions[name] = action
+
+        menu.addSeparator()
+        style_menu = menu.addMenu(tr("Стиль графиков", "Chart style"))
+        style_group = QActionGroup(self)
+        style_group.setExclusive(True)
+        current_style = load_chart_style()
+        self._chart_style_actions: dict[str, QAction] = {}
+        for name in CHART_STYLES:
+            action = QAction(chart_style_label(name), self, checkable=True)
+            action.setChecked(name == current_style)
+            action.triggered.connect(lambda _=False, n=name: self._on_chart_style_selected(n))
+            style_group.addAction(action)
+            style_menu.addAction(action)
+            self._chart_style_actions[name] = action
 
         menu.addSeparator()
         lang_menu = menu.addMenu(tr("Язык", "Language"))
@@ -450,21 +473,44 @@ class MainWindow(QMainWindow):
     def _on_theme_selected(self, name: str) -> None:
         """Пересобирает палитру/QSS на ходу.
 
-        График мониторинга не трогаем (LiveChart.set_dark — намеренный no-op,
-        сохранённый вид по требованию владельца); кривая V/F подстраивается.
+        График мониторинга тему не меняет (LiveChart.set_dark — намеренный
+        no-op, его вид задаёт стиль графиков); кривая V/F подстраивается, а
+        overrides выбранного стиля переносятся поверх новой темы.
         """
         save_theme(name)
         app = QApplication.instance()
         if isinstance(app, QApplication):
             apply_theme(app, name == "dark")
         self._apply_theme_to_charts(name == "dark")
+        self._apply_chart_style_to_charts()
+
+    def _on_chart_style_selected(self, name: str) -> None:
+        """Сохраняет и немедленно применяет стиль графиков ко всем графикам."""
+        save_chart_style(name)
+        self._apply_chart_style_to_charts()
 
     def _apply_theme_to_charts(self, dark: bool) -> None:
-        """Синхронизирует темы всех графиков (мониторинг игнорирует — см. выше)."""
-        for view in self.findChildren(QChartView):
-            # Все реальные view — LiveChart/VfChart, оба реализуют set_dark;
-            # findChildren возвращает базовый QChartView без этого метода.
+        """Синхронизирует темы всех графиков (мониторинг игнорирует — см. выше).
+
+        Вызывать только вместе с ``_apply_chart_style_to_charts``: setTheme
+        сбрасывает overrides кистей/сетки выбранного стиля.
+        """
+        for view in self._chart_views():
+            # Все реальные view — LiveChart/VfChart/MiniChart, реализуют set_dark;
+            # findChildren возвращает базовый QChartView без этих методов.
             cast("ThemedChart", view).set_dark(dark)
+
+    def _apply_chart_style_to_charts(self) -> None:
+        """Накладывает сохранённый стиль вида на все графики (окно и оверлей)."""
+        name = load_chart_style()
+        for view in self._chart_views():
+            cast("ThemedChart", view).set_chart_style(name)
+
+    def _chart_views(self) -> list[QChartView]:
+        """Все графики приложения: вкладки главного окна + HUD-оверлей."""
+        views = self.findChildren(QChartView)
+        views.extend(self._overlay.findChildren(QChartView))
+        return list(dict.fromkeys(views))  # дедуп на случай будущего reparent оверлея
 
     # --- оверлей (HUD поверх окон) ---
 
