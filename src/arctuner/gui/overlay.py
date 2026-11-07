@@ -89,6 +89,7 @@ CELL_LABELS_EN: dict[str, str] = {
     "cpu_load": "CPU Load",
     "cpu_freq": "CPU Frequency",
     "cpu_temp": "CPU Temperature",
+    "media_load": "Media",
 }
 
 
@@ -128,6 +129,7 @@ _CELLS: tuple[tuple[str, str, str, str | None], ...] = (
     ("power", "Питание", "Вт", "power"),
     ("freq", "Ядро", "МГц", "freq"),
     ("load", "Загрузка", "%", "load"),
+    ("media_load", "Медиа", "%", "load"),
     ("vram", "Память", "Гбит/с", "freq"),
     ("vram_used", "Память занято", "ГиБ", "vram"),
     ("vram_temp", "Память, T", "°C", "temp"),
@@ -726,6 +728,9 @@ class OverlayWindow(QWidget):
         # Загрузка ядра: % приходит из LoadMeter (ΔactiveTime/Δtimestamp), у
         # него же база — до 2-го тика честное «—», а не ноль.
         self._cells["load"].set_value(snap.gpu_load_percent)
+        # «Медиа» — та же дельта по группе MEDIA (видео decode/processing);
+        # опциональная ячейка, вне пресетов — в пресетах её нет.
+        self._cells["media_load"].set_value(snap.media_load_percent)
         self._cells["vram"].set_value(snap.vram_eff_freq_mbps, digits=2)
         # Занятость памяти: значение — занято в ГиБ, а сколько это от
         # доступного объёма — в подсказке (на узкой ячейке нет места дроби).

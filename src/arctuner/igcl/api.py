@@ -250,6 +250,11 @@ class TelemetrySnapshot:
     vram_used_bytes: int | None = None
     vram_total_bytes: int | None = None
     vram_percent: float | None = None
+    # Загрузка группы MEDIA (%) — video decode/processing. Опциональная метрика
+    # (серия графика/ячейка оверлея, выключена по умолчанию); в стабильный
+    # CSV-формат (TELEMETRY_CSV_FIELDS) не входит. Заполняется LoadMeter,
+    # в api — всегда None.
+    media_load_percent: float | None = None
 
     def limit_summary(self) -> str:
         """Человекочитаемая строка причин ограничения."""

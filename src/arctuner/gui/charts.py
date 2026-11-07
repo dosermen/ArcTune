@@ -16,7 +16,14 @@ from PySide6.QtCharts import (
 from PySide6.QtCore import QPointF, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPen
 
-from arctuner.gui.theme import SERIES_FREQ, SERIES_LOAD, SERIES_POWER, SERIES_TEMP, SERIES_VRAM
+from arctuner.gui.theme import (
+    SERIES_FREQ,
+    SERIES_LOAD,
+    SERIES_MEDIA,
+    SERIES_POWER,
+    SERIES_TEMP,
+    SERIES_VRAM,
+)
 from arctuner.i18n import tr
 from arctuner.tuner import (
     VF_MAX_FREQ_MHZ,
@@ -44,6 +51,7 @@ _POWER_COLOR = QColor(SERIES_POWER)
 _FREQ_COLOR = QColor(SERIES_FREQ)
 _LOAD_COLOR = QColor(SERIES_LOAD)
 _VRAM_COLOR = QColor(SERIES_VRAM)
+_MEDIA_COLOR = QColor(SERIES_MEDIA)
 
 #: минимум высоты графика с осями-заголовками: ниже ~250 px QtCharts обрезает
 #: заголовок оси в «…» (место оси сжимается под подписи) — 280 с запасом.
@@ -57,16 +65,21 @@ class LiveChart(QChartView):
     памяти (%): шкалы 0…100, поэтому все делят одну ось. Правая ось — частота
     ядра (МГц), отдельная шкала, чтобы частота не «прилипала» к низу из-за
     разницы масштабов.
+
+    Опциональные серии (по умолчанию выключены, создаются лениво): «Медиа, %»
+    (группа IGCL MEDIA, свои колонки в _samples) и CPU-серии (отдельный буфер
+    _cpu_samples).
     """
 
     def __init__(self, window_s: int = 300, parent=None) -> None:
         super().__init__(parent)
         self._window_s = window_s
-        # (t, temp, power, freq, load, vram): load/vram — None, пока LoadMeter
-        # не накопил базу; такие точки просто не рисуются (см. _replace_opt).
-        self._samples: deque[tuple[float, float, float, float, float | None, float | None]] = deque(
-            maxlen=window_s * 2
-        )
+        # (t, temp, power, freq, load, vram, media): load/vram/media — None,
+        # пока LoadMeter не накопил базу; такие точки просто не рисуются
+        # (см. _replace).
+        self._samples: deque[
+            tuple[float, float, float, float, float | None, float | None, float | None]
+        ] = deque(maxlen=window_s * 2)
         self._cpu_samples: deque[tuple[float, float | None, float | None, float | None]] = deque(
             maxlen=window_s * 2
         )
@@ -79,6 +92,7 @@ class LiveChart(QChartView):
         self._cpu_load_series: QLineSeries | None = None
         self._cpu_freq_series: QLineSeries | None = None
         self._cpu_temp_series: QLineSeries | None = None
+        self._media_series: QLineSeries | None = None
 
         self._axis_x = QValueAxis()
         self._axis_x.setRange(0.0, float(window_s))
@@ -144,26 +158,29 @@ class LiveChart(QChartView):
         freq: float,
         load: float | None = None,
         vram: float | None = None,
+        media: float | None = None,
     ) -> None:
         """Добавляет снимок и перерисовывает.
 
         temp/power/freq — только полные значения (без None, иначе точки соврали
-        бы картинку). load/vram могут отсутствовать: база LoadMeter не накоплена
-        или источник недоступен — такие точки не рисуются, серия их честно
-        пропускает, а не мостит нулём.
+        бы картинку). load/vram/media могут отсутствовать: база LoadMeter не
+        накоплена или источник недоступен — такие точки не рисуются, серия их
+        честно пропускает, а не мостит нулём.
         """
-        self._samples.append((t, temp, power, freq, load, vram))
+        self._samples.append((t, temp, power, freq, load, vram, media))
         self._replace(self._temp_series, 1)
         self._replace(self._power_series, 2)
         self._replace(self._load_series, 4)
         self._replace(self._vram_series, 5)
         self._replace(self._freq_series, 3)
+        if self._media_series is not None:  # опциональная серия — лениво
+            self._replace(self._media_series, 6)
         # Прокрутка окна: показываем последние window_s секунд.
         self._axis_x.setMax(max(t, float(self._window_s)))
         self._axis_x.setMin(max(0.0, t - self._window_s))
         # Адаптивные потолки: стартовые шкалы (0…100 и 0…3300) расширяются,
         # если данные вышли за них — иначе точки молча обрезались бы по краю.
-        left = [temp, power, *(v for v in (load, vram) if v is not None)]
+        left = [temp, power, *(v for v in (load, vram, media) if v is not None)]
         self._raise_axis(self._axis_left, max(left), 10.0)
         self._raise_axis(self._axis_right, freq, 100.0)
 
@@ -207,6 +224,24 @@ class LiveChart(QChartView):
                 self._cpu_temp_series = series
         else:
             raise ValueError(f"неизвестная серия CPU: {key!r}")
+        if series is not None:
+            series.setVisible(visible)
+
+    def set_media_series_visible(self, visible: bool) -> None:
+        """Показывает/скрывает опциональную серию «Медиа, %» (группа IGCL MEDIA).
+
+        Серия создаётся лениво при первом включении и догружает уже
+        накопленную историю из _samples — выключенной по умолчанию линии нет
+        ни на графике, ни в легенде.
+        """
+        series = self._media_series
+        if visible and series is None:
+            series = self._make_series(tr("Медиа, %", "Media, %"), _MEDIA_COLOR)
+            self.chart().addSeries(series)
+            series.attachAxis(self._axis_x)
+            series.attachAxis(self._axis_left)
+            self._replace(series, 6)
+            self._media_series = series
         if series is not None:
             series.setVisible(visible)
 
@@ -261,6 +296,8 @@ class LiveChart(QChartView):
             self._freq_series,
         ):
             series.clear()
+        if self._media_series is not None:
+            self._media_series.clear()
         self.clear_cpu()
 
     def clear_cpu(self) -> None:

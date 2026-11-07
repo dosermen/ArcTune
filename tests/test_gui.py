@@ -297,6 +297,43 @@ def test_monitoring_cpu_series_are_optional_and_persisted(qapp, monkeypatch) -> 
     qapp.processEvents()
 
 
+def test_monitoring_media_series_is_optional_and_persisted(qapp, snapshot, monkeypatch) -> None:
+    """Чекбокс «Медиа, %» выключен по умолчанию и хранится в настройках.
+
+    Опциональная метрика (группа IGCL MEDIA): выключенной линии нет ни на
+    графике, ни в легенде; включение догружает историю из буфера.
+    """
+    from dataclasses import replace
+
+    values: dict[str, object] = {}
+
+    class Settings:
+        def value(self, key: str, default=None):
+            return values.get(key, default)
+
+        def setValue(self, key: str, value: object) -> None:  # noqa: N802
+            values[key] = value
+
+    monkeypatch.setattr("arctuner.gui.tabs.monitoring.QSettings", lambda *_a: Settings())
+    tab = MonitoringTab()
+    assert not tab._media_chart.isChecked()
+    assert tab._chart._media_series is None
+
+    tab._media_chart.setChecked(True)
+    assert tab._chart._media_series.isVisible()
+    assert values["monitoring/media_series"] is True
+
+    tab.on_telemetry(replace(snapshot, media_load_percent=4.2))
+    assert tab._chart._samples[-1][6] == 4.2  # колонка media в GPU-снимке
+    assert tab._chart._media_series.count() == 1
+
+    tab._media_chart.setChecked(False)
+    assert not tab._chart._media_series.isVisible()
+    assert values["monitoring/media_series"] is False
+    tab.deleteLater()
+    qapp.processEvents()
+
+
 def test_monitoring_breaks_line_on_long_pause(
     qapp, snapshot: TelemetrySnapshot, monkeypatch
 ) -> None:
@@ -1008,6 +1045,30 @@ def test_livechart_skips_missing_load_points(qapp) -> None:
     assert chart._load_series.count() == 0
     assert chart._vram_series.count() == 0
     assert chart._temp_series.count() == 0
+
+
+def test_livechart_media_series_is_optional(qapp) -> None:
+    """Серия «Медиа, %» выключена по умолчанию: лениво создаётся, историю догружает."""
+    chart = LiveChart(window_s=60)
+    chart.push(1.0, 55.0, 70.0, 2500.0, load=10.0, vram=30.0, media=2.0)
+    assert chart._media_series is None  # выключена — линии нет
+
+    chart.set_media_series_visible(True)
+    assert chart._media_series is not None
+    assert chart._media_series.isVisible()
+    assert chart._media_series.count() == 1  # догружена накопленная история
+
+    chart.push(2.0, 56.0, 71.0, 2510.0, media=None)
+    assert chart._media_series.count() == 1  # None-точка пропущена, а не мостится нулём
+
+    chart.push(3.0, 57.0, 72.0, 2520.0, media=5.0)
+    assert chart._media_series.count() == 2
+
+    chart.set_media_series_visible(False)
+    assert not chart._media_series.isVisible()
+
+    chart.clear()
+    assert chart._media_series.count() == 0
 
 
 _VF_STOCK = [(700, 400), (800, 1200), (900, 2000), (1100, 3000)]  # (мВ, МГц)

@@ -119,6 +119,11 @@ class LoadMeter:
     ``%util = ΔactiveTime / Δtimestamp`` (формула из igcl_api.h). Первый снимок —
     база, % нет — так же, как у PowerMeter нет Вт на первом тике.
 
+    **Медиа (%)**: та же формула по группе ``CTL_ENGINE_GROUP_MEDIA``
+    (video decode/processing) — опциональная метрика (см.
+    ``media_load_percent``), в CSV не пишется. У каждой группы свой счётчик
+    и своя база дельты.
+
     **Память**: ``ctlMemoryGetState`` → ``used = size − free``,
     ``% = 100 · used / size`` — без дельты, доступна сразу с первого тика.
 
@@ -153,29 +158,40 @@ class LoadMeter:
         # «3D engine»: 6.3 % против 6–7 %), а GT вёл себя как усреднение по всей
         # группе (≈ Σзанятого/9): в игре с одним занятым 3D-движком GT давал
         # ≤11 % вместо ~100 %.
+        # MEDIA (video decode/processing) — опциональная метрика «Медиа, %»
+        # для мониторинга видеонагрузки; ищем обе группы за один проход.
         self._engine: CtlEngineHandle | None = None
+        self._media: CtlEngineHandle | None = None
         if loader.has("ctlEnumEngineGroups") and loader.has("ctlEngineGetActivity"):
             for eng in api.enumerate_engine_groups(handle):
+                if self._engine is not None and self._media is not None:
+                    break  # обе группы найдены
                 try:
-                    if api.get_engine_properties(eng) == T.CtlEngineGroup.RENDER:
-                        self._engine = eng
-                        break
+                    group = api.get_engine_properties(eng)
                 except IgclError:
                     continue  # группа не отдала свойства — пропускаем
+                if group == T.CtlEngineGroup.RENDER and self._engine is None:
+                    self._engine = eng
+                elif group == T.CtlEngineGroup.MEDIA and self._media is None:
+                    self._media = eng
         # Первый модуль памяти (на B580 их один).
         self._mem: CtlMemHandle | None = None
         if loader.has("ctlEnumMemoryModules") and loader.has("ctlMemoryGetState"):
             mods = api.enumerate_memory_modules(handle)
             if mods:
                 self._mem = mods[0]
-        # База дельты для % загрузки (первый снимок).
+        # База дельты для % загрузки (первый снимок каждой группы).
         self._prev: tuple[int, int] | None = None
+        self._media_prev: tuple[int, int] | None = None
         if self._engine is not None:
             act = api.read_engine_activity(self._engine)
             self._prev = (act.active_time_us, act.timestamp_us)
+        if self._media is not None:
+            act = api.read_engine_activity(self._media)
+            self._media_prev = (act.active_time_us, act.timestamp_us)
 
     def enrich(self, snap: TelemetrySnapshot) -> TelemetrySnapshot:
-        """Возвращает копию снимка с заполненными load % и памятью.
+        """Возвращает копию снимка с заполненными load % (RENDER/MEDIA) и памятью.
 
         Args:
             snap: снимок от read_power_telemetry.
@@ -187,6 +203,10 @@ class LoadMeter:
         if self._engine is not None:
             act = self._api.read_engine_activity(self._engine)
             load = self._step(act.active_time_us, act.timestamp_us)
+        media: float | None = None
+        if self._media is not None:
+            act = self._api.read_engine_activity(self._media)
+            media = self._step_media(act.active_time_us, act.timestamp_us)
         used: int | None = None
         total: int | None = None
         pct: float | None = None
@@ -196,26 +216,44 @@ class LoadMeter:
         return replace(
             snap,
             gpu_load_percent=load,
+            media_load_percent=media,
             vram_used_bytes=used,
             vram_total_bytes=total,
             vram_percent=pct,
         )
 
     def _step(self, active_us: int, ts_us: int) -> float | None:
-        """Один шаг расчёта % загрузки: (%, новая база)."""
-        if self._prev is None:
-            self._prev = (active_us, ts_us)
-            return None
-        pa, pt = self._prev
+        """Один шаг расчёта % загрузки ядра (RENDER): (%, новая база)."""
+        value, self._prev = self._advance(self._prev, active_us, ts_us)
+        return value
+
+    def _step_media(self, active_us: int, ts_us: int) -> float | None:
+        """Тот же шаг для группы MEDIA (video decode/processing)."""
+        value, self._media_prev = self._advance(self._media_prev, active_us, ts_us)
+        return value
+
+    @classmethod
+    def _advance(
+        cls,
+        prev: tuple[int, int] | None,
+        active_us: int,
+        ts_us: int,
+    ) -> tuple[float | None, tuple[int, int]]:
+        """Общий шаг дельты двух снимков: (%, новая база).
+
+        База возвращается отдельно от %: у RENDER и MEDIA свои счётчики —
+        каждая группа держит свою пару снимков, математика одна.
+        """
+        if prev is None:
+            return None, (active_us, ts_us)
+        pa, pt = prev
         d_active = active_us - pa
         d_ts = ts_us - pt
         if d_ts <= 0 or d_active < 0:
-            self._prev = (active_us, ts_us)  # откат счётчика (рестарт драйвера)
-            return None
-        if d_ts < self._MIN_GAP_US:
-            return None  # базу не сдвигаем — интервал накопится
-        self._prev = (active_us, ts_us)
-        return max(0.0, min(100.0, 100.0 * d_active / d_ts))
+            return None, (active_us, ts_us)  # откат счётчика (рестарт драйвера)
+        if d_ts < cls._MIN_GAP_US:
+            return None, prev  # базу не сдвигаем — интервал накопится
+        return max(0.0, min(100.0, 100.0 * d_active / d_ts)), (active_us, ts_us)
 
 
 #: Колонки CSV телеметрии (стабильный порядок для анализа — не переставлять).

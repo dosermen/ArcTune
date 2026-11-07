@@ -29,6 +29,12 @@
 - **`arctune info --detailed`.** PCI vendor/device/subsystem IDs, ревизия,
   версия драйвера и версия прошивки IGCL; PCIe/ReBAR/ECC и firmware
   name/version остаются в обычном `info`.
+- **Метрика «Медиа, %» (группа IGCL MEDIA: video decode/processing).**
+  Опциональная серия на графике «Мониторинг» (чекбокс «Медиа, %», выбор
+  хранится в `monitoring/media_series`) и ячейка «Медиа (%)» в оверлее —
+  обе по умолчанию выключены: главная «Загрузка ядра» остаётся RENDER.
+  Растёт при воспроизведении/захвате/кодировании видео. В CSV-формат
+  (`TELEMETRY_CSV_FIELDS`) не входит.
 
 ### Исправлено
 

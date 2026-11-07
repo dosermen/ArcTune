@@ -148,6 +148,7 @@ def _bare_load_meter() -> LoadMeter:
     """
     meter = LoadMeter.__new__(LoadMeter)
     meter._prev = None
+    meter._media_prev = None
     return meter
 
 
@@ -251,6 +252,107 @@ def test_loadmeter_selects_render_group_not_gt() -> None:
     assert meter._engine is render_handle
 
 
+def test_loadmeter_collects_media_group_for_optional_metric() -> None:
+    """LoadMeter дополнительно находит группу MEDIA — база для «Медиа, %».
+
+    Метрика опциональна (выключена по умолчанию в GUI), но счётчик читается
+    всегда: у группы свой handle и своя база дельты, независимая от RENDER.
+    """
+    from types import SimpleNamespace
+
+    from arctuner.igcl import types as T
+
+    render_handle, media_handle = object(), object()
+
+    class _Loader:
+        @staticmethod
+        def has(name: str) -> bool:
+            return name in {"ctlEnumEngineGroups", "ctlEngineGetActivity"}
+
+    class _Api:
+        loader = _Loader()
+
+        @staticmethod
+        def enumerate_engine_groups(handle):
+            return [render_handle, media_handle]
+
+        @staticmethod
+        def get_engine_properties(engine):
+            return T.CtlEngineGroup.RENDER if engine is render_handle else T.CtlEngineGroup.MEDIA
+
+        @staticmethod
+        def read_engine_activity(engine):
+            return SimpleNamespace(active_time_us=0, timestamp_us=0)
+
+    meter = LoadMeter(_Api(), None, source="igcl")  # type: ignore[arg-type]
+    assert meter._engine is render_handle
+    assert meter._media is media_handle
+    assert meter._media_prev == (0, 0)  # база дельты медиа взята при создании
+
+
+def test_media_step_uses_own_baseline_and_formula() -> None:
+    """У MEDIA свой счётчик: база и формула независимы от шага RENDER."""
+    meter = _bare_load_meter()
+    assert meter._step_media(active_us=7000, ts_us=20_000) is None  # первый снимок — база
+    assert meter._media_prev == (7000, 20_000)
+
+    # Шаг ядра не трогает базу медиа (счётчики групп независимы).
+    meter._step(active_us=100, ts_us=200)
+    assert meter._media_prev == (7000, 20_000)
+
+    # 43_000 мкс активности за 100_000 мкс от базы медиа = 43 %.
+    assert meter._step_media(active_us=50_000, ts_us=120_000) == pytest.approx(43.0)
+
+
+def test_enrich_fills_render_and_media_load_percent() -> None:
+    """enrich заполняет обе метрики: RENDER — ядро, MEDIA — видео, у каждой своя база."""
+    from types import SimpleNamespace
+
+    from arctuner.igcl import types as T
+
+    render_handle, media_handle = object(), object()
+    reads: dict[object, list[tuple[int, int]]] = {
+        render_handle: [(0, 0), (50_000, 100_000)],  # база, затем 50 %
+        media_handle: [(0, 0), (10_000, 100_000)],  # база, затем 10 %
+    }
+
+    class _Loader:
+        @staticmethod
+        def has(name: str) -> bool:
+            return name in {"ctlEnumEngineGroups", "ctlEngineGetActivity"}
+
+    class _Api:
+        loader = _Loader()
+
+        @staticmethod
+        def enumerate_engine_groups(handle):
+            return [render_handle, media_handle]
+
+        @staticmethod
+        def get_engine_properties(engine):
+            return T.CtlEngineGroup.RENDER if engine is render_handle else T.CtlEngineGroup.MEDIA
+
+        @staticmethod
+        def read_engine_activity(engine):
+            active, ts = reads[engine].pop(0)
+            return SimpleNamespace(active_time_us=active, timestamp_us=ts)
+
+    meter = LoadMeter(_Api(), None, source="igcl")  # type: ignore[arg-type]
+    snap = _snap()
+    out = meter.enrich(snap)
+    assert out.gpu_load_percent == pytest.approx(50.0)
+    assert out.media_load_percent == pytest.approx(10.0)
+    assert snap.media_load_percent is None  # frozen dataclass: исходный снимок не тронут
+
+
+def test_media_load_percent_not_in_csv_fields() -> None:
+    """media_load_percent — GUI-метрика: стабильный CSV-формат не расширяем."""
+    from arctuner.telemetry import TELEMETRY_CSV_FIELDS, snapshot_csv_row
+
+    assert "media_load_percent" not in TELEMETRY_CSV_FIELDS
+    assert "media_load_percent" not in snapshot_csv_row(_snap())
+
+
 # --- MemoryState: used/percent из ctlMemoryGetState ---
 
 
@@ -282,6 +384,7 @@ def test_new_snapshot_load_fields_default_none() -> None:
     assert snap.vram_used_bytes is None
     assert snap.vram_total_bytes is None
     assert snap.vram_percent is None
+    assert snap.media_load_percent is None
 
 
 # --- CSV-экспорт телеметрии (общий для CLI --csv и GUI) ---

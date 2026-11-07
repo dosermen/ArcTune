@@ -27,6 +27,19 @@ from arctuner.igcl.api import TelemetrySnapshot
 GAP_MAX_S = 5.0
 
 
+def _as_bool(raw: object, default: bool = False) -> bool:
+    """QSettings-значение в bool; «false» из ini не должен читаться как True.
+
+    Та же семантика, что у overlay._as_bool: булевы настройки GUI читаются
+    из реестра Windows и ini (тесты), где тип после чтения не гарантирован.
+    """
+    if raw is None:
+        return default
+    if isinstance(raw, str):
+        return raw.strip().lower() in ("1", "true", "yes", "on")
+    return bool(raw)
+
+
 #: пояснения датчиков (tooltip при наведении, окно по клику на карточку):
 #: честно «что это» и «зачем следить», без угадывания.
 _NOTES: dict[str, str] = {
@@ -187,6 +200,22 @@ class MonitoringTab(QWidget):
         self._chart.set_cpu_series_visible("cpu_temp", self._cpu_temp_chart.isChecked())
         self._cpu_chart_series = selected_cpu_series & {"cpu_load", "cpu_freq", "cpu_temp"}
 
+        # «Медиа, %» — опциональная серия (группа IGCL MEDIA: video decode/
+        # processing), по умолчанию выключена; хранится отдельным ключом.
+        self._media_chart = QCheckBox(tr("Медиа, %", "Media, %"))
+        self._media_chart.setChecked(_as_bool(settings.value("monitoring/media_series")))
+        self._media_chart.setToolTip(
+            tr(
+                "Загрузка группы MEDIA из IGCL — video decode/processing: растёт при "
+                "воспроизведении, захвате или кодировании видео. Отдельная серия на "
+                "графике, по умолчанию выключена.",
+                "IGCL MEDIA group load — video decode/processing: rises during video "
+                "playback, capture, or encoding. A separate chart series, off by default.",
+            )
+        )
+        self._media_chart.toggled.connect(self._set_media_chart_series)
+        self._chart.set_media_series_visible(self._media_chart.isChecked())
+
         self._export_btn = QPushButton(tr("Экспорт CSV…", "Export CSV…"))
         self._export_btn.setToolTip(
             tr(
@@ -203,9 +232,9 @@ class MonitoringTab(QWidget):
             QLabel(
                 tr(
                     "График (слева °C / %, справа МГц, окно 5 мин; % — мощность, "
-                    "загрузка ядра, память):",
+                    "загрузка ядра, память, медиа):",
                     "Chart (left: °C / %, right: MHz, 5-minute window; %: power, "
-                    "GPU load, memory):",
+                    "GPU load, memory, media):",
                 )
             )
         )
@@ -213,6 +242,7 @@ class MonitoringTab(QWidget):
         chart_row.addWidget(self._cpu_load_chart)
         chart_row.addWidget(self._cpu_freq_chart)
         chart_row.addWidget(self._cpu_temp_chart)
+        chart_row.addWidget(self._media_chart)
         chart_row.addWidget(self._export_btn)
 
         hint = QLabel(
@@ -280,7 +310,7 @@ class MonitoringTab(QWidget):
         self._limits.setText(f"{tr('Ограничение', 'Limit')}: {summary}")
 
         # На график кладём только полные снимки — частичные точки соврали бы картинку.
-        # load/vram (% из LoadMeter) могут быть None — LiveChart их пропускает.
+        # load/vram/media (% из LoadMeter) могут быть None — LiveChart их пропускает.
         gpu_temp = snap.gpu_temp_c
         gpu_power = snap.gpu_power_percent
         gpu_freq = snap.gpu_freq_mhz
@@ -290,7 +320,13 @@ class MonitoringTab(QWidget):
                 # Долгий перерыв (сон/занятый воркер): линия через паузу — ложь.
                 self._chart.clear()
             self._chart.push(
-                t, gpu_temp, gpu_power, gpu_freq, snap.gpu_load_percent, snap.vram_percent
+                t,
+                gpu_temp,
+                gpu_power,
+                gpu_freq,
+                snap.gpu_load_percent,
+                snap.vram_percent,
+                snap.media_load_percent,
             )
             self._t_last = t
 
@@ -313,6 +349,11 @@ class MonitoringTab(QWidget):
         QSettings("ArcTune", "ArcTune").setValue(
             "monitoring/cpu_series", sorted(self._cpu_chart_series)
         )
+
+    def _set_media_chart_series(self, visible: bool) -> None:
+        """Переключает серию «Медиа, %» и сохраняет выбор в настройки."""
+        self._chart.set_media_series_visible(visible)
+        QSettings("ArcTune", "ArcTune").setValue("monitoring/media_series", bool(visible))
 
     def _on_export(self) -> None:
         path, _ = QFileDialog.getSaveFileName(

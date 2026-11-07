@@ -26,6 +26,7 @@ SERIES_POWER: Final = "#e0a13a"  # мощность
 SERIES_FREQ: Final = "#4a90d9"  # частота
 SERIES_LOAD: Final = "#57c266"  # загрузка ядра (%)
 SERIES_VRAM: Final = "#a06cd5"  # занятость памяти (%)
+SERIES_MEDIA: Final = "#00bcd4"  # загрузка группы MEDIA (видео), %
 
 #: kind → цвет маркера карточки (тот же цвет, что у линии графика)
 ACCENT_BY_KIND: Final[dict[str, str]] = {
@@ -350,6 +351,7 @@ __all__ = [
     "DEFAULT_THEME",
     "SERIES_FREQ",
     "SERIES_LOAD",
+    "SERIES_MEDIA",
     "SERIES_POWER",
     "SERIES_TEMP",
     "SERIES_VRAM",

@@ -286,6 +286,22 @@ def test_overlay_shows_load_and_vram_usage(settings, qapp, snapshot) -> None:
     win.deleteLater()
 
 
+def test_overlay_media_cell_is_optional(settings, qapp, snapshot) -> None:
+    """Ячейка «Медиа» есть в списке метрик, но вне пресетов; данные — из LoadMeter."""
+    win = OverlayWindow()
+    win.show()
+    # По умолчанию (пресет полосы) ячейки нет — опциональная метрика выключена.
+    assert "media_load" not in win.visible_cells()
+
+    win.set_visible_cells(("load", "media_load"))
+    win.on_telemetry(snapshot)  # база LoadMeter не накоплена — честное «—», не ноль
+    assert win._cells["media_load"].text() == "—"
+
+    win.on_telemetry(replace(snapshot, media_load_percent=3.7))
+    assert win._cells["media_load"].text() == "4 %"  # в HUD дробь не нужна
+    win.deleteLater()
+
+
 def test_overlay_detailed_limits_highlight(settings, qapp, snapshot) -> None:
     """Плашка ограничений красится в предупреждение только при активном лимите."""
     win = OverlayWindow()
