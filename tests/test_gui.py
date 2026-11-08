@@ -26,7 +26,7 @@ from PySide6.QtCore import QSettings, Qt  # noqa: E402
 from PySide6.QtWidgets import QGraphicsTextItem  # noqa: E402
 
 from arctuner import i18n  # noqa: E402
-from arctuner.cpu import CpuSnapshot  # noqa: E402
+from arctuner.cpu import CoreTempMetrics, CpuSnapshot  # noqa: E402
 from arctuner.gui import overlay as overlay_module  # noqa: E402
 from arctuner.gui.charts import LiveChart, VfChart  # noqa: E402
 from arctuner.gui.context import FanInfo  # noqa: E402
@@ -470,19 +470,20 @@ def test_worker_polls_cpu_without_an_open_gpu_session(qapp) -> None:
 
     worker = GpuWorker()
     worker._ctx = SimpleNamespace(is_open=False)
-    worker._cpu_sampler = SimpleNamespace(sample=lambda: CpuSnapshot(25.0, (25.0,), 2200.0))
+    worker._cpu_sampler = SimpleNamespace(sample=lambda: CpuSnapshot(25.0, (25.0,), None))
     # изоляция от Core Temp: на машине с запущенным монитором реальный ридер
-    # добавил бы температуру в снимок и тест зависел бы от окружения
-    worker._core_temp_reader = SimpleNamespace(read_temperature=lambda: None)
+    # добавил бы температуру/частоту в снимок и тест зависел бы от окружения
+    worker._core_temp_reader = SimpleNamespace(read_metrics=lambda: CoreTempMetrics(None, 2200.0))
     samples: list[CpuSnapshot] = []
     worker.cpu_ready.connect(samples.append)
 
     worker.poll_telemetry()
-    assert samples == [CpuSnapshot(25.0, (25.0,), 2200.0)]
+    # частота — из Core Temp (psutil её больше не читает)
+    assert samples == [CpuSnapshot(25.0, (25.0,), 2200.0, None)]
 
 
 def test_worker_cpu_temperature_failure_does_not_hide_other_metrics(qapp) -> None:
-    """Сбой Core Temp оставляет доступные загрузку/частоту CPU на месте."""
+    """Сбой Core Temp оставляет доступную загрузку CPU (частота/температура — с ним)."""
     from types import SimpleNamespace
 
     from arctuner.cpu import CpuReadError
@@ -492,8 +493,8 @@ def test_worker_cpu_temperature_failure_does_not_hide_other_metrics(qapp) -> Non
         raise CpuReadError("Core Temp timeout")
 
     worker = GpuWorker()
-    worker._cpu_sampler = SimpleNamespace(sample=lambda: CpuSnapshot(25.0, (25.0,), 2200.0))
-    worker._core_temp_reader = SimpleNamespace(read_temperature=fail)
+    worker._cpu_sampler = SimpleNamespace(sample=lambda: CpuSnapshot(25.0, (25.0,), None))
+    worker._core_temp_reader = SimpleNamespace(read_metrics=fail)
     samples: list[CpuSnapshot] = []
     errors: list[str] = []
     worker.cpu_ready.connect(samples.append)
@@ -501,15 +502,15 @@ def test_worker_cpu_temperature_failure_does_not_hide_other_metrics(qapp) -> Non
 
     worker._poll_cpu()
 
-    assert samples == [CpuSnapshot(25.0, (25.0,), 2200.0, None)]
+    assert samples == [CpuSnapshot(25.0, (25.0,), None, None)]
     assert errors == ["Core Temp timeout"]
 
 
 def test_worker_cpu_temperature_is_independent_of_psutil_failure(qapp) -> None:
-    """Температура Core Temp остаётся доступной при сбое psutil."""
+    """Температура и частота Core Temp остаются доступными при сбое psutil."""
     from types import SimpleNamespace
 
-    from arctuner.cpu import CpuReadError
+    from arctuner.cpu import CoreTempMetrics, CpuReadError
     from arctuner.gui.worker import GpuWorker
 
     def fail() -> None:
@@ -517,7 +518,7 @@ def test_worker_cpu_temperature_is_independent_of_psutil_failure(qapp) -> None:
 
     worker = GpuWorker()
     worker._cpu_sampler = SimpleNamespace(sample=fail)
-    worker._core_temp_reader = SimpleNamespace(read_temperature=lambda: 72.0)
+    worker._core_temp_reader = SimpleNamespace(read_metrics=lambda: CoreTempMetrics(72.0, 4489.0))
     samples: list[CpuSnapshot] = []
     errors: list[str] = []
     worker.cpu_ready.connect(samples.append)
@@ -525,7 +526,7 @@ def test_worker_cpu_temperature_is_independent_of_psutil_failure(qapp) -> None:
 
     worker._poll_cpu()
 
-    assert samples == [CpuSnapshot(None, (), None, 72.0)]
+    assert samples == [CpuSnapshot(None, (), 4489.0, 72.0)]
     assert errors == ["psutil unavailable"]
 
 
@@ -2011,7 +2012,7 @@ def _wd_worker(monkeypatch, tmp_path, ctx_extra: dict | None = None) -> object:
     ctx.update(ctx_extra or {})
     worker = GpuWorker()
     worker._ctx = SimpleNamespace(**ctx)
-    worker._core_temp_reader = SimpleNamespace(read_temperature=lambda: None)
+    worker._core_temp_reader = SimpleNamespace(read_metrics=lambda: CoreTempMetrics(None, None))
     worker._watchdog = Watchdog(device="B580")
     worker._wd_state = state  # тест двигает снимки через state["snap"]
     return worker

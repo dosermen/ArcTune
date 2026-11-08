@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
 
 pytest.importorskip("psutil", reason="CPU-телеметрия требует GUI-extra")
@@ -15,18 +13,31 @@ def test_cpu_sampler_waits_for_second_load_sample(monkeypatch: pytest.MonkeyPatc
     """Первый вызов только формирует базу, чтобы не показывать ложные 0 %."""
     loads = iter(([0.0, 0.0], [25.0, 75.0]))
     monkeypatch.setattr(cpu.psutil, "cpu_percent", lambda *, percpu: next(loads))
-    monkeypatch.setattr(cpu.psutil, "cpu_freq", lambda: SimpleNamespace(current=2400.0))
     sampler = cpu.CpuSampler()
 
     first = sampler.sample()
     assert first.usage_percent is None
     assert first.per_core_usage_percent == ()
-    assert first.frequency_mhz == 2400.0
 
     second = sampler.sample()
     assert second.usage_percent == 50.0
     assert second.per_core_usage_percent == (25.0, 75.0)
-    assert second.frequency_mhz == 2400.0
+
+
+def test_cpu_sampler_does_not_read_psutil_frequency(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Частота из psutil не читается: на части машин Windows она константа (врёт)."""
+    loads = iter(([0.0], [50.0]))
+
+    def fail_freq() -> None:
+        raise AssertionError("psutil.cpu_freq не должен вызываться")
+
+    monkeypatch.setattr(cpu.psutil, "cpu_percent", lambda *, percpu: next(loads))
+    monkeypatch.setattr(cpu.psutil, "cpu_freq", fail_freq, raising=False)
+    sampler = cpu.CpuSampler()
+
+    sampler.sample()
+    second = sampler.sample()
+    assert second.frequency_mhz is None  # частоту даёт только Core Temp (worker)
 
 
 def test_cpu_sampler_reports_source_errors(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -41,7 +52,6 @@ def test_cpu_sampler_reports_source_errors(monkeypatch: pytest.MonkeyPatch) -> N
 def test_cpu_sampler_ignores_invalid_per_core_values(monkeypatch: pytest.MonkeyPatch) -> None:
     samples = iter(([1.0], [10.0, -1.0, 110.0, 30.0]))
     monkeypatch.setattr(cpu.psutil, "cpu_percent", lambda *, percpu: next(samples))
-    monkeypatch.setattr(cpu.psutil, "cpu_freq", lambda: None)
     sampler = cpu.CpuSampler()
 
     sampler.sample()
@@ -68,14 +78,15 @@ def test_core_temp_temperature_conversion_and_multi_cpu_delta_mode() -> None:
     data.fTemp[1] = 79.0
     data.fTemp[2] = 84.0
     data.fTemp[3] = 90.0
-    assert cpu.CoreTempReader._temperature_from_data(data) == 90.0
+    data.fCPUSpeed = 4489.0
+    assert cpu.CoreTempReader._metrics_from_data(data) == cpu.CoreTempMetrics(90.0, 4489.0)
 
     data.ucFahrenheit = 1
     data.fTemp[0] = 176.0
     data.fTemp[1] = 203.0
     data.fTemp[2] = 212.0
     data.fTemp[3] = 230.0
-    assert cpu.CoreTempReader._temperature_from_data(data) == pytest.approx(110.0)
+    assert cpu.CoreTempReader._metrics_from_data(data).temperature_c == pytest.approx(110.0)
 
     data.ucFahrenheit = 0
     data.ucDeltaToTjMax = 1
@@ -85,32 +96,52 @@ def test_core_temp_temperature_conversion_and_multi_cpu_delta_mode() -> None:
     data.fTemp[1] = 90.0
     data.fTemp[2] = 30.0
     data.fTemp[3] = 35.0
-    assert cpu.CoreTempReader._temperature_from_data(data) == 75.0
+    assert cpu.CoreTempReader._metrics_from_data(data).temperature_c == 75.0
 
     data.uiCPUCnt = 1
     data.uiCoreCnt = 1
     data.ucFahrenheit = 1
     data.uiTjMax[0] = 212
     data.fTemp[0] = 32.0
-    assert cpu.CoreTempReader._temperature_from_data(data) == pytest.approx(82.2222, rel=1e-4)
+    assert cpu.CoreTempReader._metrics_from_data(data).temperature_c == pytest.approx(
+        82.2222, rel=1e-4
+    )
+
+
+def test_core_temp_frequency_validation() -> None:
+    """fCPUSpeed проходит валидацию: 0 и не-число → частоты нет, температура остаётся."""
+    data = cpu._CoreTempSharedDataEx()
+    data.uiStructVersion = 2
+    data.uiCoreCnt = 1
+    data.uiCPUCnt = 1
+    data.fTemp[0] = 55.0
+
+    data.fCPUSpeed = 4089.0
+    assert cpu.CoreTempReader._metrics_from_data(data).frequency_mhz == 4089.0
+
+    data.fCPUSpeed = 0.0  # Core Temp ещё не заполнил поле
+    assert cpu.CoreTempReader._metrics_from_data(data) == cpu.CoreTempMetrics(55.0, None)
+
+    data.fCPUSpeed = float("nan")
+    assert cpu.CoreTempReader._metrics_from_data(data).frequency_mhz is None
 
 
 def test_core_temp_rejects_bad_shared_data() -> None:
     data = cpu._CoreTempSharedDataEx()
     data.uiStructVersion = 1
     with pytest.raises(cpu.CpuReadError, match="версия"):
-        cpu.CoreTempReader._temperature_from_data(data)
+        cpu.CoreTempReader._metrics_from_data(data)
 
     data.uiStructVersion = 2
     data.uiCoreCnt = 257
     data.uiCPUCnt = 1
     with pytest.raises(cpu.CpuReadError, match="счётчики"):
-        cpu.CoreTempReader._temperature_from_data(data)
+        cpu.CoreTempReader._metrics_from_data(data)
 
     data.uiCoreCnt = 17
     data.uiCPUCnt = 16
     with pytest.raises(cpu.CpuReadError, match="логических ядер"):
-        cpu.CoreTempReader._temperature_from_data(data)
+        cpu.CoreTempReader._metrics_from_data(data)
 
 
 def test_core_temp_reader_copies_from_read_only_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -119,6 +150,7 @@ def test_core_temp_reader_copies_from_read_only_mapping(monkeypatch: pytest.Monk
     data.uiCoreCnt = 1
     data.uiCPUCnt = 1
     data.fTemp[0] = 72.5
+    data.fCPUSpeed = 4489.0
     closed: list[object] = []
 
     class FakeFunction:
@@ -144,5 +176,7 @@ def test_core_temp_reader_copies_from_read_only_mapping(monkeypatch: pytest.Monk
     monkeypatch.setattr(cpu.ctypes, "get_last_error", lambda: 2, raising=False)
     monkeypatch.setattr(reader, "_kernel32", lambda: FakeApi())
 
+    # один проход отдаёт обе метрики; read_temperature — обёртка над ним
+    assert reader.read_metrics() == cpu.CoreTempMetrics(72.5, 4489.0)
     assert reader.read_temperature() == 72.5
-    assert closed == [20, 10]
+    assert closed == [20, 10, 20, 10]

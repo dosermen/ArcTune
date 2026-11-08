@@ -1,4 +1,4 @@
-"""Read-only телеметрия процессора через psutil."""
+"""Read-only телеметрия процессора: загрузка через psutil, частота/температура Core Temp."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import psutil
 
 @dataclass(frozen=True)
 class CpuSnapshot:
-    """Снимок загрузки и частоты CPU; температура зависит от внешнего источника."""
+    """Снимок CPU: загрузка из psutil, частота и температура — из Core Temp (None без него)."""
 
     usage_percent: float | None
     per_core_usage_percent: tuple[float, ...]
@@ -20,12 +20,24 @@ class CpuSnapshot:
     temperature_c: float | None = None
 
 
+@dataclass(frozen=True)
+class CoreTempMetrics:
+    """Метрики Core Temp из одного прохода по shared memory (None — источника нет)."""
+
+    temperature_c: float | None
+    frequency_mhz: float | None
+
+
 class CpuReadError(RuntimeError):
     """Ошибка получения доступных метрик CPU."""
 
 
 class CpuSampler:
-    """Сэмплирует общую/поточную загрузку и частоту CPU без записи настроек."""
+    """Сэмплирует общую/поточную загрузку CPU без записи настроек.
+
+    Частота из ``psutil.cpu_freq()`` не читается: на части машин Windows
+    отдаёт константу (не обновляет ``CurrentMHz``) — её даёт только Core Temp.
+    """
 
     def __init__(self) -> None:
         self._primed = False
@@ -34,7 +46,6 @@ class CpuSampler:
         """Возвращает снимок; загрузка доступна начиная со второго вызова."""
         try:
             per_core = tuple(float(value) for value in psutil.cpu_percent(percpu=True))
-            frequency = psutil.cpu_freq()
         except (psutil.Error, OSError, RuntimeError) as exc:
             raise CpuReadError(f"не удалось прочитать CPU-телеметрию: {exc}") from exc
 
@@ -49,10 +60,7 @@ class CpuSampler:
             per_core = valid
             usage = sum(valid) / len(valid) if valid else None
 
-        frequency_mhz = None
-        if frequency is not None and math.isfinite(frequency.current) and frequency.current > 0:
-            frequency_mhz = float(frequency.current)
-        return CpuSnapshot(usage, per_core, frequency_mhz)
+        return CpuSnapshot(usage, per_core, None)
 
 
 class _CoreTempSharedDataEx(ctypes.Structure):
@@ -80,7 +88,7 @@ class _CoreTempSharedDataEx(ctypes.Structure):
 
 
 class CoreTempReader:
-    """Читает температуру ядер из read-only shared memory Core Temp."""
+    """Читает температуру ядер и частоту CPU из read-only shared memory Core Temp."""
 
     _MAPPING_NAMES = ("Global\\CoreTempMappingObjectEx", "CoreTempMappingObjectEx")
     _MUTEX_NAME = "CoreTempMutexObject"
@@ -92,8 +100,16 @@ class CoreTempReader:
 
     def read_temperature(self) -> float | None:
         """Возвращает максимальную температуру ядер в °C или None, если Core Temp не запущен."""
+        return self.read_metrics().temperature_c
+
+    def read_metrics(self) -> CoreTempMetrics:
+        """Один проход по shared memory: (температура ядер, частота CPU) или Nones.
+
+        Обе метрики читаются из одного отображения — второй заход за мьютексом
+        не нужен. Если Core Temp не запущен, возвращает ``(None, None)``.
+        """
         if os.name != "nt":
-            return None
+            return CoreTempMetrics(None, None)
 
         kernel32 = self._kernel32()
         kernel32.CreateMutexW.argtypes = (ctypes.c_void_p, ctypes.c_int, ctypes.c_wchar_p)
@@ -160,10 +176,10 @@ class CoreTempReader:
                 if not view:
                     raise self._windows_error("не удалось отобразить shared memory Core Temp")
                 data = ctypes.cast(view, ctypes.POINTER(_CoreTempSharedDataEx)).contents
-                return self._temperature_from_data(data)
+                return self._metrics_from_data(data)
             if global_access_denied:
                 raise CpuReadError("доступ к глобальной shared memory Core Temp запрещён")
-            return None
+            return CoreTempMetrics(None, None)
         finally:
             if view:
                 kernel32.UnmapViewOfFile(view)
@@ -184,7 +200,8 @@ class CoreTempReader:
         return CpuReadError(f"{context}: {detail}")
 
     @staticmethod
-    def _temperature_from_data(data: _CoreTempSharedDataEx) -> float | None:
+    def _metrics_from_data(data: _CoreTempSharedDataEx) -> CoreTempMetrics:
+        """Валидирует shared memory и собирает (температуру, частоту) из одного копирования."""
         if data.uiStructVersion != 2:
             raise CpuReadError(
                 f"неподдерживаемая версия shared memory Core Temp: {data.uiStructVersion}"
@@ -211,7 +228,17 @@ class CoreTempReader:
                 value = (value - 32.0) * 5.0 / 9.0
             if 0.0 <= value <= 150.0:
                 temperatures.append(value)
-        return max(temperatures) if temperatures else None
+
+        # fCPUSpeed — фактическая частота (базовая × множитель), МГц; 0/мусор → нет данных
+        speed = float(data.fCPUSpeed)
+        frequency = speed if math.isfinite(speed) and speed > 0.0 else None
+        return CoreTempMetrics(max(temperatures) if temperatures else None, frequency)
 
 
-__all__ = ["CoreTempReader", "CpuReadError", "CpuSampler", "CpuSnapshot"]
+__all__ = [
+    "CoreTempMetrics",
+    "CoreTempReader",
+    "CpuReadError",
+    "CpuSampler",
+    "CpuSnapshot",
+]

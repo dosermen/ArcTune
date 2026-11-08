@@ -17,7 +17,13 @@ from typing import TYPE_CHECKING, ClassVar
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 
 from arctuner.autotune.watchdog import Watchdog
-from arctuner.cpu import CoreTempReader, CpuReadError, CpuSampler, CpuSnapshot
+from arctuner.cpu import (
+    CoreTempMetrics,
+    CoreTempReader,
+    CpuReadError,
+    CpuSampler,
+    CpuSnapshot,
+)
 from arctuner.gui.context import DeviceReport, GpuContext
 from arctuner.igcl.api import IgclError
 from arctuner.replay import IncidentReplay
@@ -161,21 +167,21 @@ class GpuWorker(QObject):
         else:
             self._cpu_error = None
         try:
-            temperature = self._core_temp_reader.read_temperature()
+            metrics = self._core_temp_reader.read_metrics()
         except CpuReadError as exc:
             message = str(exc)
             if message != self._core_temp_error:
                 self.error.emit(message)
             self._core_temp_error = message
-            temperature = None
+            metrics = CoreTempMetrics(None, None)
         else:
             self._core_temp_error = None
         self.cpu_ready.emit(
             CpuSnapshot(
                 snapshot.usage_percent,
                 snapshot.per_core_usage_percent,
-                snapshot.frequency_mhz,
-                temperature,
+                metrics.frequency_mhz,
+                metrics.temperature_c,
             )
         )
 
