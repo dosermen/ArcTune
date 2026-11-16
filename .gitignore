@@ -54,3 +54,8 @@ Thumbs.db
 .coverage
 htmlcov/
 coverage.xml
+
+# Локальная память агента (XMemo-шаблон) — утилита для ИИ-ассистентов,
+# не часть кодовой базы ArcTune; данные и CLI живут только локально.
+/mem.py
+/memory/
