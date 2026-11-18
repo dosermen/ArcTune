@@ -309,10 +309,12 @@ class TestWatchdog:
         assert Watchdog().check(_snap(temp=84.9)) is None
 
     def test_frozen_telemetry(self) -> None:
-        """Активность была, но стоит; энергия не растёт → сбой драйвера."""
+        """GPU недавно работал, потом оба счётчика встали → сбой драйвера."""
         w = Watchdog()
-        assert w.check(_snap(activity=50, energy=1000.0)) is None  # база
-        evt = w.check(_snap(activity=50, energy=1000.0))
+        # ≥3 тиков роста activity за окно — недавняя нагрузка зафиксирована
+        for act in (40, 50, 60, 70):
+            assert w.check(_snap(activity=act, energy=1000.0 + act)) is None
+        evt = w.check(_snap(activity=70, energy=1070.0))  # встал, энергия плоская
         assert evt is not None and evt.type == "TELEMETRY_FROZEN"
 
     def test_frozen_not_triggered_when_activity_grows(self) -> None:
@@ -326,6 +328,25 @@ class TestWatchdog:
         w = Watchdog()
         w.check(_snap(activity=0, energy=500.0))
         assert w.check(_snap(activity=0, energy=500.0)) is None
+
+    def test_frozen_not_triggered_on_idle_without_recent_load(self, monkeypatch) -> None:
+        """Простой GPU без недавней нагрузки — не инцидент (источник спама).
+
+        На живой машине activity_counter не возвращается в 0 (стоит на
+        последнем значении), а на погашенном экране оба счётчика стоят —
+        без фильтра недавней нагрузки это давало ложные TELEMETRY_FROZEN,
+        а blip счётчика (один тик роста) сбрасывал дедуп и плодил записи.
+        """
+        w = Watchdog()
+        w.check(_snap(activity=100, energy=1000.0))  # база
+        w.check(_snap(activity=101, energy=1005.0))  # один blip: ростов за окно 1 < 3
+        assert w.check(_snap(activity=101, energy=1005.0)) is None  # стоит, энергия плоская
+
+        # Нагрузка была, но устарела (окно 15 с истекло) — GPU давно не работал
+        for act in (110, 120, 130):
+            w.check(_snap(activity=act, energy=1000.0 + act))
+        monkeypatch.setattr(wd_mod.time, "monotonic", lambda: 1e9)
+        assert w.check(_snap(activity=130, energy=1130.0)) is None
 
     def test_tdr_detected_after_start(self, monkeypatch) -> None:
         """Event 4101 ПОСЛЕ запуска watchdog → событие (провайдер Display)."""

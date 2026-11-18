@@ -17,6 +17,11 @@
 воркера — каждое событие пишется в журнал, авто-откат OC включается только
 явной опцией (см. arctuner.gui.safety).
 
+Заморозка отфильтровывает простой GPU: на живой машине activity_counter не
+возвращается в 0 (стоит на последнем значении), а на погашенном экране
+оба счётчика стоят — поэтому инцидент фиксируется только при недавней
+нагрузке (см. FROZEN_GROWTH_*), иначе журнал забивался ложными повторами.
+
 При обнаружении проблемы возвращает WatchdogEvent, а не ошибку:
 решение (откат, лог, уведомление) — за движком.
 """
@@ -25,6 +30,7 @@ from __future__ import annotations
 
 import subprocess
 import time
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
 from typing import ClassVar
@@ -51,6 +57,8 @@ class Watchdog:
     TDR_EVENT_ID: ClassVar[int] = 4101
     TDR_PROVIDER: ClassVar[str] = "Display"  # источник 4101 в журнале System
     TDR_CHECK_INTERVAL: ClassVar[float] = 10.0  # с; PowerShell на каждом шаге дорог
+    FROZEN_GROWTH_WINDOW_S: ClassVar[float] = 15.0  # с; окно «недавней нагрузки»
+    FROZEN_GROWTH_MIN: ClassVar[int] = 3  # тиков роста activity в окне минимум
 
     def __init__(self, device: str = "") -> None:
         self._device = device
@@ -58,6 +66,7 @@ class Watchdog:
         self._last_snap: TelemetrySnapshot | None = None
         self._tdr_found = False  # однажды найденный TDR не ищется повторно
         self._tdr_last_check: float | None = None  # кэш негатива: не чаще интервала
+        self._growth_times: deque[float] = deque()  # моменты роста activity (monotonic)
 
     def check(self, snapshot: TelemetrySnapshot) -> WatchdogEvent | None:
         """Проверяет снимок. Возвращает первое событие или None.
@@ -68,6 +77,7 @@ class Watchdog:
         Returns:
             WatchdogEvent при проблеме; None — всё в норме или данных мало.
         """
+        self._track_growth(snapshot)
         evt = self._temperature(snapshot)
         if evt is None:
             evt = self._frozen(snapshot)
@@ -75,6 +85,24 @@ class Watchdog:
             evt = self._tdr()
         self._last_snap = snapshot
         return evt
+
+    def _track_growth(self, snapshot: TelemetrySnapshot) -> None:
+        """Ведёт окно тиков роста activity — «GPU недавно работал».
+
+        Простой/погашенный экран: activity стоит на последнем значении
+        (>0, не 0), редкие blips не считаются нагрузкой — без окна
+        _frozen принимал бы простой за зависший драйвер.
+        """
+        now = time.monotonic()
+        while self._growth_times and now - self._growth_times[0] > self.FROZEN_GROWTH_WINDOW_S:
+            self._growth_times.popleft()
+        prev = self._last_snap
+        if prev is None:
+            return
+        cur = snapshot.activity_counter
+        if prev.activity_counter is None or cur is None or cur <= prev.activity_counter:
+            return
+        self._growth_times.append(now)
 
     # --- проверки ---
 
@@ -90,12 +118,17 @@ class Watchdog:
         return None
 
     def _frozen(self, snapshot: TelemetrySnapshot) -> WatchdogEvent | None:
-        """«Заморозка» телеметрии: активность была, энергия не растёт.
+        """«Заморозка» телеметрия: недавняя активность есть, счётчики встали.
 
         activity_counter стоит между замерами при ненулевой прошлой
         активности, а счётчик энергии не изменился — драйвер, вероятно,
-        завис (TDR/перезагрузка улова счётчиков). Простой GPU даёт ту же
-        картину честно (activity==0), поэтому проверяется prev>0.
+        завис (TDR/перезагрузка улова счётчиков).
+
+        Простой GPU даёт ту же картину счётчиков (оба стоят), при этом
+        activity_counter не возвращается в 0 — стоит на последнем значении.
+        Поэтому ветка «стоит» требует недавней нагрузки: минимум
+        FROZEN_GROWTH_MIN тиков роста activity за FROZEN_GROWTH_WINDOW_S
+        (см. _track_growth); редкие blips и погашенный экран — не инцидент.
         """
         prev = self._last_snap
         if prev is None:
@@ -117,6 +150,8 @@ class Watchdog:
                 detail=f"activity_counter сброшен ({prev_act} → {cur_act}) — рестарт драйвера?",
             )
         if prev_act > 0 and abs(cur_enj - prev_enj) < 1e-6:
+            if len(self._growth_times) < self.FROZEN_GROWTH_MIN:
+                return None  # простой/RC6: GPU давно не работал — не наш инцидент
             return WatchdogEvent(
                 type="TELEMETRY_FROZEN",
                 detail="activity_counter стоит, счётчик энергии не растёт — возможен сбой драйвера",

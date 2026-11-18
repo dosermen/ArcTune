@@ -2022,8 +2022,9 @@ def test_worker_watchdog_constant_mode_logs_and_dedups(qapp, tmp_path, monkeypat
     """Постоянный watchdog: событие → запись в журнал + сигнал, один раз на инцидент.
 
     Дедуп по типу: пока check() возвращает событие того же типа, повторных
-    записей нет; после нормализации (_wd_logged сбрасывается) инцидент
-    логируется заново.
+    записей нет; инцидент закрывается после WD_NORMAL_TICKS_TO_CLOSE
+    нормальных тиков подряд (гистерезис против флэпа счётчиков) — тогда
+    дедуп сброшен и инцидент логируется заново.
     """
     worker = _wd_worker(monkeypatch, tmp_path)
     state = worker._wd_state
@@ -2045,9 +2046,18 @@ def test_worker_watchdog_constant_mode_logs_and_dedups(qapp, tmp_path, monkeypat
     assert entries[0].field == "watchdog"
     assert "TEMP_EMERGENCY" in entries[0].note
 
-    # Инцидент закрылся (нормальная температура/счётчики) — дедуп сброшен.
+    # Инцидент закрывается не сразу: K-1 нормальных тиков мало — дедуп держит.
     state["snap"] = _wd_snap(temp=55.0, activity=200, energy=2000.0)
+    for _ in range(worker.WD_NORMAL_TICKS_TO_CLOSE - 1):
+        worker.poll_telemetry()
+    state["snap"] = _wd_snap(temp=91.0)  # преждевременная «нормализация» не закрыла
     worker.poll_telemetry()
+    assert len(events) == 1
+
+    # Норма выдержана подряд — инцидент закрыт, дедуп сброшен.
+    state["snap"] = _wd_snap(temp=55.0, activity=210, energy=2100.0)
+    for _ in range(worker.WD_NORMAL_TICKS_TO_CLOSE):
+        worker.poll_telemetry()
     assert len(events) == 1
 
     # Повторный аварийный тик — снова событие и запись.
@@ -2091,7 +2101,8 @@ def test_worker_watchdog_rollback_only_with_explicit_option(qapp, tmp_path, monk
     # Явно включили: откат performed, суффикс в событии и в журнале.
     worker.set_auto_rollback(True)
     state["snap"] = _wd_snap(temp=55.0, activity=200, energy=2000.0)  # закрыть инцидент
-    worker.poll_telemetry()
+    for _ in range(worker.WD_NORMAL_TICKS_TO_CLOSE):  # закрытие с гистерезисом
+        worker.poll_telemetry()
     state["snap"] = _wd_snap(temp=91.0)
     worker.poll_telemetry()
     assert rollbacks == [[("gpuFrequencyOffset", 160.0)]]
@@ -2109,11 +2120,43 @@ def test_worker_watchdog_telemetry_frozen_event(qapp, tmp_path, monkeypatch) -> 
     worker.error.connect(errors.append)
 
     worker.poll_telemetry()  # база: первый снимок — данных для сравнения нет
-    state["snap"] = _wd_snap(temp=55.0, activity=100, energy=1000.0)  # activity стоит
+    # недавняя нагрузка: activity растёт несколько тиков подряд (фильтр _frozen)
+    for act in (110, 120, 130):
+        state["snap"] = _wd_snap(temp=55.0, activity=act, energy=1000.0 + act)
+        worker.poll_telemetry()
+    state["snap"] = _wd_snap(temp=55.0, activity=130, energy=1130.0)  # встал
     worker.poll_telemetry()
 
     assert [t for t, _ in events] == ["TELEMETRY_FROZEN"]
     assert errors == []  # сбой не роняет и не шумит в опросе
+
+
+def test_worker_watchdog_frozen_flap_logs_once(qapp, tmp_path, monkeypatch) -> None:
+    """Blip счётчика посреди заморозки не плодит записи журнала.
+
+    Регрессия: раньше один тик роста activity закрывал инцидент (dedup
+    clear), следующий тик снова давал событие — кластеры повторов в журнале.
+    """
+    worker = _wd_worker(monkeypatch, tmp_path)
+    state = worker._wd_state
+    events: list[tuple[str, str]] = []
+    worker.watchdog_event.connect(lambda t, d: events.append((t, d)))
+
+    worker.poll_telemetry()  # база
+    for act in (110, 120, 130):  # недавняя нагрузка
+        state["snap"] = _wd_snap(temp=55.0, activity=act, energy=1000.0 + act)
+        worker.poll_telemetry()
+    state["snap"] = _wd_snap(temp=55.0, activity=130, energy=1130.0)  # заморозка → запись
+    worker.poll_telemetry()
+    assert len(events) == 1
+
+    state["snap"] = _wd_snap(temp=55.0, activity=131, energy=1135.0)  # blip: «норма» 1/3
+    worker.poll_telemetry()
+    state["snap"] = _wd_snap(temp=55.0, activity=131, energy=1135.0)  # снова стоит
+    worker.poll_telemetry()
+
+    assert len(events) == 1  # инцидент не закрыт — повтора записи нет
+    assert len(worker._ctx.log.read_all()) == 1
 
 
 def test_tools_menu_auto_rollback_option(qapp, monkeypatch) -> None:

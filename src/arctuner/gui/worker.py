@@ -76,6 +76,11 @@ class GpuWorker(QObject):
         "vramMemSpeedLimit": GpuContext.set_vram_speed,
     }
 
+    #: Тиков нормы подряд, чтобы закрыть инцидент watchdog: один «нормальный»
+    #: тик бывает всплеском (blip счётчика) — без гистерезиса флэп плодил
+    #: записи журнала одна за другой.
+    WD_NORMAL_TICKS_TO_CLOSE: ClassVar[int] = 3
+
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._ctx = GpuContext()
@@ -87,6 +92,7 @@ class GpuWorker(QObject):
         # сессией; до старта None — poll-цикл его не трогает.
         self._watchdog: Watchdog | None = None
         self._wd_logged: set[str] = set()  # записанные типы: один инцидент — одна запись
+        self._wd_normal_ticks = 0  # нормальных тиков подряд (гистерезис закрытия)
         self._auto_rollback = False  # включается только явной опцией меню
         self._cpu_sampler = CpuSampler()
         self._cpu_error: str | None = None
@@ -111,6 +117,7 @@ class GpuWorker(QObject):
         self._replay = IncidentReplay(device=info.name)
         self._watchdog = Watchdog(device=info.name)
         self._wd_logged.clear()
+        self._wd_normal_ticks = 0
         self.device_ready.emit(info)
         self.reload_static()
         self.reload_device()  # статус-бар + вкладка «Об устройстве» сразу при старте
@@ -217,8 +224,10 @@ class GpuWorker(QObject):
         """Событие постоянного watchdog → журнал (+ авто-откат) → сигнал UI.
 
         Работает на каждом тике опроса, пока открыта сессия. Один инцидент —
-        одна запись: повторных событий того же типа нет, пока check() не
-        вернёт None (дедуп по _wd_logged). Сбой проверки не роняет опрос:
+        одна запись: повторных событий того же типа нет, пока инцидент не
+        закроется. Закрытие — с гистерезисом: после WD_NORMAL_TICKS_TO_CLOSE
+        нормальных тиков подряд (один blip счётчика инцидент не закрывает,
+        иначе флэп плодит записи). Сбой проверки не роняет опрос:
         watchdog — наблюдатель, а не условие жизни poll-цикла.
 
         TDR-запрос (PowerShell) идёт не чаще TDR_CHECK_INTERVAL и занимает
@@ -232,8 +241,12 @@ class GpuWorker(QObject):
             self.error.emit(f"watchdog: сбой проверки ({e!r})")
             return
         if evt is None:
-            self._wd_logged.clear()  # инцидент закрылся — будем логировать заново
+            self._wd_normal_ticks += 1
+            if self._wd_normal_ticks >= self.WD_NORMAL_TICKS_TO_CLOSE:
+                self._wd_logged.clear()  # инцидент закрылся — будем логировать заново
+                self._wd_normal_ticks = 0
             return
+        self._wd_normal_ticks = 0  # событие — инцидент жив, счётчик нормы обнулён
         if evt.type in self._wd_logged:
             return
         self._wd_logged.add(evt.type)
