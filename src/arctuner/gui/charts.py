@@ -385,6 +385,11 @@ class VfChart(QChartView):
     монотонной при любом драге. Изменённые точки отдаёт сигнал curve_edited;
     запись остаётся явной — VfTab показывает предпросмотр и подтверждает
     (как у CSV-пути).
+
+    Пока кривая отличается от эталона, под основной линией лежит тень
+    (призрак) — пунктирный серый дублёр кривой до правки (set_ghost):
+    видно, что именно изменилось. Тень не участвует в свечении (glow)
+    и не попадает в легенду.
     """
 
     curve_edited = Signal(list)  # list[tuple[int, int]] (мВ, МГц) после правки
@@ -407,12 +412,22 @@ class VfChart(QChartView):
         self._scatter = QScatterSeries()
         self._scatter.setName(tr("Точки", "Points"))
 
+        # Тень (призрак) кривой до правки: добавляется ПЕРЕД основной серией —
+        # QtCharts рисует в порядке добавления, тень обязана лежать под линией.
+        self._ghost = QLineSeries()
+        self._ghost.setName("")
+        self._ghost.setPen(self._ghost_pen())
+        self._ghost.setVisible(False)
+
         chart = QChart()
         chart.setAnimationOptions(QChart.AnimationOption.NoAnimation)
+        chart.addSeries(self._ghost)
         chart.addSeries(self._series)
         chart.addSeries(self._scatter)
         chart.addAxis(self._axis_x, Qt.AlignmentFlag.AlignBottom)
         chart.addAxis(self._axis_y, Qt.AlignmentFlag.AlignLeft)
+        self._ghost.attachAxis(self._axis_x)
+        self._ghost.attachAxis(self._axis_y)
         self._series.attachAxis(self._axis_x)
         self._series.attachAxis(self._axis_y)
         self._scatter.attachAxis(self._axis_x)
@@ -440,13 +455,48 @@ class VfChart(QChartView):
         self._series.replace([QPointF(freq, mv) for mv, freq in self._points])
         self._scatter.replace([QPointF(freq, mv) for mv, freq in self._points])
         self._glow.sync(self._series)  # подложка свечения копирует точки сама
-        if ordered:
-            freqs = [p[1] for p in ordered]
-            mvs = [p[0] for p in ordered]
-            pad_x = max(50.0, (max(freqs) - min(freqs)) * 0.05)
-            pad_y = max(20.0, (max(mvs) - min(mvs)) * 0.1)
-            self._axis_x.setRange(min(freqs) - pad_x, max(freqs) + pad_x)
-            self._axis_y.setRange(min(mvs) - pad_y, max(mvs) + pad_y)
+        self._fit_axes()
+
+    def set_ghost(self, points: list[tuple[int, int]] | None) -> None:
+        """Тень (призрак) кривой до правки: серый пунктир под основной линией.
+
+        None/пусто — тень гаснет. Точка тени может лежать за пределами
+        осей (после записи оси пересчитываются по новой кривой) — поэтому
+        диапазон осей включает и видимую тень (см. _fit_axes).
+        """
+        if not points:
+            if self._ghost.isVisible():
+                self._ghost.replace([])
+                self._ghost.setVisible(False)
+                self._fit_axes()
+            return
+        ordered = sorted(points, key=lambda p: p[1])
+        desired = [QPointF(freq, mv) for mv, freq in ordered]
+        if self._ghost.isVisible() and list(self._ghost.points()) == desired:
+            return  # тень уже показана и не изменилась — оси не дёргаем
+        self._ghost.replace(desired)
+        self._ghost.setVisible(True)
+        self._fit_axes()
+
+    def _ghost_pen(self) -> QPen:
+        """Перо тени: серый полупрозрачный пунктир — «кривая до правки»."""
+        pen = QPen(QColor(150, 150, 150, 170), max(1.0, self._style.line_width))
+        pen.setStyle(Qt.PenStyle.DashLine)
+        return pen
+
+    def _fit_axes(self) -> None:
+        """Диапазон осей: основная кривая + видимая тень (тень не должна резаться)."""
+        pts = list(self._points)
+        if self._ghost.isVisible():
+            pts.extend((p.y(), p.x()) for p in self._ghost.points())  # QPointF(freq, mv)
+        if not pts:
+            return
+        freqs = [p[1] for p in pts]
+        mvs = [p[0] for p in pts]
+        pad_x = max(50.0, (max(freqs) - min(freqs)) * 0.05)
+        pad_y = max(20.0, (max(mvs) - min(mvs)) * 0.1)
+        self._axis_x.setRange(min(freqs) - pad_x, max(freqs) + pad_x)
+        self._axis_y.setRange(min(mvs) - pad_y, max(mvs) + pad_y)
 
     def set_editable(self, editable: bool) -> None:
         """Включает/выключает правку точек мышью (курсор — подсказка)."""
@@ -462,12 +512,14 @@ class VfChart(QChartView):
         """Подгоняет фон/сетку кривой V/F под тему приложения.
 
         Встроенная тема QChart перекрашивает серии — после неё вернём свой
-        синий (#4a90d9): тот же цвет, что у маркера карточек «Ядро/Память».
+        синий (#4a90d9): тот же цвет, что у маркера карточек «Ядро/Память»,
+        и пунктирное перо тени (у тени тема тоже сбрасывает dash).
         """
         self.chart().setTheme(
             QChart.ChartTheme.ChartThemeDark if dark else QChart.ChartTheme.ChartThemeLight
         )
         self._series.setPen(QPen(_FREQ_COLOR, self._style.line_width))
+        self._ghost.setPen(self._ghost_pen())
 
     def set_chart_style(self, name: str) -> None:
         """Накладывает пресет вида (см. gui.chartstyle) на кривую V/F.
@@ -486,6 +538,7 @@ class VfChart(QChartView):
             force_theme(self.chart(), True)  # тёмная база под неоновыми кистями
             apply_chart_style(self.chart(), spec)
         self._series.setPen(QPen(_FREQ_COLOR, spec.line_width))
+        self._ghost.setPen(self._ghost_pen())  # force_theme перекрасил и тень
         scatter_pen = self._scatter.pen()  # цвет маркеров даёт тема — только ширина
         scatter_pen.setWidthF(spec.line_width)
         self._scatter.setPen(scatter_pen)

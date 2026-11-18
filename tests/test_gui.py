@@ -1178,6 +1178,92 @@ def test_vf_tab_apply_preview_contains_stock(qapp, monkeypatch) -> None:
     assert captured["changes"] == ["изменено точек: 1 из 4"]
 
 
+def test_vf_chart_ghost_series(qapp) -> None:
+    """Тень (призрак): set_ghost рисует пунктирный дублёр, set_ghost(None) гасит."""
+    chart = VfChart()
+    chart.set_curve(_VF_STOCK)
+    assert chart._ghost.isVisible() is False
+
+    chart.set_ghost(_VF_STOCK)
+    assert chart._ghost.isVisible() is True
+    got = [(int(p.y()), int(p.x())) for p in chart._ghost.points()]  # QPointF(freq, mv)
+    assert got == sorted(_VF_STOCK, key=lambda t: t[1])
+    assert chart._ghost.pen().style() == Qt.PenStyle.DashLine
+
+    chart.set_ghost(None)
+    assert chart._ghost.isVisible() is False
+    assert list(chart._ghost.points()) == []
+    # Повторный вызов с теми же точками не должен дёргать оси (норма во время драга).
+    chart.set_ghost(_VF_STOCK)
+    chart.set_ghost(_VF_STOCK)
+    assert chart._ghost.isVisible() is True
+
+
+def test_vf_chart_axes_include_ghost(qapp) -> None:
+    """Оси охватывают и тень: кривая до правки не режется краем графика."""
+    chart = VfChart()
+    chart.set_curve([(800, 1200), (900, 2000)])
+    chart.set_ghost([(600, 400), (1100, 3000)])  # шире основной кривой
+    assert chart._axis_y.min() <= 600
+    assert chart._axis_y.max() >= 1100
+    assert chart._axis_x.min() <= 400
+    assert chart._axis_x.max() >= 3000
+
+
+def test_vf_chart_ghost_pen_survives_theme(qapp, monkeypatch) -> None:
+    """Смена темы/пресета перекрашивает pen'ы серий — тень остаётся пунктиром."""
+    monkeypatch.setattr("arctuner.gui.charts.load_theme", lambda: "light")
+    chart = VfChart()
+    chart.set_ghost(_VF_STOCK)
+    for style in ("neon", "classic"):
+        chart.set_chart_style(style)
+        assert chart._ghost.pen().style() == Qt.PenStyle.DashLine
+    chart.set_dark(True)
+    assert chart._ghost.pen().style() == Qt.PenStyle.DashLine
+
+
+def test_vf_tab_ghost_after_edit_and_undo(qapp) -> None:
+    """Правка на графике: под линией тень (сток до правки); отмена гасит тень."""
+    tab = VfTab()
+    tab.set_curve(_VF_STOCK)
+    assert tab._chart._ghost.isVisible() is False
+
+    # Правка точки: тень — кривая до правки.
+    tab._chart.edit_point(1, 550.0, 1250.0)
+    assert tab._chart._ghost.isVisible() is True
+    ghost = [(int(p.y()), int(p.x())) for p in tab._chart._ghost.points()]
+    assert ghost == _VF_STOCK
+
+    tab._on_undo()
+    assert tab._chart._ghost.isVisible() is False
+
+    # Возврат точки в сток мышью — правок нет, тень тоже гаснет.
+    tab._chart.edit_point(1, 550.0, 1250.0)
+    assert tab._chart._ghost.isVisible() is True
+    tab._chart.edit_point(1, 800.0, 1200.0)  # ровно сток
+    assert tab._edited is None
+    assert tab._chart._ghost.isVisible() is False
+
+
+def test_vf_tab_ghost_persists_after_apply_reload(qapp) -> None:
+    """После записи и перечитывания с карты тенью остаётся кривая до записи."""
+    tab = VfTab()
+    tab.set_curve(_VF_STOCK)
+    tab._chart.edit_point(1, 550.0, 1250.0)  # кламп → (700, 1250)
+
+    # Воркер записал и вернул новую кривую (vf_ready → set_curve).
+    new_stock = [(700, 400), (700, 1250), (900, 2000), (1100, 3000)]
+    tab.set_curve(new_stock)
+    assert tab.edited_points() == new_stock
+    assert tab._chart._ghost.isVisible() is True
+    ghost = [(int(p.y()), int(p.x())) for p in tab._chart._ghost.points()]
+    assert ghost == _VF_STOCK  # тень — кривая до записи
+
+    # Повторное обновление с теми же точками тень не гасит.
+    tab.set_curve(new_stock)
+    assert tab._chart._ghost.isVisible() is True
+
+
 def test_autotune_tab_start_emits_signal(qapp) -> None:
     """Клик «Запустить» эмитит search_requested с конфигом (цепочка UI → worker)."""
     from arctuner.autotune.engine import TuningConfig

@@ -26,7 +26,11 @@ from arctuner.tuner import (
 
 
 class VfTab(QWidget):
-    """Просмотр кривой V/F + правка точек на графике + CSV-экспорт/импорт (с валидацией)."""
+    """Просмотр кривой V/F + правка точек на графике + CSV-экспорт/импорт (с валидацией).
+
+    Пока кривая отличается от эталона, под ней лежит тень (призрак) —
+    кривая до правки/до записи: видно, что именно изменилось (см. _sync_ghost).
+    """
 
     export_requested = Signal(str)  # путь к CSV
     apply_requested = Signal(object)  # list[VfPoint]
@@ -36,6 +40,7 @@ class VfTab(QWidget):
         super().__init__(parent)
         self._points: list[tuple[int, int]] = []  # сток с карты
         self._edited: list[tuple[int, int]] | None = None  # правка на графике
+        self._ghost: list[tuple[int, int]] | None = None  # тень: кривая до правки
         self._busy = False  # воркер занят: устаревшие данные не снимают блок
 
         self._chart = VfChart()
@@ -72,11 +77,13 @@ class VfTab(QWidget):
         note = QLabel(
             tr(
                 "Кривую можно править мышью прямо на графике (потяните точку: по вертикали — "
-                "напряжение 600…1250 мВ, по горизонтали — между соседями точек). Запись — "
+                "напряжение 600…1250 мВ, по горизонтали — между соседями точек). Серым "
+                "пунктиром под линией — тень: кривая до правки. Запись — "
                 "по кнопке с подтверждением; либо через CSV (voltage_mv,freq_mhz). Перед отправкой "
                 "в драйвер кривая проходит валидацию: границы и монотонность.",
                 "Edit the curve directly on the chart (drag a point: vertically for voltage "
-                "600…1250 mV, horizontally between neighboring points). Apply changes with "
+                "600…1250 mV, horizontally between neighboring points). The grey dashed line "
+                "under the curve is the ghost: the curve before editing. Apply changes with "
                 "confirmation, or import CSV (voltage_mv,freq_mhz). The curve is validated "
                 "for bounds and monotonicity before it is sent to the driver.",
             )
@@ -91,10 +98,18 @@ class VfTab(QWidget):
         lay.addWidget(note)
 
     def set_curve(self, points: list[tuple[int, int]]) -> None:
-        """Принимает пары (мВ, МГц) от worker'а и рисует кривую."""
+        """Принимает пары (мВ, МГц) от worker'а и рисует кривую.
+
+        Пришедшие точки обычно означают «запись прошла и карта перечитана» —
+        тогда кривая до записи становится тенью (призраком) на графике.
+        """
+        old = self._points
         self._points = list(points)
         self._edited = None
+        if old and old != self._points:
+            self._ghost = list(old)  # прежняя кривая — под новой, для сравнения
         self._chart.set_curve(self._points)
+        self._sync_ghost()
         self._chart.set_editable(bool(points))
         self._info.setText(
             tr(f"Точек: {len(self._points)}", f"Points: {len(self._points)}")
@@ -134,27 +149,44 @@ class VfTab(QWidget):
         return bool(self._points) and len(self._edited) == len(self._points)
 
     def _on_chart_edit(self, pairs: list) -> None:
-        """Живая реакция на правку точки: статус + состояние кнопок."""
+        """Живая реакция на правку точки: тень-эталон, статус, состояние кнопок."""
         self._edited = list(pairs)
         if self._edited == self._points:
             self._edited = None
             self._info.setText(tr(f"Точек: {len(self._points)}", f"Points: {len(self._points)}"))
-        elif self._edited_is_valid():
-            self._info.setText(
-                tr(
-                    f"Точек: {len(self._edited)} — кривая изменена; запись через «Записать из графика…»",
-                    f"Points: {len(self._edited)} — curve edited; apply with Write from chart…",
-                )
-            )
         else:
-            self._info.setText(
-                tr(
-                    "Правка отклонена валидацией (границы/монотонность)",
-                    "Edit rejected by validation (bounds/monotonicity)",
+            # Тень — кривая до правки (сток на момент начала сессии правки):
+            # под отредактированной линией видно, что именно сдвинулось.
+            self._ghost = list(self._points)
+            if self._edited_is_valid():
+                self._info.setText(
+                    tr(
+                        f"Точек: {len(self._edited)} — кривая изменена; запись через «Записать из графика…»",
+                        f"Points: {len(self._edited)} — curve edited; apply with Write from chart…",
+                    )
                 )
-            )
+            else:
+                self._info.setText(
+                    tr(
+                        "Правка отклонена валидацией (границы/монотонность)",
+                        "Edit rejected by validation (bounds/monotonicity)",
+                    )
+                )
+        self._sync_ghost()
         # Пересчёт кнопок с учётом текущего busy (во время поиска правка не пишется).
         self.set_busy(self._busy)
+
+    def _sync_ghost(self) -> None:
+        """Тень на графике: видна, только пока отличается от показываемой кривой.
+
+        Показываемая кривая — правка, если она есть, иначе сток: тень равна
+        ей при отмене/возврате в сток и гаснет (две одинаковые линии — шум).
+        """
+        shown = self._edited if self._edited is not None else self._points
+        if self._ghost and self._ghost != shown:
+            self._chart.set_ghost(self._ghost)
+        else:
+            self._chart.set_ghost(None)
 
     def _on_apply_chart(self) -> None:
         """Запись правки с графика: валидация → предпросмотр диффа → подтверждение."""
@@ -203,6 +235,7 @@ class VfTab(QWidget):
         """Откат правки: вернуть сток с карты."""
         self._edited = None
         self._chart.set_curve(self._points)
+        self._sync_ghost()  # тень = сток = показываемая → гаснет
         self._info.setText(
             tr(f"Точек: {len(self._points)}", f"Points: {len(self._points)}")
             if self._points
