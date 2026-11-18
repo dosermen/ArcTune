@@ -62,3 +62,5 @@ coverage.xml
 # embedding-сервер для mem.py (вектора + remote-каскад): скрипты и локальный
 # config.bat с путями машины; к проекту ArcTune отношения не имеет.
 /SERVER/
+# контракт модели памяти MEM (типы/frontmatter/статусы) — дока утилиты агента.
+/DESIGN.md
