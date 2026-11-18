@@ -59,3 +59,6 @@ coverage.xml
 # не часть кодовой базы ArcTune; данные и CLI живут только локально.
 /mem.py
 /memory/
+# embedding-сервер для mem.py (вектора + remote-каскад): скрипты и локальный
+# config.bat с путями машины; к проекту ArcTune отношения не имеет.
+/SERVER/
