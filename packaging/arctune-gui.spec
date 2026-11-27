@@ -17,12 +17,15 @@ from pathlib import Path
 # SPECPATH — каталог, где лежит этот .spec (packaging/).
 ROOT = Path(SPECPATH).parent  # noqa: F821  (SPECPATH injected by PyInstaller)
 SRC = ROOT / "src"
+APP_ICON = SRC / "arctuner" / "gui" / "assets" / "arctune.ico"
 
 a = Analysis(
     [str(SRC / "arctuner" / "gui" / "main.py")],
     pathex=[str(SRC)],
     binaries=[],
-    datas=[],  # igcl_api.h/доки в exe не нужны — DLL грузится по реальному пути
+    datas=[
+        (str(APP_ICON), "arctuner/gui/assets")
+    ],  # igcl_api.h/доки в exe не нужны — DLL грузится по реальному пути
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -50,4 +53,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=str(APP_ICON),
 )

@@ -30,6 +30,7 @@ from arctuner.cpu import CoreTempMetrics, CpuSnapshot  # noqa: E402
 from arctuner.gui import overlay as overlay_module  # noqa: E402
 from arctuner.gui.charts import LiveChart, VfChart  # noqa: E402
 from arctuner.gui.context import FanInfo  # noqa: E402
+from arctuner.gui.icons import APP_ICON_PATH, app_icon  # noqa: E402
 from arctuner.gui.overlay import cell_label, layout_label  # noqa: E402
 from arctuner.gui.tabs import (  # noqa: E402
     AutoTuneTab,
@@ -95,6 +96,13 @@ def test_metric_card_none_shows_dash(qapp) -> None:
 def test_charts_construct(qapp) -> None:
     LiveChart()
     VfChart()
+
+
+def test_application_icon_is_available(qapp) -> None:
+    icon = app_icon()
+    assert APP_ICON_PATH.is_file()
+    assert not icon.isNull()
+    assert not icon.pixmap(32, 32).isNull()
 
 
 def test_english_gui_labels_and_chart_labels(qapp, monkeypatch, tmp_path) -> None:

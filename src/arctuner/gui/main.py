@@ -51,6 +51,7 @@ def run() -> int:
     from PySide6.QtWidgets import QApplication
 
     from arctuner.gui.errors import GuiExceptionHandler
+    from arctuner.gui.icons import app_icon
     from arctuner.gui.scale import apply_qt_scale
     from arctuner.gui.theme import apply_theme, load_theme
     from arctuner.gui.window import MainWindow
@@ -61,6 +62,7 @@ def run() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("ArcTune")
     app.setOrganizationName("ArcTune")
+    app.setWindowIcon(app_icon())
 
     # В windowed-exe stderr нет: без этого исключение слота теряется молча.
     # Родитель — app: обработчик живёт до конца процесса.

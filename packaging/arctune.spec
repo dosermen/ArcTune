@@ -18,6 +18,7 @@ from pathlib import Path
 # SPECPATH — каталог, где лежит этот .spec (packaging/).
 ROOT = Path(SPECPATH).parent  # noqa: F821  (SPECPATH injected by PyInstaller)
 SRC = ROOT / "src"
+APP_ICON = SRC / "arctuner" / "gui" / "assets" / "arctune.ico"
 
 a = Analysis(
     [str(SRC / "arctuner" / "__main__.py")],
@@ -51,4 +52,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=str(APP_ICON),
 )

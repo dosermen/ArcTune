@@ -59,7 +59,7 @@ version = { attr = "arctuner.__version__" }
 
 # PEP 561: потребителям пакета доступны аннотации типов (модуль arctuner — py.typed).
 [tool.setuptools.package-data]
-arctuner = ["py.typed"]
+arctuner = ["py.typed", "gui/assets/*.ico", "gui/assets/*.svg"]
 
 [tool.ruff]
 line-length = 100

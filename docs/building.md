@@ -22,6 +22,9 @@ pyinstaller --clean --noconfirm packaging/arctune.spec      # -> dist/arctune.ex
 pyinstaller --clean --noconfirm packaging/arctune-gui.spec  # -> dist/arctune-gui.exe (GUI)
 ```
 
+Иконка берётся из `src/arctuner/gui/assets/arctune.svg`; ICO для Windows
+собран в том же каталоге. Он используется окном GUI и в ресурсах обоих `.exe`.
+
 Результат: `dist/arctune.exe` (onefile, ~9 МБ, консольный) и
 `dist/arctune-gui.exe` (onefile, ~48 МБ, без консольного окна).
 

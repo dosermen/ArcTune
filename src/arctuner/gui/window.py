@@ -26,6 +26,7 @@ from arctuner.gui.chartstyle import (
     load_chart_style,
     save_chart_style,
 )
+from arctuner.gui.icons import app_icon
 from arctuner.gui.overlay import (
     LAYOUTS,
     OPACITIES,
@@ -90,8 +91,8 @@ class MainWindow(QMainWindow):
         self._device = DeviceTab()
         self._autotune = AutoTuneTab()
         self._overlay_tab = OverlayTab(self._overlay)  # настройки HUD (без IGCL)
-        style = self.style()  # иконки вкладок и окна — стандартные Qt, без ресурсов
-        self.setWindowIcon(style.standardIcon(QStyle.StandardPixmap.SP_ComputerIcon))
+        style = self.style()  # стандартные Qt-иконки вкладок
+        self.setWindowIcon(app_icon())
         for index, (widget, icon_kind, name) in enumerate(
             (
                 (
