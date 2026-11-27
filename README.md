@@ -156,7 +156,7 @@ GUI — read-only по умолчанию: любая запись требуе�
 ### Сборка exe
 
 ```powershell
-pip install -e ".[build]"
+pip install -e ".[build,gui]"
 pyinstaller --clean --noconfirm packaging/arctune.spec     # -> dist/arctune.exe (CLI)
 pyinstaller --clean --noconfirm packaging/arctune-gui.spec # -> dist/arctune-gui.exe (GUI)
 ```
@@ -192,7 +192,7 @@ pyinstaller --clean --noconfirm packaging/arctune-gui.spec # -> dist/arctune-gui
 │   │   ├── context.py   #   реэкспорт GpuContext (совместимость импортов)
 │   │   ├── charts.py    #   живой график и кривая V/F (QtCharts)
 │   │   ├── widgets.py   #   карточки метрик и диалог подтверждения записи
-│   │   ├── tabs/        #   вкладки: мониторинг/разгон/вентиляторы/V/F/журнал/авторазгон
+│   │   ├── tabs/        #   вкладки: мониторинг/разгон/вентиляторы/V/F/журнал/устройство/авторазгон/оверлей
 │   │   │   └── autotune.py # вкладка «Авторазгон» (общий движок)
 │   │   └── main.py      #   точка входа `arctune-gui`
 │   └── cli.py           # командная строка
@@ -244,6 +244,7 @@ python -m arctuner reset --oc --fans        # сброс OC + вентилято
 | [docs/overclocking.md](docs/overclocking.md) | Методика разгона Arc B580 и тонкости |
 | [docs/development.md](docs/development.md) | Настройка окружения, запуск, тесты |
 | [docs/building.md](docs/building.md) | Сборка переносимого `arctune.exe` (PyInstaller) |
+| [docs/releasing.md](docs/releasing.md) | Подготовка версии и публикация GitHub Release |
 | [docs/roadmap.md](docs/roadmap.md) | Планы и что уже сделано |
 | [docs/adr/](docs/adr/) | Журнал архитектурных решений (ADR-0001…0006) |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Правила участия и стиль кода |

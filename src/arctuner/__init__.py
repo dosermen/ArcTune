@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from arctuner.gui.errors import GuiExceptionHandler
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 __all__ = ["GuiExceptionHandler", "__version__"]
 
 

@@ -1,6 +1,6 @@
 name: Release
 
-# Релиз по тегу: git tag v0.2.0 && git push origin v0.2.0
+# Релиз по тегу: git tag v0.3.0 && git push origin v0.3.0
 # Собирает CLI/GUI exe и публикует GitHub Release с артефактами.
 
 on:
@@ -38,12 +38,23 @@ jobs:
 
       - name: Сверить тег с версией пакета
         # Единый источник версии — arctuner/__init__.py: __version__.
-        # Например, тег v0.3.0 при __version__ = "0.2.0" — ошибка, а не релиз.
+        # Релизный тег обязан иметь SemVer-формат и запись в CHANGELOG.
         shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          $ver = (Select-String -Path src/arctuner/__init__.py -Pattern '__version__ = "(.+)"').Matches.Groups[1].Value
-          if ("${{ github.ref_name }}" -ne "v$ver") {
-            Write-Host "Тег ${{ github.ref_name }} не совпадает с версией пакета v$ver"
+          $versionMatch = Select-String -Path src/arctuner/__init__.py -Pattern '^__version__ = "(\d+\.\d+\.\d+)"$'
+          if (-not $versionMatch) {
+            Write-Host "Не удалось определить SemVer-версию пакета"
+            exit 1
+          }
+          $version = $versionMatch.Matches[0].Groups[1].Value
+          if ($env:RELEASE_TAG -notmatch '^v\d+\.\d+\.\d+$' -or $env:RELEASE_TAG -ne "v$version") {
+            Write-Host "Тег $env:RELEASE_TAG не совпадает с версией пакета v$version"
+            exit 1
+          }
+          if (-not (Select-String -Path CHANGELOG.md -Pattern "^## \[$version\] — \d{4}-\d{2}-\d{2}$" -Quiet)) {
+            Write-Host "В CHANGELOG.md нет датированной секции для версии $version"
             exit 1
           }
 
@@ -67,6 +78,13 @@ jobs:
         run: |
           Compress-Archive -Path dist/arctune.exe -DestinationPath dist/arctune-cli-x64.zip
           Compress-Archive -Path dist/arctune-gui.exe -DestinationPath dist/arctune-gui-x64.zip
+          $hashes = @(
+            Get-FileHash dist/arctune-cli-x64.zip -Algorithm SHA256
+            Get-FileHash dist/arctune-gui-x64.zip -Algorithm SHA256
+          )
+          $hashes | ForEach-Object {
+            "$($_.Hash.ToLowerInvariant())  $([IO.Path]::GetFileName($_.Path))"
+          } | Set-Content -Path dist/SHA256SUMS.txt -Encoding ascii
 
       - name: Опубликовать GitHub Release
         uses: softprops/action-gh-release@v2
@@ -74,7 +92,9 @@ jobs:
           files: |
             dist/arctune-cli-x64.zip
             dist/arctune-gui-x64.zip
+            dist/SHA256SUMS.txt
           generate_release_notes: true
+          prerelease: true
           body: |
             **ArcTune ${{ github.ref_name }}** — мониторинг и разгон Intel Arc (проверено на B580).
 

@@ -8,8 +8,7 @@
 Только на машине СБОРКИ (не на целевой) нужен Python 3.10+ и PyInstaller:
 
 ```powershell
-pip install -e ".[build]"        # pyinstaller>=6.0
-pip install -e ".[gui]"          # PySide6 и psutil для сборки GUI
+pip install -e ".[build,gui]"    # PyInstaller, PySide6 и psutil
 ```
 
 На целевой машине Python не нужен — нужен только установленный Intel Arc Graphics
@@ -44,7 +43,7 @@ pyinstaller --clean --noconfirm packaging/arctune-gui.spec  # -> dist/arctune-gu
 .\dist\arctune.exe doctor      # находит IntelControlLib.dll; код 1 и [FAIL], если обязательных функций нет
 .\dist\arctune.exe telemetry   # read-only, живые датчики
 .\dist\arctune.exe vf --csv vf.csv
-.\dist\arctune-gui.exe         # окно с 7 вкладками, опрос раз в секунду
+.\dist\arctune-gui.exe         # окно с 8 вкладками, опрос раз в секунду
 ```
 
 Всё read-only проверяется сразу. Команды записи (`set`, `vf --apply`, `autofind`,

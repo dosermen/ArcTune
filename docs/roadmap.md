@@ -312,14 +312,14 @@
 
 ## Версия и релиз
 
-- Версия: **0.2.0** — единый источник `src/arctuner/__init__.py` (`__version__`);
+- Версия: **0.3.0** — единый источник `src/arctuner/__init__.py` (`__version__`);
   `pyproject.toml` подключает её через `dynamic = ["version"]` → **✅**
 - Semver: **MAJOR** — API-ломы; **MINOR** — новые фичи; **PATCH** — исправления — **✅**
 - CHANGELOG.md: Keep a Changelog v1.0.0 — **✅**
 - CI: `.github/workflows/ci.yml` — ruff + mypy + pytest (с покрытием) + сборка exe
   (python 3.10–3.12, windows-latest) — **✅, все шаги на месте (сверено 2026-11-03)**
-- Release: `.github/workflows/release.yml` — при теге `v*` сверяет тег с
-  `__version__` (расхождение = ошибка, не релиз), собирает exe и публикует
-  GitHub Release с артефактами zip → **✅ workflow готов**
+- Release: `.github/workflows/release.yml` — проверяет SemVer-тег, версию и
+  секцию CHANGELOG, запускает проверки, собирает exe и публикует предварительный
+  GitHub Release с zip и SHA-256 суммами → **✅ workflow готов**
 - `git tag` пуст, remote не настроен — релизы ещё не оформлялись (первый тег
   поставить после публикации репозитория) → **открыто**

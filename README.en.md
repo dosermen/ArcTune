@@ -156,7 +156,7 @@ If the text is too small for your monitor: **View → 125 / 150 / 175 / 200 %**
 ### Building the exe
 
 ```powershell
-pip install -e ".[build]"
+pip install -e ".[build,gui]"
 pyinstaller --clean --noconfirm packaging/arctune.spec     # -> dist/arctune.exe (CLI)
 pyinstaller --clean --noconfirm packaging/arctune-gui.spec # -> dist/arctune-gui.exe (GUI)
 ```
@@ -192,7 +192,7 @@ the target machine — see [docs/building.md](docs/building.md) (Russian).
 │   │   ├── context.py   #   GpuContext re-export (import compatibility)
 │   │   ├── charts.py    #   live chart and V/F chart (QtCharts)
 │   │   ├── widgets.py   #   metric cards and the write-confirmation dialog
-│   │   ├── tabs/        #   monitoring/overclock/fans/V-F/journal/auto-tune/overlay
+│   │   ├── tabs/        #   monitoring/overclock/fans/V-F/journal/device/auto-tune/overlay
 │   │   └── main.py      #   `arctune-gui` entry point
 │   └── cli.py           # command line
 ├── tests/               # tests (unit + hardware + offscreen GUI)
@@ -241,6 +241,7 @@ python -m arctuner reset --oc --fans        # reset overclock + fans to auto
 | [docs/overclocking.md](docs/overclocking.md) | Arc B580 overclocking methodology (Russian) |
 | [docs/development.md](docs/development.md) | Environment setup, running, tests (Russian) |
 | [docs/building.md](docs/building.md) | Building the portable `arctune.exe` (Russian) |
+| [docs/releasing.md](docs/releasing.md) | Preparing a version and publishing a GitHub Release (Russian) |
 | [docs/roadmap.md](docs/roadmap.md) | Plans and what's already done (Russian) |
 | [docs/adr/](docs/adr/) | Architecture decision records ADR-0001…0006 (Russian) |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Contribution rules and code style (Russian) |
