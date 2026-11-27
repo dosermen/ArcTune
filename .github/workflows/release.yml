@@ -93,6 +93,7 @@ jobs:
             dist/arctune-cli-x64.zip
             dist/arctune-gui-x64.zip
             dist/SHA256SUMS.txt
+          overwrite_files: true
           generate_release_notes: true
           prerelease: true
           body: |
