@@ -1,6 +1,6 @@
 name: Release
 
-# Релиз по тегу: git tag v0.3.0 && git push origin v0.3.0
+# Релиз по тегу: git tag -a v0.4.0 -m "release: 0.4.0" && git push origin v0.4.0
 # Собирает CLI/GUI exe и публикует GitHub Release с артефактами.
 
 on:
@@ -53,7 +53,7 @@ jobs:
             Write-Host "Тег $env:RELEASE_TAG не совпадает с версией пакета v$version"
             exit 1
           }
-          if (-not (Select-String -Path CHANGELOG.md -Pattern "^## \[$version\] — \d{4}-\d{2}-\d{2}$" -Quiet)) {
+          if (-not (Select-String -Path CHANGELOG.md -Pattern "^## \[$version\] [-—] \d{4}-\d{2}-\d{2}$" -Quiet)) {
             Write-Host "В CHANGELOG.md нет датированной секции для версии $version"
             exit 1
           }
