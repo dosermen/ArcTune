@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 _PM_STATUS_SUCCESS = 0
+_PM_STATUS_MIDDLEWARE_SERVICE_MISMATCH = 20
 _PM_METRIC_PRESENTED_FPS = 12
 _PM_STAT_AVG = 1
 _MAX_SWAP_CHAINS = 16
@@ -74,6 +75,7 @@ class PresentMonFpsReader:
 
     def __init__(self) -> None:
         self._api: Any = None
+        self._api_path: Path | None = None
         self._dll_directory: object | None = None
         self._session: ctypes.c_void_p | None = None
         self._query: ctypes.c_void_p | None = None
@@ -141,13 +143,41 @@ class PresentMonFpsReader:
             raise PresentMonError("; ".join(errors))
 
     def _open_session(self, process_id: int) -> None:
-        api = self._load_api()
-        session = ctypes.c_void_p()
-        status = api.pmOpenSession(ctypes.byref(session))
-        if status != _PM_STATUS_SUCCESS:
-            raise self._status_error("подключение к службе PresentMon", status)
-        if not session.value:
-            raise PresentMonError("PresentMon вернул пустой session handle.")
+        """Открывает сессию, перебирая копии DLL, пока служба не примет версию.
+
+        На машинах с Intel Graphics Software лежат две PresentMonAPI2.dll:
+        рядом со службой (PresentMonSharedService) и в каталоге IGS. Копия из
+        IGS может не совпадать по версии с запущенной службой — pmOpenSession
+        отвечает кодом 20 (MIDDLEWARE_SERVICE_MISMATCH). Поэтому кандидаты
+        перебираются, а несовпавшая копия пропускается.
+        """
+        errors: list[str] = []
+        session: ctypes.c_void_p | None = None
+        for path in self._candidate_paths():
+            try:
+                api = self._load_api(path)
+            except PresentMonError as exc:
+                errors.append(str(exc))
+                continue
+            candidate = ctypes.c_void_p()
+            status = api.pmOpenSession(ctypes.byref(candidate))
+            if status == _PM_STATUS_MIDDLEWARE_SERVICE_MISMATCH:
+                mismatch = self._status_error("подключение к службе PresentMon", status)
+                errors.append(f"{path}: {mismatch.args[0]}")
+                continue
+            if status != _PM_STATUS_SUCCESS:
+                raise self._status_error("подключение к службе PresentMon", status)
+            if not candidate.value:
+                raise PresentMonError("PresentMon вернул пустой session handle.")
+            session = candidate
+            break
+        if session is None:
+            raise PresentMonError(
+                "; ".join(errors)
+                if errors
+                else f"{_DLL_NAME} не найдена. Установите Intel Graphics Software/PresentMon "
+                "или задайте путь в ARCTUNE_PRESENTMON_API2."
+            )
         self._session = session
 
         version = _Version()
@@ -195,11 +225,11 @@ class PresentMonFpsReader:
             self._close_after_error(self._status_error("запуск отслеживания FPS", status))
         self._tracked_process_id = process_id
 
-    def _load_api(self) -> Any:
-        if self._api is not None:
+    def _load_api(self, path: Path) -> Any:
+        """Загружает PresentMonAPI2.dll по пути; уже загруженную копию кэширует."""
+        if self._api is not None and self._api_path == path:
             return self._api
 
-        path = self._find_api_path()
         try:
             self._dll_directory = os.add_dll_directory(str(path.parent))
             api = ctypes.WinDLL(str(path), use_last_error=True)
@@ -208,10 +238,17 @@ class PresentMonFpsReader:
 
         self._bind_api(api)
         self._api = api
+        self._api_path = path
         return api
 
     @staticmethod
-    def _find_api_path() -> Path:
+    def _candidate_paths() -> list[Path]:
+        """Копии PresentMonAPI2.dll для перебора: сначала та, что рядом со службой.
+
+        PresentMonSharedService — каталог самой службы, его DLL совпадает с ней
+        по версии. Копия из Intel Graphics Software ставится второй: на части
+        систем она новее службы и pmOpenSession отвечает MIDDLEWARE_SERVICE_MISMATCH.
+        """
         configured = os.environ.get("ARCTUNE_PRESENTMON_API2")
         if configured:
             path = Path(os.path.expandvars(configured)).expanduser()
@@ -219,22 +256,22 @@ class PresentMonFpsReader:
                 raise PresentMonError(
                     f"ARCTUNE_PRESENTMON_API2 указывает на отсутствующий файл: {path}"
                 )
-            return path
+            return [path]
 
         roots = [
             Path(os.environ.get("PROGRAMFILES", r"C:\Program Files")),
             Path(os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)")),
         ]
-        candidates = [root / "Intel" / "Intel Graphics Software" / _DLL_NAME for root in roots] + [
-            root / "Intel" / "PresentMonSharedService" / _DLL_NAME for root in roots
+        candidates = [root / "Intel" / "PresentMonSharedService" / _DLL_NAME for root in roots] + [
+            root / "Intel" / "Intel Graphics Software" / _DLL_NAME for root in roots
         ]
-        found_path = next((candidate for candidate in candidates if candidate.is_file()), None)
-        if found_path is None:
+        existing = [candidate for candidate in candidates if candidate.is_file()]
+        if not existing:
             raise PresentMonError(
                 f"{_DLL_NAME} не найдена. Установите Intel Graphics Software/PresentMon "
                 "или задайте путь в ARCTUNE_PRESENTMON_API2."
             )
-        return found_path
+        return existing
 
     @staticmethod
     def _bind_api(api: Any) -> None:
@@ -282,6 +319,7 @@ class PresentMonFpsReader:
             6: "PID недействителен",
             12: "ошибка канала связи",
             13: "сессия не открыта",
+            20: "версия PresentMonAPI2.dll не совпадает с запущенной службой PresentMon",
         }
         description = descriptions.get(status, "неизвестная ошибка")
         extra = (

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ctypes
+from pathlib import Path
 
 import pytest
 
@@ -20,9 +21,10 @@ class _Function:
 
 
 class _FakeApi:
-    def __init__(self, fps: float = 72.5, poll_status: int = 0) -> None:
+    def __init__(self, fps: float = 72.5, poll_status: int = 0, open_status: int = 0) -> None:
         self.fps = fps
         self.poll_status = poll_status
+        self.open_status = open_status
         self.open_calls = 0
         self.track_calls: list[int] = []
         self.close_calls = 0
@@ -37,6 +39,8 @@ class _FakeApi:
 
     def open_session(self, out_handle) -> int:
         self.open_calls += 1
+        if self.open_status:
+            return self.open_status
         ctypes.cast(out_handle, ctypes.POINTER(ctypes.c_void_p))[0] = ctypes.c_void_p(1)
         return 0
 
@@ -76,8 +80,9 @@ class _FakeApi:
 def _reader(monkeypatch, api: _FakeApi, process_id: int = 100) -> fps_module.PresentMonFpsReader:
     reader = fps_module.PresentMonFpsReader()
     monkeypatch.setattr(fps_module, "foreground_process_id", lambda: process_id)
+    monkeypatch.setattr(reader, "_candidate_paths", lambda: [Path("PresentMonAPI2.dll")])
 
-    def load_api():
+    def load_api(_path):
         reader._api = api
         return api
 
@@ -118,4 +123,46 @@ def test_reader_reports_presentmon_service_errors(monkeypatch) -> None:
     reader = _reader(monkeypatch, _FakeApi(poll_status=4))
 
     with pytest.raises(fps_module.PresentMonError, match="служба недоступна"):
+        reader.sample()
+
+
+def test_reader_falls_back_when_dll_version_mismatches_service(monkeypatch) -> None:
+    """Копия DLL из IGS новее службы → код 20; берётся следующая копия рядом со службой."""
+    bad = _FakeApi(open_status=fps_module._PM_STATUS_MIDDLEWARE_SERVICE_MISMATCH)
+    good = _FakeApi(fps=60.0)
+    paths = [
+        Path("Intel Graphics Software/PresentMonAPI2.dll"),
+        Path("PresentMonSharedService/PresentMonAPI2.dll"),
+    ]
+    reader = fps_module.PresentMonFpsReader()
+    monkeypatch.setattr(fps_module, "foreground_process_id", lambda: 100)
+    monkeypatch.setattr(reader, "_candidate_paths", lambda: paths)
+    apis = {paths[0]: bad, paths[1]: good}
+
+    def load_api(path):
+        reader._api = apis[path]
+        return apis[path]
+
+    monkeypatch.setattr(reader, "_load_api", load_api)
+
+    assert reader.sample() == pytest.approx(60.0)
+    assert bad.open_calls == 1  # несовпавшая копия опрошена один раз
+    assert good.track_calls == [100]
+
+
+def test_reader_reports_mismatch_when_no_compatible_dll(monkeypatch) -> None:
+    """Все копии несовместимы со службой — ошибка называет причину, а не «код 20»."""
+    paths = [Path("a/PresentMonAPI2.dll"), Path("b/PresentMonAPI2.dll")]
+    apis = {p: _FakeApi(open_status=20) for p in paths}
+    reader = fps_module.PresentMonFpsReader()
+    monkeypatch.setattr(fps_module, "foreground_process_id", lambda: 100)
+    monkeypatch.setattr(reader, "_candidate_paths", lambda: paths)
+
+    def load_api(path):
+        reader._api = apis[path]
+        return apis[path]
+
+    monkeypatch.setattr(reader, "_load_api", load_api)
+
+    with pytest.raises(fps_module.PresentMonError, match="не совпадает с запущенной службой"):
         reader.sample()
