@@ -74,7 +74,10 @@ journaling behave identically for all cards.
   <img src="assets/preview-overclock.png" width="420" alt="Overclock tab">
 </p>
 <p align="center">
+  <img src="assets/preview-vf.png" width="420" alt="V/F tab">
   <img src="assets/preview-overlay-settings.png" width="420" alt="Overlay settings tab">
+</p>
+<p align="center">
   <img src="assets/preview-overlay-hud.png" width="420" alt="Overlay HUD">
 </p>
 

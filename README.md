@@ -75,7 +75,10 @@ Intel Graphics Software, но из кода: лимит питания, напр
   <img src="assets/preview-overclock.png" width="420" alt="Вкладка «Разгон»">
 </p>
 <p align="center">
+  <img src="assets/preview-vf.png" width="420" alt="Вкладка «V/F»">
   <img src="assets/preview-overlay-settings.png" width="420" alt="Вкладка «Оверлей»">
+</p>
+<p align="center">
   <img src="assets/preview-overlay-hud.png" width="420" alt="HUD оверлея">
 </p>
 
