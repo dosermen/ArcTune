@@ -63,16 +63,16 @@ ORIENTATIONS: tuple[str, ...] = ("horizontal", "vertical")
 #: подписи макетов для меню (главного окна и контекстного меню оверлея);
 #: размер честный: строки × колонки под текущий пресет метрик
 LAYOUT_LABELS: dict[str, str] = {
-    "compact": "Полоса 1×6",
-    "grid": "Сетка 3×2",
-    "detailed": "Подробный 2×5",
+    "compact": "Полоса 1×7",
+    "grid": "Сетка 4×2",
+    "detailed": "Подробный 2×6",
 }
 
 #: английские подписи макетов (см. LAYOUT_LABELS)
 LAYOUT_LABELS_EN: dict[str, str] = {
-    "compact": "Bar 1×6",
-    "grid": "Grid 3×2",
-    "detailed": "Detailed 2×5",
+    "compact": "Bar 1×7",
+    "grid": "Grid 4×2",
+    "detailed": "Detailed 2×6",
 }
 
 CELL_LABELS_EN: dict[str, str] = {
@@ -90,6 +90,7 @@ CELL_LABELS_EN: dict[str, str] = {
     "cpu_freq": "CPU Frequency",
     "cpu_temp": "CPU Temperature",
     "media_load": "Media",
+    "fps": "FPS",
 }
 
 
@@ -112,7 +113,15 @@ def cell_label(key: str) -> str:
     """Подпись метрики для текущего языка интерфейса."""
     cells = {cell_key: (title, unit) for cell_key, title, unit, _ in _CELLS}
     title, unit = cells[key]
-    units_en = {"°C": "°C", "Вт": "W", "МГц": "MHz", "%": "%", "Гбит/с": "Gbps", "ГиБ": "GiB"}
+    units_en = {
+        "°C": "°C",
+        "Вт": "W",
+        "МГц": "MHz",
+        "%": "%",
+        "Гбит/с": "Gbps",
+        "ГиБ": "GiB",
+        "FPS": "FPS",
+    }
     return f"{tr(title, CELL_LABELS_EN[key])} ({tr(unit, units_en[unit])})"
 
 
@@ -139,15 +148,16 @@ _CELLS: tuple[tuple[str, str, str, str | None], ...] = (
     ("cpu_load", "CPU загрузка", "%", "load"),
     ("cpu_freq", "CPU частота", "МГц", "freq"),
     ("cpu_temp", "CPU температура", "°C", "temp"),
+    ("fps", "FPS", "FPS", "fps"),
 )
 
 #: макет → (порядок ключей ячеек, число колонок)
 #: Пресеты подписаны честно (LAYOUT_LABELS = строки × колонки): полоса — все
-#: шесть основных метрик в один ряд, сетка — те же шесть в 3×2, подробный —
-#: все десять метрик в 2×5 плюс плашка ограничений.
+#: семь основных метрик в один ряд, сетка — те же семь в 4×2, подробный —
+#: одиннадцать метрик в 2×6 плюс плашка ограничений.
 _LAYOUT_SPECS: dict[str, tuple[tuple[str, ...], int]] = {
-    "compact": (("temp", "power", "freq", "load", "vram", "vram_used"), 6),
-    "grid": (("temp", "power", "freq", "load", "vram", "vram_used"), 2),
+    "compact": (("temp", "power", "freq", "load", "vram", "vram_used", "fps"), 7),
+    "grid": (("temp", "power", "freq", "load", "vram", "vram_used", "fps"), 2),
     "detailed": (
         (
             "temp",
@@ -160,8 +170,9 @@ _LAYOUT_SPECS: dict[str, tuple[tuple[str, ...], int]] = {
             "gpu_vr",
             "vram_vr",
             "sa_vr",
+            "fps",
         ),
-        5,
+        6,
     ),
 }
 
@@ -463,6 +474,7 @@ class OverlayWindow(QWidget):
                 "%": "%",
                 "Гбит/с": "Gbps",
                 "ГиБ": "GiB",
+                "FPS": "FPS",
             }[unit]
             self._cells[key] = _Cell(tr(title, CELL_LABELS_EN[key]), tr(unit, unit_en), accent)
 
@@ -532,7 +544,7 @@ class OverlayWindow(QWidget):
     def set_layout(self, name: str) -> None:
         """Переключает макет: колонки и пресет-набор метрик, затем пересборка.
 
-        Пресет намеренно возвращает свой набор метрик — подписи «Полоса 1×6»
+        Пресет намеренно возвращает свой набор метрик — подписи макетов
         и т.п. должны соответствовать тому, что реально на экране. Свой набор
         настраивается отдельно — ``set_visible_cells``.
 
@@ -725,6 +737,7 @@ class OverlayWindow(QWidget):
         else:
             self._cells["power"].set_value(snap.gpu_power_percent, unit="%")
         self._cells["freq"].set_value(snap.gpu_freq_mhz)
+        self._cells["fps"].set_value(snap.fps)
         # Загрузка ядра: % приходит из LoadMeter (ΔactiveTime/Δtimestamp), у
         # него же база — до 2-го тика честное «—», а не ноль.
         self._cells["load"].set_value(snap.gpu_load_percent)

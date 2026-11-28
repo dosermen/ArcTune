@@ -42,8 +42,10 @@ Implemented and verified on a live B580:
   overlay) with charts and write confirmations; a standalone `arctune-gui.exe`
 - ✅ **CPU telemetry in the GUI** — load and frequency via psutil, core temperatures
   via Core Temp read-only shared memory; chart series and overlay cells are independently configurable.
+- ✅ **FPS in the GUI** — foreground application average over the last second via
+  PresentMon API; requires the PresentMon service and Windows Performance Log Users access.
 - ✅ **On-screen overlay (HUD)** — always-on-top telemetry over games/benchmarks with
-  its own settings tab, 3 layouts, and a custom metric selection
+  its own settings tab, 3 layouts, FPS, and a custom metric selection
 
 Next up: an internal stress loader and a software fan curve (see
 [ROADMAP](docs/roadmap.md)).

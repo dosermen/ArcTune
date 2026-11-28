@@ -16,14 +16,21 @@ from arctuner.gui.chartstyle import (
     apply_chart_style,
     chart_style,
 )
-from arctuner.gui.theme import SERIES_FREQ, SERIES_LOAD, SERIES_POWER, SERIES_TEMP, SERIES_VRAM
+from arctuner.gui.theme import (
+    SERIES_FPS,
+    SERIES_FREQ,
+    SERIES_LOAD,
+    SERIES_POWER,
+    SERIES_TEMP,
+    SERIES_VRAM,
+)
 from arctuner.i18n import tr
 from arctuner.igcl.api import TelemetrySnapshot
 
-MINI_CHART_SERIES: tuple[str, ...] = ("temp", "power", "load", "vram", "freq")
+MINI_CHART_SERIES: tuple[str, ...] = ("temp", "power", "load", "vram", "freq", "fps")
 MINI_CHART_WINDOWS: tuple[int, ...] = (30, 60, 120)
 MINI_CHART_SIZES: tuple[str, ...] = ("compact", "wide")
-DEFAULT_MINI_CHART_SERIES: tuple[str, ...] = ("temp", "power", "load", "freq")
+DEFAULT_MINI_CHART_SERIES: tuple[str, ...] = ("temp", "power", "load", "freq", "fps")
 DEFAULT_MINI_CHART_WINDOW = 60
 DEFAULT_MINI_CHART_SIZE = "compact"
 _SIZE_DIMENSIONS: dict[str, tuple[int, int]] = {
@@ -39,12 +46,13 @@ _EVENT_COLORS = {
     "setting": QColor("#64b5f6"),
 }
 
-_METRICS: dict[str, tuple[str, str, QColor, bool]] = {
-    "temp": ("Temperature, °C", "Температура, °C", QColor(SERIES_TEMP), False),
-    "power": ("Power, %", "Мощность, %", QColor(SERIES_POWER), False),
-    "load": ("GPU Load, %", "Загрузка, %", QColor(SERIES_LOAD), False),
-    "vram": ("VRAM Used, %", "Память, %", QColor(SERIES_VRAM), False),
-    "freq": ("Frequency, MHz", "Частота, МГц", QColor(SERIES_FREQ), True),
+_METRICS: dict[str, tuple[str, str, QColor, str]] = {
+    "temp": ("Temperature, °C", "Температура, °C", QColor(SERIES_TEMP), "left"),
+    "power": ("Power, %", "Мощность, %", QColor(SERIES_POWER), "left"),
+    "load": ("GPU Load, %", "Загрузка, %", QColor(SERIES_LOAD), "left"),
+    "vram": ("VRAM Used, %", "Память, %", QColor(SERIES_VRAM), "left"),
+    "freq": ("Frequency, MHz", "Частота, МГц", QColor(SERIES_FREQ), "freq"),
+    "fps": ("FPS", "FPS", QColor(SERIES_FPS), "fps"),
 }
 
 
@@ -89,11 +97,16 @@ class MiniChart(QChartView):
         self._axis_right = QValueAxis()
         self._axis_right.setRange(0.0, 3300.0)
         self._axis_right.setTitleText(tr("МГц", "MHz"))
+        self._axis_fps = QValueAxis()
+        self._axis_fps.setRange(0.0, 240.0)
+        self._axis_fps.setTitleText("FPS")
         for axis in (self._axis_x, self._axis_left, self._axis_right):
             axis.setTruncateLabels(False)
+        self._axis_fps.setTruncateLabels(False)
         chart.addAxis(self._axis_x, Qt.AlignmentFlag.AlignBottom)
         chart.addAxis(self._axis_left, Qt.AlignmentFlag.AlignLeft)
         chart.addAxis(self._axis_right, Qt.AlignmentFlag.AlignRight)
+        chart.addAxis(self._axis_fps, Qt.AlignmentFlag.AlignRight)
         self.setChart(chart)
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
         self._glow = GlowLayer(chart)
@@ -200,7 +213,11 @@ class MiniChart(QChartView):
             if value is None:
                 continue
             title_en, title_ru, _, _ = _METRICS[key]
-            unit = tr("МГц", "MHz") if key == "freq" else ("°C" if key == "temp" else "%")
+            unit = (
+                tr("МГц", "MHz")
+                if key == "freq"
+                else ("FPS" if key == "fps" else ("°C" if key == "temp" else "%"))
+            )
             label_ru, label_en = title_ru.split(",")[0], title_en.split(",")[0]
             lines.append(f"{tr(label_ru, label_en)}: {value:.0f} {unit}")
         for event_t, label, _kind in self._events:
@@ -235,6 +252,7 @@ class MiniChart(QChartView):
             "load": snap.gpu_load_percent,
             "vram": snap.vram_percent,
             "freq": snap.gpu_freq_mhz,
+            "fps": snap.fps,
         }
         if self._last_t is not None and t - self._last_t > _GAP_MAX_S:
             self._samples.append((t, {key: None for key in values}))
@@ -247,9 +265,10 @@ class MiniChart(QChartView):
         now = self._samples[-1][0] if self._samples else float(self._window_s)
         left_values: list[float] = []
         right_values: list[float] = []
+        fps_values: list[float] = []
 
         for key in MINI_CHART_SERIES:
-            title_en, title_ru, color, right_axis = _METRICS[key]
+            title_en, title_ru, color, axis = _METRICS[key]
             visible = key in self._selected
             samples = [(t, values[key]) for t, values in self._samples if t >= now - self._window_s]
             segments: list[list[QPointF]] = []
@@ -268,7 +287,7 @@ class MiniChart(QChartView):
                     segment = []
                 point = QPointF(t, value)
                 segment.append(point)
-                (right_values if right_axis else left_values).append(value)
+                {"left": left_values, "freq": right_values, "fps": fps_values}[axis].append(value)
                 previous_t = t
             if segment:
                 segments.append(segment)
@@ -279,7 +298,9 @@ class MiniChart(QChartView):
                 series.setPen(QPen(color, self._style.line_width))
                 chart.addSeries(series)
                 series.attachAxis(self._axis_x)
-                series.attachAxis(self._axis_right if right_axis else self._axis_left)
+                series.attachAxis(
+                    {"left": self._axis_left, "freq": self._axis_right, "fps": self._axis_fps}[axis]
+                )
                 existing.append(series)
                 self._glow.track(series)
             while len(existing) > len(segments):
@@ -301,6 +322,7 @@ class MiniChart(QChartView):
         self._axis_x.setMax(max(float(self._window_s), now))
         self._axis_left.setRange(0.0, max(100.0, _nice_max(left_values)))
         self._axis_right.setRange(0.0, max(3300.0, _nice_max(right_values)))
+        self._axis_fps.setRange(0.0, max(60.0, _nice_max(fps_values)))
         visible_events = [
             event for event in self._events if now - self._window_s <= event[0] <= now
         ]

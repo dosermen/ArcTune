@@ -27,6 +27,7 @@ SERIES_FREQ: Final = "#4a90d9"  # частота
 SERIES_LOAD: Final = "#57c266"  # загрузка ядра (%)
 SERIES_VRAM: Final = "#a06cd5"  # занятость памяти (%)
 SERIES_MEDIA: Final = "#00bcd4"  # загрузка группы MEDIA (видео), %
+SERIES_FPS: Final = "#ec407a"  # FPS активного приложения
 
 #: kind → цвет маркера карточки (тот же цвет, что у линии графика)
 ACCENT_BY_KIND: Final[dict[str, str]] = {
@@ -35,6 +36,7 @@ ACCENT_BY_KIND: Final[dict[str, str]] = {
     "freq": SERIES_FREQ,
     "load": SERIES_LOAD,
     "vram": SERIES_VRAM,
+    "fps": SERIES_FPS,
 }
 
 # --- палитры UI ---
@@ -137,6 +139,7 @@ QFrame#metricCard[accent="power"] {{ border-top-color: {ACCENT_BY_KIND["power"]}
 QFrame#metricCard[accent="freq"]  {{ border-top-color: {ACCENT_BY_KIND["freq"]}; }}
 QFrame#metricCard[accent="load"]  {{ border-top-color: {ACCENT_BY_KIND["load"]}; }}
 QFrame#metricCard[accent="vram"]  {{ border-top-color: {ACCENT_BY_KIND["vram"]}; }}
+QFrame#metricCard[accent="fps"]   {{ border-top-color: {ACCENT_BY_KIND["fps"]}; }}
 QLabel#metricValue {{
     font-size: 21px; font-weight: 600; color: {p["text"]}; background: transparent;
 }}
@@ -240,6 +243,7 @@ QLabel#overlayValue[accent="power"] {{ color: {ACCENT_BY_KIND["power"]}; }}
 QLabel#overlayValue[accent="freq"]  {{ color: {ACCENT_BY_KIND["freq"]}; }}
 QLabel#overlayValue[accent="load"]  {{ color: {ACCENT_BY_KIND["load"]}; }}
 QLabel#overlayValue[accent="vram"]  {{ color: {ACCENT_BY_KIND["vram"]}; }}
+QLabel#overlayValue[accent="fps"]   {{ color: {ACCENT_BY_KIND["fps"]}; }}
 QLabel#overlayTitle {{
     font-size: 9px; color: {p["hint"]}; background: transparent;
 }}
@@ -349,6 +353,7 @@ def apply_theme(app: QApplication, dark: bool) -> None:
 __all__ = [
     "ACCENT_BY_KIND",
     "DEFAULT_THEME",
+    "SERIES_FPS",
     "SERIES_FREQ",
     "SERIES_LOAD",
     "SERIES_MEDIA",

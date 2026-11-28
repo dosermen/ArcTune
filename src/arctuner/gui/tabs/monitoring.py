@@ -73,6 +73,8 @@ _NOTES: dict[str, str] = {
     "(на живой B580 ~64 °C при 45–48 °C кристалла).",
     "sa_vr": "Температура фаз питания SA (System Agent — домен контроллера/обвязки "
     "кристалла). Обычно наименее нагруженная.",
+    "fps": "Средний FPS активного приложения за последнюю секунду. Источник — "
+    "PresentMon; без доступной службы или кадров значение отсутствует.",
 }
 
 _NOTES_EN: dict[str, str] = {
@@ -90,6 +92,7 @@ _NOTES_EN: dict[str, str] = {
     "gpu_vr": "GPU VRM phase temperature. The MOSFETs heat from current; die temperature does not reveal their temperature.",
     "vram_vr": "Memory VRM phase temperature. At idle this can be the hottest of the VR sensors.",
     "sa_vr": "System Agent VRM phase temperature.",
+    "fps": "Average FPS of the foreground application over the last second, read from PresentMon.",
 }
 
 
@@ -148,6 +151,7 @@ class MonitoringTab(QWidget):
             accent="vram",
             note=note("vram_used"),
         )
+        self._fps = MetricCard(tr("FPS", "FPS"), "FPS", accent="fps", note=note("fps"))
 
         grid = QGridLayout()
         grid.setSpacing(8)
@@ -159,7 +163,7 @@ class MonitoringTab(QWidget):
             grid.addWidget(card, 1, col)
         for col, card in enumerate((self._activity, self._gpu_vr, self._vram_vr, self._sa_vr)):
             grid.addWidget(card, 2, col)
-        for col, card in enumerate((self._load, self._vram_used)):
+        for col, card in enumerate((self._load, self._vram_used, self._fps)):
             grid.addWidget(card, 3, col)
 
         self._limits = QLabel(tr("Ограничение: —", "Limit: —"))
@@ -216,6 +220,19 @@ class MonitoringTab(QWidget):
         self._media_chart.toggled.connect(self._set_media_chart_series)
         self._chart.set_media_series_visible(self._media_chart.isChecked())
 
+        self._fps_chart = QCheckBox(tr("FPS", "FPS"))
+        self._fps_chart.setChecked(_as_bool(settings.value("monitoring/fps_series"), True))
+        self._fps_chart.setToolTip(
+            tr(
+                "FPS приложения активного окна, среднее за 1 с из PresentMon. "
+                "Шкала FPS отдельная от частоты GPU/CPU.",
+                "Foreground application FPS, averaged over 1 s by PresentMon. "
+                "FPS uses its own axis, separate from GPU/CPU frequency.",
+            )
+        )
+        self._fps_chart.toggled.connect(self._set_fps_chart_series)
+        self._chart.set_fps_series_visible(self._fps_chart.isChecked())
+
         self._export_btn = QPushButton(tr("Экспорт CSV…", "Export CSV…"))
         self._export_btn.setToolTip(
             tr(
@@ -231,10 +248,8 @@ class MonitoringTab(QWidget):
         chart_row.addWidget(
             QLabel(
                 tr(
-                    "График (слева °C / %, справа МГц, окно 5 мин; % — мощность, "
-                    "загрузка ядра, память, медиа):",
-                    "Chart (left: °C / %, right: MHz, 5-minute window; %: power, "
-                    "GPU load, memory, media):",
+                    "График (слева °C / %, справа МГц и FPS, окно 5 мин):",
+                    "Chart (left: °C / %, right: MHz and FPS, 5-minute window):",
                 )
             )
         )
@@ -243,6 +258,7 @@ class MonitoringTab(QWidget):
         chart_row.addWidget(self._cpu_freq_chart)
         chart_row.addWidget(self._cpu_temp_chart)
         chart_row.addWidget(self._media_chart)
+        chart_row.addWidget(self._fps_chart)
         chart_row.addWidget(self._export_btn)
 
         hint = QLabel(
@@ -292,6 +308,7 @@ class MonitoringTab(QWidget):
         # Загрузка ядра и занятость памяти — LoadMeter (источник igcl): % ядра
         # появляется со 2-го тика (первый снимок — база), память — сразу.
         self._load.set_value(snap.gpu_load_percent)
+        self._fps.set_value(snap.fps)
         if snap.vram_used_bytes is not None and snap.vram_total_bytes:
             used_gib = snap.vram_used_bytes / 1024**3
             total_gib = snap.vram_total_bytes / 1024**3
@@ -327,6 +344,7 @@ class MonitoringTab(QWidget):
                 snap.gpu_load_percent,
                 snap.vram_percent,
                 snap.media_load_percent,
+                snap.fps,
             )
             self._t_last = t
 
@@ -354,6 +372,11 @@ class MonitoringTab(QWidget):
         """Переключает серию «Медиа, %» и сохраняет выбор в настройки."""
         self._chart.set_media_series_visible(visible)
         QSettings("ArcTune", "ArcTune").setValue("monitoring/media_series", bool(visible))
+
+    def _set_fps_chart_series(self, visible: bool) -> None:
+        """Переключает серию FPS и сохраняет выбор."""
+        self._chart.set_fps_series_visible(visible)
+        QSettings("ArcTune", "ArcTune").setValue("monitoring/fps_series", bool(visible))
 
     def _on_export(self) -> None:
         path, _ = QFileDialog.getSaveFileName(

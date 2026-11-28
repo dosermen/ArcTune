@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import sys
+from dataclasses import replace
 
 import pytest
 
@@ -128,9 +129,10 @@ def test_english_gui_labels_and_chart_labels(qapp, monkeypatch, tmp_path) -> Non
         assert chart._axis_right.titleText() == "MHz"
         assert chart._temp_series.name() == "Temperature, °C"
         assert cell_label("vram_used") == "VRAM Used (GiB)"
-        assert layout_label("grid") == "Grid 3×2"
+        assert chart._axis_fps.titleText() == "FPS"
+        assert layout_label("grid") == "Grid 4×2"
         assert overlay_tab._enable.text() == "Show overlay on top of windows"
-        assert overlay_tab._layout_buttons["grid"].text() == "Grid 3×2"
+        assert overlay_tab._layout_buttons["grid"].text() == "Grid 4×2"
         assert overlay_tab._cell_boxes["temp"].text() == "Temperature (°C)"
         overlay.close()
     finally:
@@ -172,7 +174,7 @@ def test_metric_card_accent_property(qapp) -> None:
 
 
 def test_monitoring_cards_have_notes(qapp) -> None:
-    """Все 14 карточек мониторинга несут подсказку; температурные — по смыслу."""
+    """Все 15 карточек мониторинга несут подсказку; температурные — по смыслу."""
     tab = MonitoringTab()
     cards = (
         tab._freq,
@@ -189,6 +191,7 @@ def test_monitoring_cards_have_notes(qapp) -> None:
         tab._sa_vr,
         tab._load,
         tab._vram_used,
+        tab._fps,
     )
     for card in cards:
         assert card.toolTip(), f"нет подсказки: {card._title.text()}"
@@ -261,15 +264,50 @@ def test_flame_icon_painted(qapp) -> None:
 def test_monitoring_accepts_snapshot(qapp, snapshot: TelemetrySnapshot) -> None:
     """Снимок доходит до карточек, лимитера и графика (без «пустых» проверок)."""
     tab = MonitoringTab()
+    tab._fps_chart.setChecked(True)
+    snapshot = replace(snapshot, fps=144.5)
     tab.on_telemetry(snapshot)
     assert tab._freq._value.text() == "2500 МГц"
     assert tab._voltage._value.text() == "1.000 В"
     assert tab._temp._value.text() == "55 °C"
     assert "Voltage" in tab._limits.text()
+    assert tab._fps._value.text() == "144 FPS"
+    assert tab._chart._samples[-1][7] == 144.5
+    assert tab._chart._fps_series is not None
+    assert tab._chart._fps_series.count() == 1
     assert len(tab._chart._samples) == 1
 
     tab.on_telemetry(snapshot)  # второй снимок добавляет точку в график
     assert len(tab._chart._samples) == 2
+
+
+def test_worker_adds_fps_and_deduplicates_source_errors(snapshot: TelemetrySnapshot) -> None:
+    """Воркер добавляет FPS и не повторяет одинаковые ошибки PresentMon."""
+    from arctuner.gui.fps import PresentMonError, PresentMonFpsReader
+    from arctuner.gui.worker import GpuWorker
+
+    class Reader(PresentMonFpsReader):
+        def __init__(self) -> None:
+            super().__init__()
+            self.failure = False
+
+        def sample(self) -> float | None:
+            if self.failure:
+                raise PresentMonError("service unavailable")
+            return 132.0
+
+    worker = GpuWorker()
+    reader = Reader()
+    worker._fps_enabled = True
+    worker._fps_reader = reader
+    errors: list[str] = []
+    worker.error.connect(errors.append)
+
+    assert worker._with_fps(snapshot).fps == 132.0
+    reader.failure = True
+    assert worker._with_fps(snapshot).fps is None
+    assert worker._with_fps(snapshot).fps is None
+    assert errors == ["FPS: service unavailable"]
 
 
 def test_monitoring_cpu_series_are_optional_and_persisted(qapp, monkeypatch) -> None:
@@ -338,6 +376,32 @@ def test_monitoring_media_series_is_optional_and_persisted(qapp, snapshot, monke
     tab._media_chart.setChecked(False)
     assert not tab._chart._media_series.isVisible()
     assert values["monitoring/media_series"] is False
+    tab.deleteLater()
+    qapp.processEvents()
+
+
+def test_monitoring_fps_series_is_separate_and_persisted(qapp, snapshot, monkeypatch) -> None:
+    """FPS включён по умолчанию, имеет свою ось и сохраняет настройку графика."""
+    values: dict[str, object] = {}
+
+    class Settings:
+        def value(self, key: str, default=None):
+            return values.get(key, default)
+
+        def setValue(self, key: str, value: object) -> None:  # noqa: N802
+            values[key] = value
+
+    monkeypatch.setattr("arctuner.gui.tabs.monitoring.QSettings", lambda *_a: Settings())
+    tab = MonitoringTab()
+    assert tab._fps_chart.isChecked()
+    assert tab._chart._fps_series is not None
+    tab.on_telemetry(replace(snapshot, fps=180.0))
+    assert tab._chart._fps_series.count() == 1
+    assert tab._chart._axis_fps.max() >= 180.0
+
+    tab._fps_chart.setChecked(False)
+    assert values["monitoring/fps_series"] is False
+    assert not tab._chart._fps_series.isVisible()
     tab.deleteLater()
     qapp.processEvents()
 

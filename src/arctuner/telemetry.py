@@ -284,6 +284,7 @@ TELEMETRY_CSV_FIELDS: list[str] = [
     "vram_used_bytes",
     "vram_total_bytes",
     "vram_percent",
+    "fps",
 ]
 
 
@@ -328,6 +329,7 @@ def snapshot_csv_row(snap: TelemetrySnapshot, wall: float | None = None) -> dict
         "vram_used_bytes": snap.vram_used_bytes,
         "vram_total_bytes": snap.vram_total_bytes,
         "vram_percent": snap.vram_percent,
+        "fps": snap.fps,
     }
 
 

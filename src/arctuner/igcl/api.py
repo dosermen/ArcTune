@@ -255,6 +255,9 @@ class TelemetrySnapshot:
     # CSV-формат (TELEMETRY_CSV_FIELDS) не входит. Заполняется LoadMeter,
     # в api — всегда None.
     media_load_percent: float | None = None
+    # FPS активного приложения из PresentMon; в IGCL API отсутствует и
+    # заполняется только GUI-воркером.
+    fps: float | None = None
 
     def limit_summary(self) -> str:
         """Человекочитаемая строка причин ограничения."""

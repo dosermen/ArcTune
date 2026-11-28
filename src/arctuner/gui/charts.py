@@ -25,6 +25,7 @@ from arctuner.gui.chartstyle import (
     force_theme,
 )
 from arctuner.gui.theme import (
+    SERIES_FPS,
     SERIES_FREQ,
     SERIES_LOAD,
     SERIES_MEDIA,
@@ -75,9 +76,7 @@ class LiveChart(QChartView):
     """Прокручиваемый график телеметрии в реальном времени.
 
     Левая ось — температура (°C), мощность (%), загрузка ядра (%) и занятость
-    памяти (%): шкалы 0…100, поэтому все делят одну ось. Правая ось — частота
-    ядра (МГц), отдельная шкала, чтобы частота не «прилипала» к низу из-за
-    разницы масштабов.
+    памяти (%). Частота ядра (МГц) и FPS используют отдельные правые шкалы.
 
     Опциональные серии (по умолчанию выключены, создаются лениво): «Медиа, %»
     (группа IGCL MEDIA, свои колонки в _samples) и CPU-серии (отдельный буфер
@@ -90,11 +89,20 @@ class LiveChart(QChartView):
         # Стиль вида (см. chartstyle): ширина линий — из пресета, цвета —
         # канонические SERIES_*; применяется окном (MainWindow) сразу при старте.
         self._style = chart_style(DEFAULT_CHART_STYLE)
-        # (t, temp, power, freq, load, vram, media): load/vram/media — None,
-        # пока LoadMeter не накопил базу; такие точки просто не рисуются
-        # (см. _replace).
+        # (t, temp, power, freq, load, vram, media, fps): load/vram/media —
+        # None, пока LoadMeter не накопил базу; FPS может отсутствовать до
+        # появления кадров в foreground-приложении.
         self._samples: deque[
-            tuple[float, float, float, float, float | None, float | None, float | None]
+            tuple[
+                float,
+                float,
+                float,
+                float,
+                float | None,
+                float | None,
+                float | None,
+                float | None,
+            ]
         ] = deque(maxlen=window_s * 2)
         self._cpu_samples: deque[tuple[float, float | None, float | None, float | None]] = deque(
             maxlen=window_s * 2
@@ -109,6 +117,7 @@ class LiveChart(QChartView):
         self._cpu_freq_series: QLineSeries | None = None
         self._cpu_temp_series: QLineSeries | None = None
         self._media_series: QLineSeries | None = None
+        self._fps_series: QLineSeries | None = None
 
         self._axis_x = QValueAxis()
         self._axis_x.setRange(0.0, float(window_s))
@@ -121,11 +130,14 @@ class LiveChart(QChartView):
         self._axis_right = QValueAxis()
         self._axis_right.setRange(0.0, 3300.0)
         self._axis_right.setTitleText(tr("МГц", "MHz"))
+        self._axis_fps = QValueAxis()
+        self._axis_fps.setRange(0.0, 240.0)
+        self._axis_fps.setTitleText("FPS")
 
         # Подписи всегда полные: QAbstractAxis по умолчанию (truncateLabels=true)
         # заменяет текст на «…», как только места не хватает — на сжатом графике
         # это «…» вместо чисел на ВСЕХ осях сразу (живой баг).
-        for axis in (self._axis_x, self._axis_left, self._axis_right):
+        for axis in (self._axis_x, self._axis_left, self._axis_right, self._axis_fps):
             axis.setTruncateLabels(False)
 
         chart = QChart()
@@ -141,6 +153,7 @@ class LiveChart(QChartView):
         chart.addAxis(self._axis_x, Qt.AlignmentFlag.AlignBottom)
         chart.addAxis(self._axis_left, Qt.AlignmentFlag.AlignLeft)
         chart.addAxis(self._axis_right, Qt.AlignmentFlag.AlignRight)
+        chart.addAxis(self._axis_fps, Qt.AlignmentFlag.AlignRight)
         self._temp_series.attachAxis(self._axis_x)
         self._temp_series.attachAxis(self._axis_left)
         self._power_series.attachAxis(self._axis_x)
@@ -186,15 +199,15 @@ class LiveChart(QChartView):
         load: float | None = None,
         vram: float | None = None,
         media: float | None = None,
+        fps: float | None = None,
     ) -> None:
         """Добавляет снимок и перерисовывает.
 
         temp/power/freq — только полные значения (без None, иначе точки соврали
-        бы картинку). load/vram/media могут отсутствовать: база LoadMeter не
-        накоплена или источник недоступен — такие точки не рисуются, серия их
-        честно пропускает, а не мостит нулём.
+        бы картинку). load/vram/media/fps могут отсутствовать: данные ещё не
+        накоплены либо источник недоступен; такие точки не рисуются как нули.
         """
-        self._samples.append((t, temp, power, freq, load, vram, media))
+        self._samples.append((t, temp, power, freq, load, vram, media, fps))
         self._replace(self._temp_series, 1)
         self._replace(self._power_series, 2)
         self._replace(self._load_series, 4)
@@ -202,6 +215,8 @@ class LiveChart(QChartView):
         self._replace(self._freq_series, 3)
         if self._media_series is not None:  # опциональная серия — лениво
             self._replace(self._media_series, 6)
+        if self._fps_series is not None:
+            self._replace(self._fps_series, 7)
         # Прокрутка окна: показываем последние window_s секунд.
         self._axis_x.setMax(max(t, float(self._window_s)))
         self._axis_x.setMin(max(0.0, t - self._window_s))
@@ -210,6 +225,8 @@ class LiveChart(QChartView):
         left = [temp, power, *(v for v in (load, vram, media) if v is not None)]
         self._raise_axis(self._axis_left, max(left), 10.0)
         self._raise_axis(self._axis_right, freq, 100.0)
+        if fps is not None:
+            self._raise_axis(self._axis_fps, fps, 10.0)
 
     def _raise_axis(self, axis: QValueAxis, value: float, step: float) -> None:
         """Поднимает максимум оси, если данные вышли за текущий предел.
@@ -276,6 +293,20 @@ class LiveChart(QChartView):
         if series is not None:
             series.setVisible(visible)
 
+    def set_fps_series_visible(self, visible: bool) -> None:
+        """Показывает/скрывает FPS на отдельной шкале."""
+        series = self._fps_series
+        if visible and series is None:
+            series = self._make_series("FPS", QColor(SERIES_FPS))
+            self.chart().addSeries(series)
+            series.attachAxis(self._axis_x)
+            series.attachAxis(self._axis_fps)
+            self._replace(series, 7)
+            self._fps_series = series
+            self._glow.track(series)
+        if series is not None:
+            series.setVisible(visible)
+
     def push_cpu(
         self,
         t: float,
@@ -331,6 +362,8 @@ class LiveChart(QChartView):
             series.clear()
         if self._media_series is not None:
             self._media_series.clear()
+        if self._fps_series is not None:
+            self._fps_series.clear()
         self.clear_cpu()
         self._glow.sync_all()  # подложки свечения отстают от очищенных серий
 

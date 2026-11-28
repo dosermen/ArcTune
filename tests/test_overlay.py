@@ -103,7 +103,7 @@ def _close_window(win) -> None:
 
 
 def test_overlay_constructs_with_defaults(settings, qapp) -> None:
-    """Без настроек — полоса 1×6 и 85 %; окно само по себе не показывается."""
+    """Без настроек — полоса 1×7 и 85 %; окно само по себе не показывается."""
     win = OverlayWindow()
     assert win.layout_name() in LAYOUTS
     assert win.layout_name() == overlay.DEFAULT_LAYOUT
@@ -203,13 +203,13 @@ def test_overlay_custom_cells_rebuild_grid(settings, qapp) -> None:
 
 
 def test_overlay_layout_preset_restores_cells(settings, qapp) -> None:
-    """Пресет макета возвращает свой набор метрик — подписи «1×6» и т.п. не врут."""
+    """Пресет макета возвращает свой набор метрик и включает FPS."""
     win = OverlayWindow()
     win.set_visible_cells(["temp"])
 
     win.set_layout("grid")
-    assert win.visible_cells() == ("temp", "power", "freq", "load", "vram", "vram_used")
-    assert settings._store["overlay/cells"] == "temp,power,freq,load,vram,vram_used"
+    assert win.visible_cells() == ("temp", "power", "freq", "load", "vram", "vram_used", "fps")
+    assert settings._store["overlay/cells"] == "temp,power,freq,load,vram,vram_used,fps"
     assert not win._cells["temp"].isHidden()
     assert not win._cells["vram_used"].isHidden()  # (isHidden, т.к. окно не показано)
     win.deleteLater()
@@ -239,11 +239,12 @@ def test_overlay_telemetry_fills_cells(settings, qapp, snapshot) -> None:
     """Снимок попадает в ячейки; спрятанный оверлей перерисовке не мучается."""
     win = OverlayWindow()
     win.show()
-    win.on_telemetry(snapshot)
+    win.on_telemetry(replace(snapshot, fps=144.5))
 
     assert win._cells["temp"].text() == "55 °C"
     assert win._cells["power"].text() == "70 %"  # ватт ещё нет (первый тик)
     assert win._cells["freq"].text() == "2500 МГц"
+    assert win._cells["fps"].text() == "144 FPS"
     assert win._cells["vram"].text() == "19.75 Гбит/с"
 
     win.set_shown(False)
@@ -332,6 +333,18 @@ def test_mini_chart_splits_lines_on_missing_samples(qapp, snapshot) -> None:
     assert len(chart._series["temp"]) == 2
     assert chart._series["temp"][0].count() == 2
     assert chart._series["temp"][1].count() == 1
+    chart.deleteLater()
+
+
+def test_mini_chart_plots_fps_on_its_own_axis(qapp, snapshot) -> None:
+    """FPS в HUD-графике рисуется на отдельной шкале."""
+    chart = MiniChart(30)
+    chart.set_series(("fps",))
+    chart.push(1.0, replace(snapshot, fps=165.0))
+
+    assert chart._series["fps"][0].count() == 1
+    assert chart._axis_fps.titleText() == "FPS"
+    assert chart._axis_fps.max() >= 165.0
     chart.deleteLater()
 
 
@@ -735,8 +748,8 @@ def test_overlay_tab_keeps_at_least_one_cell(settings, qapp) -> None:
     for box in tab._cell_boxes.values():
         box.setChecked(False)
 
-    assert win.visible_cells() == ("vram_used",)  # осталась последняя галочка
-    assert tab._cell_boxes["vram_used"].isChecked()
+    assert win.visible_cells() == ("fps",)  # осталась последняя галочка
+    assert tab._cell_boxes["fps"].isChecked()
     win.deleteLater()
 
 

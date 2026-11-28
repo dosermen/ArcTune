@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import csv
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar
 
@@ -25,6 +26,7 @@ from arctuner.cpu import (
     CpuSnapshot,
 )
 from arctuner.gui.context import DeviceReport, GpuContext
+from arctuner.gui.fps import PresentMonError, PresentMonFpsReader
 from arctuner.igcl.api import IgclError
 from arctuner.replay import IncidentReplay
 from arctuner.telemetry import export_telemetry, snapshot_csv_row
@@ -98,6 +100,9 @@ class GpuWorker(QObject):
         self._cpu_error: str | None = None
         self._core_temp_reader = CoreTempReader()
         self._core_temp_error: str | None = None
+        self._fps_reader = PresentMonFpsReader()
+        self._fps_error: str | None = None
+        self._fps_enabled = False
         # self-сигнал → слот в этом же потоке: emit из UI-потока встаёт в очередь
         # воркера и не выполняет поиск в UI-потоке.
         self.autotune_start.connect(self.autotune_search)
@@ -115,6 +120,7 @@ class GpuWorker(QObject):
             self.error.emit(str(e))
             return
         self._replay = IncidentReplay(device=info.name)
+        self._fps_enabled = True
         self._watchdog = Watchdog(device=info.name)
         self._wd_logged.clear()
         self._wd_normal_ticks = 0
@@ -132,6 +138,10 @@ class GpuWorker(QObject):
         а окно висело бы на «Завершение…» до убийства процесса). Ошибку
         тоже эмитим, чтобы UI показал её пользователю.
         """
+        try:
+            self._fps_reader.close()
+        except PresentMonError as exc:
+            self.error.emit(f"FPS: {exc}")
         try:
             self._ctx.close()
         except Exception as exc:
@@ -157,6 +167,7 @@ class GpuWorker(QObject):
         except (IgclError, SafetyLimitError) as e:
             self.error.emit(f"телеметрия: {e}")
             return
+        snap = self._with_fps(snap)
         self.telemetry_ready.emit(snap)
         self._replay_telemetry(snap)
         self._watchdog_poll(snap)
@@ -191,6 +202,22 @@ class GpuWorker(QObject):
                 metrics.temperature_c,
             )
         )
+
+    def _with_fps(self, snap: TelemetrySnapshot) -> TelemetrySnapshot:
+        """Добавляет FPS; недоступность PresentMon не останавливает опрос GPU."""
+        if not self._fps_enabled:
+            return replace(snap, fps=None)
+        try:
+            fps = self._fps_reader.sample()
+        except PresentMonError as exc:
+            message = str(exc)
+            if message != self._fps_error:
+                self.error.emit(f"FPS: {message}")
+            self._fps_error = message
+            fps = None
+        else:
+            self._fps_error = None
+        return replace(snap, fps=fps)
 
     def _replay_telemetry(self, snap: TelemetrySnapshot) -> None:
         """Толкает снимок в буфер реплея; при инциденте пишет дамп и извещает UI.
@@ -543,6 +570,7 @@ class GpuWorker(QObject):
         график получает данные без второго конкурентного доступа к IGCL.
         """
         self._poll_cpu()
+        snap = self._with_fps(snap)
         self.autotune_sample.emit(snap)
         self._replay_telemetry(snap)
 
