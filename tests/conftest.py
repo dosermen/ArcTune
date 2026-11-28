@@ -57,6 +57,26 @@ def _pin_language_ru() -> None:
     i18n.set_language(i18n.LANG_RU)
 
 
+@pytest.fixture(autouse=True)
+def _no_modal_dialogs(monkeypatch) -> None:
+    """Модальные QMessageBox в тестах не должны блокировать прогон.
+
+    На CI (и на любой машине без Arc) воркер стартует с ошибкой, а окно до
+    подключения показывает модальный QMessageBox.warning — диалог ждёт нажатия
+    и навсегда встаёт в processEvents(): прогон на GitHub Actions висел часами.
+    Тесты, которым нужен конкретный ответ или проверка вызова, перекрывают
+    заглушку своим monkeypatch внутри теста.
+    """
+    from PySide6.QtWidgets import QMessageBox
+
+    ok = QMessageBox.StandardButton.Ok
+    no = QMessageBox.StandardButton.No
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: ok))
+    monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: ok))
+    monkeypatch.setattr(QMessageBox, "critical", staticmethod(lambda *a, **k: ok))
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: no))
+
+
 def _info(**kw: object) -> OcControlInfo:
     """Создать OcControlInfo с базовыми значениями + переопределения.
 

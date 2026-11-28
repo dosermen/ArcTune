@@ -1528,6 +1528,37 @@ def test_autotune_sample_reaches_both_charts(qapp, snapshot) -> None:
     win.close()
 
 
+def test_main_window_without_igcl_does_not_block(qapp, monkeypatch) -> None:
+    """CI-сценарий: без IGCL старт падает — модальный диалог не вешает прогон.
+
+    На GitHub-раннере нет Arc: воркер эмитит ошибку, окно до подключения
+    показывает QMessageBox.warning. Без заглушки из conftest (_no_modal_dialogs)
+    диалог ждал нажатия и навсегда вставал в processEvents().
+    """
+    from PySide6.QtTest import QTest
+
+    from arctuner.gui.window import MainWindow
+    from arctuner.gui.worker import GpuContext
+
+    def _no_open(_self):
+        raise OSError("IGCL.dll отсутствует (симуляция CI)")
+
+    monkeypatch.setattr(GpuContext, "open", _no_open)
+    win = MainWindow()
+    try:
+        for _ in range(30):  # ждём queued-сигнал error из потока воркера
+            if not win._timer.isActive():
+                break
+            QTest.qWait(100)
+        assert not win._timer.isActive()  # старт провалился: опрос остановлен
+        assert win._device_label.text() in {"Нет подключения", "No connection"}
+    finally:
+        win._timer.stop()
+        win._thread.quit()
+        win._thread.wait(2000)
+        win.close()
+
+
 def test_worker_autotune_slot_closed_session_channel(qapp) -> None:
     """Слот жив: на закрытой сессии ошибка идёт в autotune_error, не в write_error.
 
